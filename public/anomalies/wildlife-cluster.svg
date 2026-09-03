@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="220" viewBox="0 0 320 220">
+  <rect width="320" height="220" fill="#1e1b4b"/>
+  <rect x="10" y="10" width="300" height="200" rx="10" fill="#312e81"/>
+  <g fill="#a5b4fc">
+    <ellipse cx="140" cy="130" rx="30" ry="18"/>
+    <ellipse cx="190" cy="120" rx="24" ry="14"/>
+    <ellipse cx="220" cy="140" rx="18" ry="10"/>
+  </g>
+  <rect x="0" y="182" width="320" height="38" fill="#1e1b4b" opacity="0.9"/>
+  <text x="16" y="207" font-family="monospace" font-size="16" fill="#c7d2fe">Wildlife Cluster</text>
+</svg>

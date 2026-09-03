@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="220" viewBox="0 0 320 220">
+  <rect width="320" height="220" fill="#450a0a"/>
+  <rect x="10" y="10" width="300" height="200" rx="10" fill="#7f1d1d"/>
+  <g fill="#fca5a5">
+    <rect x="90" y="80" width="50" height="30" transform="rotate(15 115 95)"/>
+    <rect x="160" y="110" width="70" height="24" transform="rotate(-10 195 122)"/>
+    <circle cx="200" cy="70" r="16"/>
+  </g>
+  <rect x="0" y="182" width="320" height="38" fill="#450a0a" opacity="0.9"/>
+  <text x="16" y="207" font-family="monospace" font-size="16" fill="#fecaca">Debris Field</text>
+</svg>

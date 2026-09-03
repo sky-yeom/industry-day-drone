@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="220" viewBox="0 0 320 220">
+  <rect width="320" height="220" fill="#0c4a6e"/>
+  <rect x="10" y="10" width="300" height="200" rx="10" fill="#083344"/>
+  <ellipse cx="160" cy="120" rx="110" ry="55" fill="#0ea5e9" opacity="0.85"/>
+  <ellipse cx="160" cy="120" rx="70" ry="32" fill="#38bdf8" opacity="0.9"/>
+  <g stroke="#e0f2fe" stroke-width="2" fill="none" opacity="0.6">
+    <path d="M60 90 q100 -20 200 0"/>
+    <path d="M60 150 q100 20 200 0"/>
+  </g>
+  <rect x="0" y="182" width="320" height="38" fill="#082f49" opacity="0.9"/>
+  <text x="16" y="207" font-family="monospace" font-size="16" fill="#7dd3fc">Standing Water</text>
+</svg>

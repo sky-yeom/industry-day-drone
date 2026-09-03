@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="220" viewBox="0 0 320 220">
+  <rect width="320" height="220" fill="#1c1917"/>
+  <defs>
+    <radialGradient id="hotspot" cx="55%" cy="55%" r="55%">
+      <stop offset="0%" stop-color="#fde047"/>
+      <stop offset="45%" stop-color="#f97316"/>
+      <stop offset="100%" stop-color="#7c2d12" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="10" y="10" width="300" height="200" rx="10" fill="#292524"/>
+  <circle cx="176" cy="120" r="90" fill="url(#hotspot)"/>
+  <g stroke="#fbbf24" stroke-width="2" fill="none" opacity="0.8">
+    <circle cx="176" cy="120" r="40"/>
+    <circle cx="176" cy="120" r="65"/>
+  </g>
+  <rect x="0" y="182" width="320" height="38" fill="#0c0a09" opacity="0.85"/>
+  <text x="16" y="207" font-family="monospace" font-size="16" fill="#fde047">Thermal Hotspot</text>
+</svg>

@@ -5,6 +5,8 @@ import type { ToolActivity, VoiceStatus } from "@/lib/voiceClient";
 interface VoiceControlProps {
   status: VoiceStatus;
   detail?: string;
+  /** 세션은 살아 있지만 알려줄 만한 일 (실패한 응답 등). */
+  notice?: string;
   level: number;
   ttfaMs: number | null;
   tools: ToolActivity[];
@@ -30,6 +32,7 @@ const STATUS_STYLE: Record<VoiceStatus, string> = {
 export default function VoiceControl({
   status,
   detail,
+  notice,
   level,
   ttfaMs,
   tools,
@@ -81,6 +84,10 @@ export default function VoiceControl({
 
       {detail && status === "error" && (
         <p className="text-[11px] leading-snug text-red-400">{detail}</p>
+      )}
+
+      {notice && status !== "error" && (
+        <p className="text-[11px] leading-snug text-amber-400/90">{notice}</p>
       )}
 
       {tools.length > 0 && (

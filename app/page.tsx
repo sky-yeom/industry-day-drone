@@ -34,6 +34,7 @@ export default function Home() {
   const [ttfaMs, setTtfaMs] = useState<number | null>(null);
   const [tools, setTools] = useState<ToolActivity[]>([]);
   const [isThinking, setIsThinking] = useState(false);
+  const [notice, setNotice] = useState<string>();
   const [relayConfig, setRelayConfig] = useState<RelayConfig | null>(null);
 
   const sessionRef = useRef<VoiceSession | null>(null);
@@ -103,6 +104,7 @@ export default function Home() {
       },
       onTtfa: setTtfaMs,
       onBusy: setIsThinking,
+      onNotice: setNotice,
     });
     return sessionRef.current;
   }, [upsertTranscript]);
@@ -118,6 +120,7 @@ export default function Home() {
     setMessages([]);
     setTools([]);
     setTtfaMs(null);
+    setNotice(undefined);
     streamingRef.current = { user: null, agent: null };
     try {
       await session.start();
@@ -129,9 +132,11 @@ export default function Home() {
   const handleSend = useCallback((prompt: string) => {
     const session = sessionRef.current;
     if (!session?.isRunning) return;
-    // Typed input is never transcribed back, so echo it locally.
-    streamingRef.current.user = null;
+    // 보내는 데 실패하면(응답 생성 중) 아무것도 건드리지 않는다. 여기서 먼저
+    // streamingRef를 지우면 진행 중이던 "…" 말풍선이 미아가 된다.
     if (!session.sendText(prompt)) return;
+    // 타이핑한 입력은 전사되어 돌아오지 않으므로 화면에 직접 그린다.
+    streamingRef.current.user = null;
     setMessages((prev) => [
       ...prev,
       { id: nextId(), role: "user", text: prompt, timestamp: Date.now() },
@@ -189,6 +194,7 @@ export default function Home() {
             <VoiceControl
               status={status}
               detail={statusDetail}
+              notice={notice}
               level={level}
               ttfaMs={ttfaMs}
               tools={tools}

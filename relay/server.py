@@ -116,6 +116,12 @@ class Bridge:
         self.upstream = None
         self._speech_stopped_at: float | None = None
         self._ttfa_pending = False
+        # 한 응답 안에서 도구가 여러 번 호출될 수 있다. 호출마다 response.create를
+        # 보내면 두 번째가 "conversation already has an active response"로 거부된다.
+        # 결과는 각각 돌려주되 response.create는 마지막 하나만 보낸다.
+        self._pending_tools = 0
+        self._tool_lock = asyncio.Lock()
+        self._tool_tasks: set[asyncio.Task] = set()
 
     async def send_browser(self, payload: dict) -> None:
         with contextlib.suppress(Exception):
@@ -157,10 +163,19 @@ class Bridge:
 
             if etype == "response.function_call_arguments.done":
                 await self.send_browser(event)
-                asyncio.create_task(self.handle_tool_call(event))
+                self._pending_tools += 1
+                task = asyncio.create_task(self.handle_tool_call(event))
+                # 참조를 들고 있어야 GC가 실행 중인 태스크를 회수하지 않는다.
+                self._tool_tasks.add(task)
+                task.add_done_callback(self._tool_tasks.discard)
                 continue
 
             await self.send_browser(event)
+
+    async def cancel_tool_tasks(self) -> None:
+        """세션이 닫힐 때 아직 도는 도구 태스크를 정리한다."""
+        for task in list(self._tool_tasks):
+            task.cancel()
 
     # --- tool calls -----------------------------------------------------------
 
@@ -176,29 +191,42 @@ class Bridge:
         await self.send_browser({"type": "tool.started", "name": name, "args": args})
 
         started = time.perf_counter()
-        result = tools.dispatch(self.session, name, args)
+        try:
+            result = tools.dispatch(self.session, name, args)
+        except Exception:
+            # 결과를 안 돌려주면 모델이 영원히 기다리다 대화가 멈춘 것처럼 보인다.
+            log.exception("tool %s failed", name)
+            result = {"ok": False, "facts": f"{name} 실행 중 오류가 났음", "ask": ""}
         elapsed_ms = int((time.perf_counter() - started) * 1000)
 
-        log.info("tool done: %s -> %s", name, result.get("speech"))
+        log.info("tool done: %s -> %s", name, result.get("facts"))
         await self.send_browser(
             {"type": "tool.finished", "name": name, "result": result, "ms": elapsed_ms}
         )
         await self.push_state()
 
         if self.upstream is None:
+            self._pending_tools = max(0, self._pending_tools - 1)
             return
 
-        await self.upstream.send(json.dumps({
-            "type": "conversation.item.create",
-            "item": {
-                "type": "function_call_output",
-                "call_id": call_id,
-                # Hand back the sentence, not a status code. This is what lets
-                # the model say something true about what just happened.
-                "output": json.dumps(result, ensure_ascii=False),
-            },
-        }))
-        await self.upstream.send(json.dumps({"type": "response.create"}))
+        # 같은 응답에서 나온 도구 호출들이 동시에 여기 들어올 수 있으므로,
+        # 전송 순서와 pending 카운트를 락으로 보호한다.
+        async with self._tool_lock:
+            await self.upstream.send(json.dumps({
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    # 상태 코드가 아니라 사실을 돌려준다. 그래야 모델이 실제로
+                    # 일어난 일에 대해 말할 수 있다.
+                    "output": json.dumps(result, ensure_ascii=False),
+                },
+            }))
+            self._pending_tools = max(0, self._pending_tools - 1)
+            # 마지막 도구만 응답을 시작시킨다. 남아 있는데 먼저 부르면
+            # 두 번째가 "active response" 오류로 거부된다.
+            if self._pending_tools == 0:
+                await self.upstream.send(json.dumps({"type": "response.create"}))
 
     # --- browser -> upstream --------------------------------------------------
 
@@ -304,6 +332,7 @@ async def ws_endpoint(browser: WebSocket) -> None:
         log.exception("relay failure")
         await bridge.send_browser({"type": "relay.error", "message": str(exc)})
     finally:
+        await bridge.cancel_tool_tasks()
         with contextlib.suppress(Exception):
             await browser.close()
         log.info("session closed")

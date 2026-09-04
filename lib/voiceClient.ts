@@ -45,6 +45,8 @@ export interface VoiceHandlers {
   onTtfa: (ms: number) => void;
   /** True while a response is generating. Sending during one is rejected. */
   onBusy: (busy: boolean) => void;
+  /** 세션은 살아 있지만 알려줄 만한 일이 생겼을 때 (실패한 응답 등). */
+  onNotice: (message: string) => void;
 }
 
 export interface RelayConfig {
@@ -279,6 +281,13 @@ export class VoiceSession {
         this.partialUser = "";
         return;
       }
+      case "conversation.item.input_audio_transcription.failed": {
+        // 전사가 실패하면 completed가 오지 않는다. 그대로 두면 "…" 자리표시자가
+        // 남고, 다음 발화가 그 낡은 말풍선에 덮어써진다.
+        this.handlers.onTranscript("user", "", true);
+        this.partialUser = "";
+        return;
+      }
 
       case "response.audio_transcript.delta":
       case "response.output_audio_transcript.delta": {
@@ -342,7 +351,7 @@ export class VoiceSession {
 
       case "error": {
         const err = msg.error as { message?: string } | undefined;
-        // Unblock the composer; a failed response never emits response.done.
+        // 응답이 실패하면 response.done이 오지 않으므로 입력창을 직접 푼다.
         this.responseActive = false;
         this.toolCallPending = false;
         if (this.greetPending) {
@@ -350,7 +359,11 @@ export class VoiceSession {
           this.captureNode?.port.postMessage({ type: "mute", value: false });
         }
         this.handlers.onBusy(false);
-        this.handlers.onStatus("error", err?.message ?? "Unknown Voice Live error");
+        // Voice Live의 error는 대부분 그 응답 하나만 실패한 것이고 세션은 살아
+        // 있다. 여기서 status를 "error"로 바꾸면 마이크가 계속 열려 있는데도
+        // 화면은 "세션 시작"으로 돌아가 세션이 끝난 것처럼 보인다.
+        this.handlers.onNotice(err?.message ?? "알 수 없는 오류가 났습니다.");
+        this.handlers.onStatus("listening");
         return;
       }
     }

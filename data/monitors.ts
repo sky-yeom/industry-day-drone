@@ -3,7 +3,7 @@ import type { MonitorDestination, MonitorId, RoutePlanningState } from "@/lib/ty
 export const MONITORS: MonitorDestination[] = [
   {
     id: "monitor-1",
-    label: "Monitor 1",
+    label: "모니터 1",
     shortLabel: "1",
     image: "/monitors/monitor-1.svg",
     x: 20,
@@ -11,7 +11,7 @@ export const MONITORS: MonitorDestination[] = [
   },
   {
     id: "monitor-2",
-    label: "Monitor 2",
+    label: "모니터 2",
     shortLabel: "2",
     image: "/monitors/monitor-2.svg",
     x: 78,
@@ -19,7 +19,7 @@ export const MONITORS: MonitorDestination[] = [
   },
   {
     id: "monitor-3",
-    label: "Monitor 3",
+    label: "모니터 3",
     shortLabel: "3",
     image: "/monitors/monitor-3.svg",
     x: 50,

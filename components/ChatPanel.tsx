@@ -1,19 +1,30 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import type { ChatMessage } from "@/lib/types";
 
 interface ChatPanelProps {
   messages: ChatMessage[];
   onSend: (prompt: string) => void;
   isThinking?: boolean;
+  /** Voice controls, rendered directly under the panel heading. */
+  toolbar?: ReactNode;
+  /** Set when there is no live relay session, which disables the composer. */
+  disabledReason?: string;
 }
 
 /**
  * Small chatbox showing the conversation between the user and the agent,
  * with an input box for submitting new prompts.
  */
-export default function ChatPanel({ messages, onSend, isThinking }: ChatPanelProps) {
+export default function ChatPanel({
+  messages,
+  onSend,
+  isThinking,
+  toolbar,
+  disabledReason,
+}: ChatPanelProps) {
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -21,10 +32,12 @@ export default function ChatPanel({ messages, onSend, isThinking }: ChatPanelPro
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, isThinking]);
 
+  const blocked = Boolean(disabledReason);
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const trimmed = draft.trim();
-    if (!trimmed || isThinking) return;
+    if (!trimmed || isThinking || blocked) return;
     onSend(trimmed);
     setDraft("");
   }
@@ -33,9 +46,11 @@ export default function ChatPanel({ messages, onSend, isThinking }: ChatPanelPro
     <div className="flex h-full w-full flex-col bg-zinc-950">
       <div className="border-b border-zinc-800 px-4 py-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-200">
-          Agent Chat
+          에이전트 대화
         </h2>
       </div>
+
+      {toolbar}
 
       <div ref={scrollRef} className="flex-1 space-y-2 overflow-y-auto px-3 py-3">
         {messages.map((msg) => (
@@ -57,7 +72,7 @@ export default function ChatPanel({ messages, onSend, isThinking }: ChatPanelPro
         {isThinking && (
           <div className="flex justify-start">
             <div className="max-w-[85%] rounded-xl bg-zinc-800 px-3 py-2 text-sm text-zinc-400">
-              Agent is thinking…
+              생각하는 중…
             </div>
           </div>
         )}
@@ -68,16 +83,16 @@ export default function ChatPanel({ messages, onSend, isThinking }: ChatPanelPro
           type="text"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="Ask the agent to plan a flight…"
-          disabled={isThinking}
-          className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-sky-600 focus:outline-none"
+          placeholder={disabledReason ?? "음성 대신 텍스트로 지시…"}
+          disabled={isThinking || blocked}
+          className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-sky-600 focus:outline-none disabled:opacity-60"
         />
         <button
           type="submit"
           className="rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-500 disabled:opacity-50"
-          disabled={!draft.trim() || isThinking}
+          disabled={!draft.trim() || isThinking || blocked}
         >
-          Send
+          전송
         </button>
       </form>
     </div>

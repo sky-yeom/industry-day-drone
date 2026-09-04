@@ -9,10 +9,10 @@ interface FlightPathMapProps {
 }
 
 const PHASE_LABELS: Record<RoutePlanningState["phase"], string> = {
-  "selecting-destinations": "Choose first stop",
-  "selecting-order": "Building draft",
-  "awaiting-confirmation": "Awaiting confirmation",
-  confirmed: "Route confirmed",
+  "selecting-destinations": "첫 경유지 선택",
+  "selecting-order": "순서 정하는 중",
+  "awaiting-confirmation": "확정 대기",
+  confirmed: "경로 확정됨",
 };
 
 function routeSegments(route: MonitorId[]) {
@@ -36,10 +36,10 @@ export default function FlightPathMap({ planningState }: FlightPathMapProps) {
       <div className="flex items-center justify-between border-b border-emerald-900/60 px-4 py-3">
         <div>
           <h2 className="text-sm font-semibold uppercase tracking-wide text-emerald-300">
-            Flight Path
+            비행 경로
           </h2>
           <p className="text-xs text-emerald-400/80">
-            {visibleRoute.length > 0 ? formatRoute(visibleRoute) : "No route selected"}
+            {visibleRoute.length > 0 ? formatRoute(visibleRoute) : "선택된 경로 없음"}
           </p>
         </div>
         <span
@@ -131,10 +131,10 @@ export default function FlightPathMap({ planningState }: FlightPathMapProps) {
                   </span>
                   <span className="text-[10px] uppercase tracking-wide text-slate-400">
                     {routeIndex >= 0
-                      ? `Stop ${routeIndex + 1}`
+                      ? `${routeIndex + 1}번째`
                       : isSelected
-                        ? "Selected"
-                        : "Available"}
+                        ? "선택됨"
+                        : "대기"}
                   </span>
                 </div>
               </div>
@@ -145,13 +145,13 @@ export default function FlightPathMap({ planningState }: FlightPathMapProps) {
 
       <div className="border-t border-emerald-900/60 px-4 py-2 text-xs text-emerald-400/70">
         {planningState.phase === "selecting-destinations" &&
-          "Tell the agent which monitor the drone should visit first."}
+          "어느 모니터부터 갈지 말씀해 주세요."}
         {planningState.phase === "selecting-order" &&
-          "The dashed route grows as you add each stop."}
+          "두 번째 경유지를 정하면 남은 한 곳은 자동으로 추가됩니다."}
         {planningState.phase === "awaiting-confirmation" &&
-          "Review the proposed route and confirm it in chat."}
+          "제안된 경로를 확인하고 음성으로 확정해 주세요."}
         {planningState.phase === "confirmed" &&
-          "The solid green route is confirmed and ready to fly."}
+          "초록색 실선 경로가 확정되어 비행 준비가 끝났습니다."}
       </div>
     </div>
   );

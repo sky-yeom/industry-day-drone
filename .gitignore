@@ -39,3 +39,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# python relay
+relay/.venv/
+__pycache__/
+*.py[cod]
+
+# local audio scratch
+*.wav
+*.pcm

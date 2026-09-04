@@ -22,10 +22,10 @@ export default function AnomalyGallery({ anomalies }: AnomalyGalleryProps) {
     <div className="flex h-full w-full flex-col bg-zinc-900">
       <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-200">
-          Detected Anomalies
+          탐지된 이상 징후
         </h2>
         <span className="rounded-full bg-zinc-800 px-3 py-1 text-xs font-medium text-zinc-300">
-          Awaiting drone data
+          {anomalies.length > 0 ? `${anomalies.length}건 발견` : "데이터 대기 중"}
         </span>
       </div>
 
@@ -58,8 +58,8 @@ export default function AnomalyGallery({ anomalies }: AnomalyGalleryProps) {
                       </span>
                     </div>
                     <p className="text-[11px] text-zinc-400">
-                      {monitor?.label ?? "Unknown monitor"} ·{" "}
-                      {Math.round(anomaly.confidence * 100)}% confidence
+                      {monitor?.label ?? "알 수 없는 모니터"} · 신뢰도{" "}
+                      {Math.round(anomaly.confidence * 100)}%
                     </p>
                     <p className="text-xs leading-snug text-zinc-400">{anomaly.notes}</p>
                   </div>

@@ -13,14 +13,14 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Drone Survey Dashboard",
-  description: "Industry Day live drone flight planning and anomaly detection dashboard.",
+  title: "드론 조사 대시보드",
+  description: "Industry Day 실시간 드론 비행 계획 및 이상 징후 탐지 대시보드.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
-      lang="en"
+      lang="ko"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="h-full flex flex-col">{children}</body>

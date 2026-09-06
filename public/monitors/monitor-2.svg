@@ -1,14 +1,20 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 320">
   <defs>
     <linearGradient id="bg" x1="0" y1="1" x2="1" y2="0">
-      <stop stop-color="#1e3a8a"/>
-      <stop offset="1" stop-color="#312e81"/>
+      <stop stop-color="#e9e1f6"/>
+      <stop offset=".52" stop-color="#c5b4e3"/>
+      <stop offset="1" stop-color="#8dc8e8"/>
     </linearGradient>
+    <pattern id="dots" width="17" height="17" patternUnits="userSpaceOnUse">
+      <circle cx="4" cy="4" r="3" fill="#463668" opacity=".55"/>
+    </pattern>
   </defs>
-  <rect width="640" height="360" fill="url(#bg)"/>
-  <path d="M0 250 115 180 230 235 360 125 500 205 640 120V360H0Z" fill="#172554" opacity=".8"/>
-  <circle cx="320" cy="160" r="64" fill="none" stroke="#bfdbfe" stroke-width="8" opacity=".55"/>
-  <path d="M270 160h100M320 110v100" stroke="#bfdbfe" stroke-width="5" opacity=".55"/>
-  <text x="32" y="54" fill="#dbeafe" font-family="Arial, sans-serif" font-size="28" font-weight="700">MONITOR 2</text>
-  <text x="32" y="326" fill="#bfdbfe" font-family="Arial, sans-serif" font-size="18">CAMERA PLACEHOLDER</text>
+  <rect width="640" height="320" fill="url(#bg)"/>
+  <circle cx="96" cy="56" r="148" fill="#ffa38b" opacity=".38"/>
+  <path d="M0 238 112 158 238 221 368 112 512 188 640 105V320H0Z" fill="#463668" opacity=".18"/>
+  <path d="M0 238 112 158 238 221 368 112 512 188 640 105V320H0Z" fill="url(#dots)"/>
+  <circle cx="320" cy="151" r="54" fill="#fff" opacity=".5"/>
+  <circle cx="320" cy="151" r="28" fill="none" stroke="#463668" stroke-width="5" opacity=".72"/>
+  <path d="M278 151h84M320 109v84" stroke="#463668" stroke-width="3" opacity=".6"/>
+  <text x="28" y="42" fill="#463668" font-family="Arial, sans-serif" font-size="21" font-weight="700" letter-spacing="2">CAM 02</text>
 </svg>

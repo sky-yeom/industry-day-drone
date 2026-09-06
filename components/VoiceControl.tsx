@@ -21,11 +21,11 @@ const STATUS_TEXT: Record<VoiceStatus, string> = {
 };
 
 const STATUS_STYLE: Record<VoiceStatus, string> = {
-  idle: "bg-zinc-800 text-zinc-300",
-  connecting: "bg-amber-900/70 text-amber-200",
-  listening: "bg-emerald-900/70 text-emerald-200",
-  speaking: "bg-sky-900/70 text-sky-200",
-  error: "bg-red-900/70 text-red-200",
+  idle: "bg-[#f4f3f5] text-[#8c8279]",
+  connecting: "bg-[#ffe399] text-[#7f5a1a]",
+  listening: "bg-[#d4ec8e] text-[#07641d]",
+  speaking: "bg-[#d9edf8] text-[#2a446f]",
+  error: "bg-[#ffb3bb] text-[#73262f]",
 };
 
 export default function VoiceControl({
@@ -39,31 +39,34 @@ export default function VoiceControl({
   const live = status !== "idle" && status !== "error";
 
   return (
-    <div className="flex flex-col gap-2 border-b border-zinc-800 px-3 py-2.5">
-      <div className="flex items-center gap-3">
+    <div className="flex flex-col gap-3 border-y border-[#e8e6df] bg-[#f8f7f8]/70 px-5 py-3">
+      <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={onToggle}
-          className={`flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-medium transition-colors ${
+          className={`flex h-10 items-center gap-2 rounded-lg px-3.5 text-sm font-semibold shadow-sm transition hover:-translate-y-0.5 active:translate-y-0 ${
             live
-              ? "bg-red-600 text-white hover:bg-red-500"
-              : "bg-emerald-600 text-white hover:bg-emerald-500"
+              ? "bg-[#73262f] text-white hover:bg-[#5c1e26]"
+              : "bg-[#463668] text-white hover:bg-[#2a446f]"
           }`}
         >
-          <span aria-hidden="true">{live ? "■" : "●"}</span>
+          <span
+            aria-hidden="true"
+            className={`h-2.5 w-2.5 ${live ? "rounded-sm bg-[#ffb3bb]" : "rounded-full bg-[#d4ec8e]"}`}
+          />
           {live ? "세션 종료" : "세션 시작"}
         </button>
 
         <span
-          className={`rounded-full px-2.5 py-1 text-xs font-medium ${STATUS_STYLE[status]}`}
+          className={`rounded-full px-2.5 py-1.5 text-[11px] font-semibold ${STATUS_STYLE[status]}`}
         >
           {STATUS_TEXT[status]}
         </span>
 
         {ttfaMs !== null && (
           <span
-            className={`ml-auto text-[11px] font-medium ${
-              ttfaMs < 1000 ? "text-emerald-400" : "text-amber-400"
+            className={`ml-auto font-mono text-[10px] font-semibold ${
+              ttfaMs < 1000 ? "text-[#07641d]" : "text-[#7f5a1a]"
             }`}
             title="말을 마친 뒤 첫 음성이 나오기까지 걸린 시간"
           >
@@ -73,9 +76,9 @@ export default function VoiceControl({
       </div>
 
       {/* Mic level meter, so it is obvious the mic is actually picking up. */}
-      <div className="h-1 w-full overflow-hidden rounded-full bg-zinc-800">
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-white">
         <div
-          className="h-full rounded-full bg-emerald-500 transition-[width] duration-75"
+          className="h-full rounded-full bg-[linear-gradient(90deg,#8661c5,#0078d4,#49c5b1)] transition-[width] duration-75"
           style={{ width: `${Math.min(100, level * 180)}%` }}
         />
       </div>
@@ -83,7 +86,7 @@ export default function VoiceControl({
       {detail && (
         <p
           className={`text-[11px] leading-snug ${
-            status === "error" ? "text-red-400" : "text-amber-400/90"
+            status === "error" ? "text-[#73262f]" : "text-[#7f5a1a]"
           }`}
         >
           {detail}
@@ -98,10 +101,10 @@ export default function VoiceControl({
               title={tool.facts ?? "실행 중…"}
               className={`rounded-md border px-1.5 py-0.5 font-mono text-[10px] ${
                 tool.ok === undefined
-                  ? "border-amber-700/60 bg-amber-900/40 text-amber-200"
+                  ? "border-[#ffe399] bg-[#fff8f3] text-[#7f5a1a]"
                   : tool.ok
-                    ? "border-emerald-700/60 bg-emerald-900/40 text-emerald-200"
-                    : "border-red-700/60 bg-red-900/40 text-red-200"
+                    ? "border-[#b9dcd2] bg-[#eef8f5] text-[#07641d]"
+                    : "border-[#ffb3bb] bg-[#fff1f2] text-[#73262f]"
               }`}
             >
               {tool.name}

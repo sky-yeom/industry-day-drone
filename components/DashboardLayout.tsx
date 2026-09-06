@@ -15,16 +15,20 @@ export default function DashboardLayout({
   chatPanel,
 }: DashboardLayoutProps) {
   return (
-    <div className="flex min-h-dvh w-full flex-col bg-black md:h-dvh">
-      {header}
-      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(440px,1fr)_minmax(600px,1fr)] gap-2 overflow-y-auto p-2 md:grid-cols-2 md:grid-rows-1 md:overflow-hidden">
-        <div className="min-h-0 overflow-hidden rounded-xl border border-zinc-800 md:row-span-1">
-          {pathPanel}
-        </div>
-        <div className="min-h-0 overflow-hidden rounded-xl border border-zinc-800">
-          {chatPanel}
+    <main className="relative flex min-h-dvh w-full flex-col overflow-hidden bg-[linear-gradient(125deg,#f4f3f5_0%,#f4f3f5_62%,#eee8f7_100%)] md:h-dvh">
+      <div className="dot-field pointer-events-none absolute right-0 top-0 h-[44%] w-[38%] opacity-40 [mask-image:linear-gradient(135deg,transparent,black)]" />
+
+      <div className="relative z-10 flex min-h-0 flex-1 flex-col px-3 pb-3 pt-2 sm:px-5 sm:pb-5 sm:pt-3">
+        {header}
+        <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(500px,1fr)_minmax(620px,1fr)] gap-4 overflow-y-auto pt-4 md:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.85fr)] md:grid-rows-1 md:overflow-hidden">
+          <div className="min-h-0 overflow-hidden rounded-[20px] border border-white bg-white/80 shadow-[0_18px_50px_rgba(42,68,111,0.1)] backdrop-blur-xl">
+            {pathPanel}
+          </div>
+          <div className="min-h-0 overflow-hidden rounded-[20px] border border-white bg-white/85 shadow-[0_18px_50px_rgba(70,54,104,0.1)] backdrop-blur-xl">
+            {chatPanel}
+          </div>
         </div>
       </div>
-    </div>
+    </main>
   );
 }

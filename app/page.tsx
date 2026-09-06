@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import FlightPathMap from "@/components/FlightPathMap";
+import DroneImagePanel from "@/components/DroneImagePanel";
 import ChatPanel from "@/components/ChatPanel";
 import VoiceControl from "@/components/VoiceControl";
 import { formatRoute, INITIAL_ROUTE_STATE } from "@/data/monitors";
@@ -22,6 +23,9 @@ function nextId() {
 }
 
 export default function Home() {
+  const [activeWorkspace, setActiveWorkspace] = useState<"route" | "images">(
+    "route"
+  );
   const [planningState, setPlanningState] =
     useState<RoutePlanningState>(INITIAL_ROUTE_STATE);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -86,7 +90,12 @@ export default function Home() {
       },
       onLevel: setLevel,
       onTranscript: upsertTranscript,
-      onRouteState: setPlanningState,
+      onRouteState: (state) => {
+        setPlanningState(state);
+        if (state.phase === "confirmed") {
+          setActiveWorkspace("images");
+        }
+      },
       onTool: (activity) => {
         setTools((prev) => {
           const idx = prev.findIndex((t) => t.id === activity.id);
@@ -155,24 +164,84 @@ export default function Home() {
   return (
     <DashboardLayout
       header={
-        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 px-4 py-3">
-          <div>
-            <h1 className="text-lg font-semibold text-zinc-100">드론 조사 대시보드</h1>
-            <p className="text-xs text-zinc-500">Industry Day — 실시간 음성 비행 계획 데모</p>
+        <header className="flex min-h-16 flex-wrap items-center justify-between gap-4 px-1 py-2 sm:px-2">
+          <div className="flex items-stretch gap-3">
+            <div
+              className="w-1 rounded-full bg-[linear-gradient(to_bottom,#8661c5,#0078d4,#49c5b1)]"
+              aria-hidden="true"
+            />
+            <div>
+              <div className="mb-0.5 flex items-center gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#8661c5]">
+                  Microsoft Foundry
+                </span>
+                <span className="h-1 w-1 rounded-full bg-[#49c5b1]" />
+                <span className="text-[10px] font-medium uppercase tracking-[0.16em] text-[#8c8279]">
+                  Industry Day
+                </span>
+              </div>
+              <h1 className="text-xl font-semibold tracking-[-0.03em] text-[#091f2c] sm:text-2xl">
+                드론 경로 관제
+              </h1>
+            </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             {relayConfig && (
-              <span className="hidden text-[11px] text-zinc-500 sm:inline">
-                {relayConfig.model} · {relayConfig.voice} · {relayConfig.region}
+              <span className="hidden rounded-full border border-[#d7d2cb] bg-white/65 px-3 py-1.5 font-mono text-[10px] text-[#5c4738] lg:inline">
+                {relayConfig.model} / {relayConfig.voice} / {relayConfig.region}
               </span>
             )}
-            <span className="rounded-full bg-zinc-800 px-3 py-1 text-xs font-medium text-emerald-300">
+            <span className="flex items-center gap-2 rounded-full border border-[#c5b4e3]/70 bg-white/75 px-3.5 py-2 text-xs font-semibold text-[#463668] shadow-sm">
+              <span className="h-2 w-2 rounded-full bg-[#8661c5] shadow-[0_0_0_4px_rgba(134,97,197,0.12)]" />
               {headerStatus}
             </span>
           </div>
         </header>
       }
-      pathPanel={<FlightPathMap planningState={planningState} />}
+      pathPanel={
+        <div className="flex h-full min-h-0 flex-col">
+          <div
+            className="flex h-14 shrink-0 items-end gap-6 border-b border-[#ded8ea]/80 px-5"
+            role="tablist"
+            aria-label="드론 작업 화면"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeWorkspace === "route"}
+              onClick={() => setActiveWorkspace("route")}
+              className={`relative h-full border-b-2 px-0.5 pt-1 text-xs font-semibold transition-colors ${
+                activeWorkspace === "route"
+                  ? "border-[#8661c5] text-[#463668]"
+                  : "border-transparent text-[#8c8279] hover:text-[#463668]"
+              }`}
+            >
+              비행 경로
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeWorkspace === "images"}
+              onClick={() => setActiveWorkspace("images")}
+              className={`relative flex h-full items-center gap-2 border-b-2 px-0.5 pt-1 text-xs font-semibold transition-colors ${
+                activeWorkspace === "images"
+                  ? "border-[#8661c5] text-[#463668]"
+                  : "border-transparent text-[#8c8279] hover:text-[#463668]"
+              }`}
+            >
+              드론 이미지
+              <span className="h-1.5 w-1.5 rounded-full bg-[#8661c5]" />
+            </button>
+          </div>
+          <div className="min-h-0 flex-1">
+            {activeWorkspace === "route" ? (
+              <FlightPathMap planningState={planningState} />
+            ) : (
+              <DroneImagePanel />
+            )}
+          </div>
+        </div>
+      }
       chatPanel={
         <ChatPanel
           messages={messages}

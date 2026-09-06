@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css");
 
 /* 등폭 폰트만 Tailwind 토큰으로 노출한다. 배경/전경 색 변수는 두지 않는다.
    대시보드가 모든 면에서 어두운 색을 직접 지정하고 있어서(DashboardLayout의
@@ -7,10 +8,44 @@
   --font-mono: var(--font-geist-mono);
 }
 
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: #f4f3f5;
+}
+
 body {
-  background: #000;
-  color: #ededed;
+  background: #f4f3f5;
+  color: #091f2c;
   /* 한글이 포함된 UI라서 한글 글리프가 있는 시스템 폰트를 먼저 찾는다. */
-  font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic",
-    system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: "Pretendard Variable", Pretendard, -apple-system,
+    BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic",
+    "Segoe UI", sans-serif;
+}
+
+::selection {
+  background: #c5b4e3;
+  color: #091f2c;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.dot-field {
+  background-image: radial-gradient(circle, rgba(70, 54, 104, 0.17) 1.2px, transparent 1.2px);
+  background-size: 16px 16px;
+}
+
+.fine-dot-field {
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.28) 1px, transparent 1px);
+  background-size: 10px 10px;
+}
+
+.soft-scrollbar {
+  scrollbar-color: #c5b4e3 transparent;
+  scrollbar-width: thin;
 }

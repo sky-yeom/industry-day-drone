@@ -1,4 +1,4 @@
-"""경로 계획 상태와 조사 시뮬레이션.
+"""경로 계획 상태.
 
 `lib/types.ts`의 RoutePlanningState와 같은 형태(camelCase)를 그대로 사용하므로
 브라우저는 변환 없이 렌더링한다. 상태를 React가 아니라 여기에 두면 에이전트와
@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-import random
 from dataclasses import dataclass, field, asdict
 
 MONITOR_IDS = ["monitor-1", "monitor-2", "monitor-3"]
@@ -41,22 +40,6 @@ ALIASES = {
 # 순서를 가리키는 말. 모니터 이름으로 오해하면 안 되므로 명시적으로 거절한다.
 ORDINALS = {"첫번째", "첫 번째", "두번째", "두 번째", "세번째", "세 번째",
             "처음", "다음", "마지막", "아무거나", "아무데나"}
-
-ANOMALY_POOL = [
-    ("crop-stress", "작물 스트레스", "medium",
-     "약 0.4헥타르 구간에서 엽록소 수치가 떨어졌고, 관수 부족으로 보입니다."),
-    ("debris-field", "잔해 산재", "high",
-     "진입로에 단단한 잔해가 흩어져 있어 차량 통행 전에 정리가 필요합니다."),
-    ("standing-water", "고인 물", "medium",
-     "배수로 근처에 물이 고여 있고 지난 조사 이후로 빠지지 않았습니다."),
-    ("structural-crack", "구조물 균열", "high",
-     "옹벽을 따라 수직 균열이 진행 중이라 구조 검토가 필요합니다."),
-    ("thermal-hotspot", "열점 감지", "high",
-     "주변보다 표면 온도가 14도 높아 전기 결함이 의심됩니다."),
-    ("wildlife-cluster", "야생동물 무리", "low",
-     "울타리 안쪽에 소규모 무리가 쉬고 있습니다. 관찰만 하면 됩니다."),
-]
-
 
 def resolve_monitor(raw: str) -> str | None:
     """모델이 넘긴 값을 표준 모니터 id로 맞춘다. 불명확하면 None."""
@@ -90,12 +73,10 @@ class RouteState:
 
 
 class SurveySession:
-    """대시보드 세션 하나: 계획 중인 경로와 조사 결과."""
+    """대시보드 세션 하나의 경로 계획 상태."""
 
     def __init__(self) -> None:
         self.state = RouteState()
-        self.anomalies: list[dict] = []
-        self.surveyed = False
 
     def snapshot(self) -> dict:
         return asdict(self.state)
@@ -119,8 +100,6 @@ class SurveySession:
 
         self.state.draftRoute.append(mid)
         self.state.confirmedRoute = []
-        self.surveyed = False
-        self.anomalies = []
 
         # 첫 번째 선택 -> 두 번째를 묻는다.
         if len(self.state.draftRoute) == 1:
@@ -161,48 +140,13 @@ class SurveySession:
         self.state.phase = "confirmed"
         return {"ok": True,
                 "facts": f"경로 확정됨: {names(self.state.confirmedRoute)}",
-                "ask": "조사를 시작할지 물어볼 것"}
+                "ask": ""}
 
     def clear_route(self) -> dict:
         self.state = RouteState()
-        self.anomalies = []
-        self.surveyed = False
         return {"ok": True,
                 "facts": "경로를 모두 지웠음",
                 "ask": "어느 모니터부터 갈지 다시 물어볼 것"}
-
-    def run_survey(self) -> dict:
-        if self.state.phase != "confirmed" or not self.state.confirmedRoute:
-            return {"ok": False,
-                    "facts": "경로가 확정되지 않아 조사를 시작할 수 없음",
-                    "ask": "먼저 경로를 확정할지 물어볼 것"}
-
-        # 경로로 시드를 고정해서 같은 경로는 같은 결과가 나오게 한다.
-        rng = random.Random("|".join(self.state.confirmedRoute))
-        results: list[dict] = []
-
-        for idx, monitor_id in enumerate(self.state.confirmedRoute):
-            for slug, label, severity, notes in rng.sample(ANOMALY_POOL, rng.randint(1, 2)):
-                results.append({
-                    "id": f"anomaly-{idx}-{slug}",
-                    "monitorId": monitor_id,
-                    "image": f"/anomalies/{slug}.svg",
-                    "label": label,
-                    "severity": severity,
-                    "confidence": round(rng.uniform(0.71, 0.97), 2),
-                    "notes": notes,
-                })
-
-        self.anomalies = results
-        self.surveyed = True
-
-        high = [a for a in results if a["severity"] == "high"]
-        detail = (f"그중 심각 등급은 {len(high)}건이고 가장 급한 것은 "
-                  f"{LABELS[high[0]['monitorId']]}의 {high[0]['label']}"
-                  if high else "심각 등급은 없음")
-        return {"ok": True,
-                "facts": f"조사 완료. 이상 징후 {len(results)}건 발견. {detail}",
-                "ask": "결과를 대시보드에서 볼 수 있다고 알려줄 것"}
 
     def get_state(self) -> dict:
         s = self.state
@@ -211,10 +155,8 @@ class SurveySession:
                     "facts": "아직 경로 없음. 갈 수 있는 곳은 모니터 1, 2, 3",
                     "ask": "어디부터 갈지 물어볼 것"}
         if s.phase == "confirmed":
-            extra = (f"조사에서 이상 징후 {len(self.anomalies)}건 발견됨"
-                     if self.surveyed else "조사는 아직 안 함")
             return {"ok": True,
-                    "facts": f"확정 경로는 {names(s.confirmedRoute)}. {extra}",
+                    "facts": f"확정 경로는 {names(s.confirmedRoute)}",
                     "ask": ""}
         return {"ok": True,
                 "facts": f"임시 경로는 {names(s.draftRoute)}, 아직 확정 전",

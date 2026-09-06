@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import FlightPathMap from "@/components/FlightPathMap";
-import AnomalyGallery from "@/components/AnomalyGallery";
 import ChatPanel from "@/components/ChatPanel";
 import VoiceControl from "@/components/VoiceControl";
 import { formatRoute, INITIAL_ROUTE_STATE } from "@/data/monitors";
@@ -14,7 +13,7 @@ import {
   type ToolActivity,
   type VoiceStatus,
 } from "@/lib/voiceClient";
-import type { AnomalyResult, ChatMessage, RoutePlanningState } from "@/lib/types";
+import type { ChatMessage, RoutePlanningState } from "@/lib/types";
 
 let messageId = 0;
 function nextId() {
@@ -25,7 +24,6 @@ function nextId() {
 export default function Home() {
   const [planningState, setPlanningState] =
     useState<RoutePlanningState>(INITIAL_ROUTE_STATE);
-  const [anomalies, setAnomalies] = useState<AnomalyResult[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
 
   const [status, setStatus] = useState<VoiceStatus>("idle");
@@ -88,10 +86,7 @@ export default function Home() {
       },
       onLevel: setLevel,
       onTranscript: upsertTranscript,
-      onRouteState: (state, results) => {
-        setPlanningState(state);
-        setAnomalies(results);
-      },
+      onRouteState: setPlanningState,
       onTool: (activity) => {
         setTools((prev) => {
           const idx = prev.findIndex((t) => t.id === activity.id);
@@ -178,7 +173,6 @@ export default function Home() {
         </header>
       }
       pathPanel={<FlightPathMap planningState={planningState} />}
-      anomalyPanel={<AnomalyGallery anomalies={anomalies} />}
       chatPanel={
         <ChatPanel
           messages={messages}

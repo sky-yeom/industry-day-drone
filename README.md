@@ -1,8 +1,7 @@
 # 드론 조사 대시보드 — Voice Live
 
 Industry Day 데모: Azure AI Voice Live API로 음성 제어하는 Next.js 대시보드.
-드론이 둘러볼 모니터를 말로 고르면 경로가 그려지고, 확정 후 조사를 실행하면
-지도와 이상 징후 갤러리가 실시간으로 갱신된다.
+드론이 둘러볼 모니터를 말로 고르면 경로가 실시간으로 그려진다.
 
 ## 경로 계획 흐름
 
@@ -10,7 +9,7 @@ Industry Day 데모: Azure AI Voice Live API로 음성 제어하는 Next.js 대�
 2. 사용자가 첫 번째를 고른다 → 두 번째를 묻는다
 3. 사용자가 두 번째를 고른다 → **남은 한 곳은 시스템이 자동으로 마지막에 추가**
 4. 전체 경로를 읽어주고 **이대로 확정할지 묻는다**
-5. 사용자가 동의하면 확정, 이후 조사 실행
+5. 사용자가 동의하면 경로 확정
 
 "첫번째", "아무거나", 알아듣지 못한 소리에는 **도구를 부르지 않고 다시 묻는다.**
 임의로 모니터를 고르거나 경로를 초기화하지 않는다.
@@ -19,7 +18,7 @@ Industry Day 데모: Azure AI Voice Live API로 음성 제어하는 Next.js 대�
 
 ```
 브라우저 (Next.js :3000)
-  FlightPathMap / AnomalyGallery / ChatPanel   ← 렌더링만
+  FlightPathMap / ChatPanel                    ← 렌더링만
   VoiceControl + lib/voiceClient.ts            ← 마이크 캡처, PCM 재생
         │  ws://127.0.0.1:8080/ws              (평문 WS, 자격증명 없음)
         ▼
@@ -73,13 +72,12 @@ npm run dev
 <http://localhost:3000>에서 **세션 시작**을 누르고 마이크를 허용한 뒤 말한다:
 
 > "모니터 2부터 갈게요." → "그다음은 모니터 1이요." → "네, 확정해주세요."
-> → "조사 시작해주세요."
 
 텍스트 입력도 같은 에이전트를 거친다.
 
 ### 스모크 테스트
 
-마이크 없이 전체 경로(도구, 상태 전이, 자동 3번째, 이상 징후)를 점검한다:
+마이크 없이 전체 경로(도구, 상태 전이, 자동 3번째, 확정)를 점검한다:
 
 ```powershell
 cd relay
@@ -214,7 +212,7 @@ return {"facts": "첫 번째 경유지는 모니터 2",
 | 무엇 | 파일 |
 | --- | --- |
 | 시스템 프롬프트, 인사말, 도구 정의 | `relay/tools.py` |
-| 경로 로직, 자동 3번째, 이상 징후 생성 | `relay/survey.py` |
+| 경로 로직, 자동 3번째 경유지 | `relay/survey.py` |
 | 모델, 보이스, 리전, VAD 튜닝 | `relay/config.py` |
 | Voice Live에 보내는 세션 설정 | `relay/server.py` → `build_session()` |
 | 마이크 캡처 / 재생 / 끼어들기 | `lib/voiceClient.ts`, `public/audio-worklets.js` |

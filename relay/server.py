@@ -131,7 +131,6 @@ class Bridge:
         await self.send_browser({
             "type": "route.state",
             "state": self.session.snapshot(),
-            "anomalies": self.session.anomalies,
         })
 
     # --- upstream -> browser --------------------------------------------------

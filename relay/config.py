@@ -83,7 +83,7 @@ TRANSCRIPTION_MODEL = os.getenv("VOICE_LIVE_TRANSCRIPTION_MODEL", "gpt-4o-transc
 TRANSCRIPTION_PROMPT = os.getenv(
     "VOICE_LIVE_TRANSCRIPTION_PROMPT",
     "드론 조사 관제 대화입니다. 자주 나오는 말: 모니터 1, 모니터 2, 모니터 3, "
-    "경로, 확정, 조사 시작, 다시, 취소.",
+    "경로, 확정, 다시, 취소.",
 )
 
 # --- Audio --------------------------------------------------------------------

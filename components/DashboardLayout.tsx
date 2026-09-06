@@ -3,20 +3,15 @@ import type { ReactNode } from "react";
 interface DashboardLayoutProps {
   header: ReactNode;
   pathPanel: ReactNode;
-  anomalyPanel: ReactNode;
   chatPanel: ReactNode;
 }
 
 /**
- * Quarter-split dashboard grid:
- * - Left column (full height): flight path panel
- * - Right column, top row: anomaly results panel
- * - Right column, bottom row: chat panel
+ * Two-column dashboard with the flight path and voice chat side by side.
  */
 export default function DashboardLayout({
   header,
   pathPanel,
-  anomalyPanel,
   chatPanel,
 }: DashboardLayoutProps) {
   return (
@@ -26,13 +21,8 @@ export default function DashboardLayout({
         <div className="min-h-0 overflow-hidden rounded-xl border border-zinc-800 md:row-span-1">
           {pathPanel}
         </div>
-        <div className="grid min-h-0 grid-rows-2 gap-2 overflow-hidden">
-          <div className="min-h-0 overflow-hidden rounded-xl border border-zinc-800">
-            {anomalyPanel}
-          </div>
-          <div className="min-h-0 overflow-hidden rounded-xl border border-zinc-800">
-            {chatPanel}
-          </div>
+        <div className="min-h-0 overflow-hidden rounded-xl border border-zinc-800">
+          {chatPanel}
         </div>
       </div>
     </div>

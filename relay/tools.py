@@ -31,7 +31,6 @@ SYSTEM_PROMPT = """\
    남은 한 곳은 시스템이 자동으로 마지막 순서에 넣는다.
 4. 전체 경로를 알려주고 이대로 확정할지 묻는다.
 5. 사용자가 동의하면 `confirm_route`를 호출한다. 동의 없이 확정하지 않는다.
-6. 확정 후 사용자가 원하면 `run_survey`를 호출한다.
 
 사용자가 한 번에 두 곳을 말하면 순서대로 `select_stop`을 이어서 호출한다.
 
@@ -54,8 +53,7 @@ SYSTEM_PROMPT = """\
 않는다. "모니터 1부터 갈게요"라고 말했다면 **반드시** `select_stop`을 호출해야 한다.
 호출하지 않고 말만 하면 사용자는 화면이 멈춘 것으로 본다.
 - 사용자가 "1"이라고만 해도 그건 모니터 1을 고른 것이다. 바로 호출한다.
-- 확정하겠다고 말했으면 `confirm_route`를, 조사하겠다고 말했으면 `run_survey`를
-  반드시 호출한다.
+- 확정하겠다고 말했으면 `confirm_route`를 반드시 호출한다.
 
 ## 도구를 부르기 전에 짧게 한마디
 도구 호출에는 시간이 걸리고, 그동안 조용하면 멈춘 것처럼 보입니다.
@@ -63,7 +61,7 @@ SYSTEM_PROMPT = """\
 단, 아직 일어나지 않은 결과를 미리 말하면 안 됩니다.
 
 ## 사실만 말하기
-모니터 이름, 이상 징후 개수, 확률 같은 수치는 절대 지어내지 않습니다.
+모니터 이름이나 경로 순서 같은 정보는 절대 지어내지 않습니다.
 도구가 준 facts에 있는 내용만 말합니다.
 도구가 ok=false를 주면 왜 안 됐는지 사용자에게 설명합니다.
 """
@@ -117,17 +115,8 @@ TOOLS = [
     },
     {
         "type": "function",
-        "name": "run_survey",
-        "description": (
-            "확정된 경로를 따라 비행하며 각 모니터에서 이상 징후를 탐지합니다. "
-            "경로가 확정되어 있어야 합니다. 결과는 대시보드에 표시됩니다."
-        ),
-        "parameters": {"type": "object", "properties": {}, "required": []},
-    },
-    {
-        "type": "function",
         "name": "get_state",
-        "description": "현재 경로와 조사 진행 여부를 확인합니다.",
+        "description": "현재 경로 계획 상태를 확인합니다.",
         "parameters": {"type": "object", "properties": {}, "required": []},
     },
 ]
@@ -141,8 +130,6 @@ def dispatch(session, name: str, args: dict) -> dict:
         return session.confirm_route()
     if name == "clear_route":
         return session.clear_route()
-    if name == "run_survey":
-        return session.run_survey()
     if name == "get_state":
         return session.get_state()
     return {"ok": False, "facts": f"{name}이라는 도구는 없음", "ask": ""}

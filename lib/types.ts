@@ -25,20 +25,6 @@ export interface RoutePlanningState {
   confirmedRoute: MonitorId[];
 }
 
-export type Severity = "low" | "medium" | "high";
-
-export interface AnomalyResult {
-  id: string;
-  monitorId: MonitorId;
-  /** Path to a placeholder detection thumbnail under /public/anomalies. */
-  image: string;
-  label: string;
-  severity: Severity;
-  /** Detection confidence, 0-1. */
-  confidence: number;
-  notes: string;
-}
-
 export interface ChatMessage {
   id: string;
   role: "user" | "agent";

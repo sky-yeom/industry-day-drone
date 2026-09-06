@@ -34,7 +34,6 @@ export default function Home() {
   const [ttfaMs, setTtfaMs] = useState<number | null>(null);
   const [tools, setTools] = useState<ToolActivity[]>([]);
   const [isThinking, setIsThinking] = useState(false);
-  const [notice, setNotice] = useState<string>();
   const [relayConfig, setRelayConfig] = useState<RelayConfig | null>(null);
 
   const sessionRef = useRef<VoiceSession | null>(null);
@@ -104,7 +103,6 @@ export default function Home() {
       },
       onTtfa: setTtfaMs,
       onBusy: setIsThinking,
-      onNotice: setNotice,
     });
     return sessionRef.current;
   }, [upsertTranscript]);
@@ -120,7 +118,6 @@ export default function Home() {
     setMessages([]);
     setTools([]);
     setTtfaMs(null);
-    setNotice(undefined);
     streamingRef.current = { user: null, agent: null };
     try {
       await session.start();
@@ -194,7 +191,6 @@ export default function Home() {
             <VoiceControl
               status={status}
               detail={statusDetail}
-              notice={notice}
               level={level}
               ttfaMs={ttfaMs}
               tools={tools}

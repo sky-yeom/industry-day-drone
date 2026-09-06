@@ -85,7 +85,6 @@ def names(ids: list[str]) -> str:
 class RouteState:
     # 필드명은 lib/types.ts와 정확히 일치시켜 React가 그대로 쓰게 한다.
     phase: str = "selecting-destinations"
-    selectedMonitorIds: list[str] = field(default_factory=list)
     draftRoute: list[str] = field(default_factory=list)
     confirmedRoute: list[str] = field(default_factory=list)
 
@@ -127,7 +126,6 @@ class SurveySession:
         if len(self.state.draftRoute) == 1:
             remaining = [m for m in MONITOR_IDS if m not in self.state.draftRoute]
             self.state.phase = "selecting-order"
-            self.state.selectedMonitorIds = list(self.state.draftRoute)
             return {
                 "ok": True,
                 "facts": f"첫 번째 경유지는 {LABELS[mid]}",
@@ -139,7 +137,6 @@ class SurveySession:
             leftover = [m for m in MONITOR_IDS if m not in self.state.draftRoute]
             auto = leftover[0]
             self.state.draftRoute.append(auto)
-            self.state.selectedMonitorIds = list(self.state.draftRoute)
             self.state.phase = "awaiting-confirmation"
             return {
                 "ok": True,
@@ -149,7 +146,6 @@ class SurveySession:
                 "ask": "이 경로가 맞는지, 확정할지 물어볼 것",
             }
 
-        self.state.selectedMonitorIds = list(self.state.draftRoute)
         self.state.phase = "awaiting-confirmation"
         return {"ok": True,
                 "facts": f"경로는 {names(self.state.draftRoute)}",
@@ -162,7 +158,6 @@ class SurveySession:
                     "ask": "어느 모니터부터 갈지 물어볼 것"}
 
         self.state.confirmedRoute = list(self.state.draftRoute)
-        self.state.selectedMonitorIds = list(self.state.draftRoute)
         self.state.phase = "confirmed"
         return {"ok": True,
                 "facts": f"경로 확정됨: {names(self.state.confirmedRoute)}",

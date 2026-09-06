@@ -28,7 +28,6 @@ export type VoiceStatus =
 export interface ToolActivity {
   id: string;
   name: string;
-  args: Record<string, unknown>;
   /** What actually happened, for the tooltip. The relay calls this `facts`. */
   facts?: string;
   ok?: boolean;
@@ -36,6 +35,10 @@ export interface ToolActivity {
 }
 
 export interface VoiceHandlers {
+  /**
+   * 상태 변화. `detail`은 사용자에게 보여줄 한 줄 설명이며, 상태가 바뀔 때마다
+   * 갱신되므로 다음 상태 변화에서 자연스럽게 사라진다.
+   */
   onStatus: (status: VoiceStatus, detail?: string) => void;
   onLevel: (peak: number) => void;
   /** Streaming transcript. `final` marks the end of that speaker's turn. */
@@ -45,15 +48,12 @@ export interface VoiceHandlers {
   onTtfa: (ms: number) => void;
   /** True while a response is generating. Sending during one is rejected. */
   onBusy: (busy: boolean) => void;
-  /** 세션은 살아 있지만 알려줄 만한 일이 생겼을 때 (실패한 응답 등). */
-  onNotice: (message: string) => void;
 }
 
 export interface RelayConfig {
   model: string;
   voice: string;
   region: string;
-  resource: string;
 }
 
 export async function fetchRelayConfig(): Promise<RelayConfig | null> {
@@ -93,7 +93,7 @@ export class VoiceSession {
 
   async start(): Promise<void> {
     if (this.running) return;
-    this.handlers.onStatus("connecting", "Requesting microphone…");
+    this.handlers.onStatus("connecting");
 
     try {
       // Browser-side cleanup. Server-side echo cancellation alone is not enough
@@ -199,14 +199,13 @@ export class VoiceSession {
       this.ws = ws;
 
       ws.onerror = () =>
-        reject(new Error("Could not reach the relay. Is relay/server.py running?"));
+        reject(new Error("릴레이에 연결하지 못했습니다. relay/server.py 가 실행 중인지 확인하세요."));
       ws.onclose = (ev) => {
         if (!this.running) return;
-        // A drop mid-session is silent otherwise, which looks like the agent
-        // simply stopped answering.
+        // 중간에 끊기면 아무 표시가 없어서 에이전트가 그냥 대답을 멈춘 것처럼 보인다.
         const why = ev.reason?.trim()
           ? ev.reason
-          : `Relay connection closed (code ${ev.code}).`;
+          : `릴레이 연결이 끊어졌습니다. (코드 ${ev.code})`;
         this.handlers.onStatus("error", why);
         void this.stop(true);
       };
@@ -319,7 +318,6 @@ export class VoiceSession {
         this.handlers.onTool({
           id: `tool-${this.toolSeq}`,
           name: String(msg.name),
-          args: (msg.args as Record<string, unknown>) ?? {},
         });
         return;
       }
@@ -328,7 +326,6 @@ export class VoiceSession {
         this.handlers.onTool({
           id: `tool-${this.toolSeq}`,
           name: String(msg.name),
-          args: {},
           ok: result?.ok,
           facts: result?.facts,
           ms: msg.ms as number | undefined,
@@ -362,8 +359,10 @@ export class VoiceSession {
         // Voice Live의 error는 대부분 그 응답 하나만 실패한 것이고 세션은 살아
         // 있다. 여기서 status를 "error"로 바꾸면 마이크가 계속 열려 있는데도
         // 화면은 "세션 시작"으로 돌아가 세션이 끝난 것처럼 보인다.
-        this.handlers.onNotice(err?.message ?? "알 수 없는 오류가 났습니다.");
-        this.handlers.onStatus("listening");
+        this.handlers.onStatus(
+          "listening",
+          err?.message ?? "알 수 없는 오류가 났습니다.",
+        );
         return;
       }
     }

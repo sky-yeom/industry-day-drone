@@ -33,7 +33,6 @@ export const MONITOR_MAP = Object.fromEntries(
 
 export const INITIAL_ROUTE_STATE: RoutePlanningState = {
   phase: "selecting-destinations",
-  selectedMonitorIds: [],
   draftRoute: [],
   confirmedRoute: [],
 };

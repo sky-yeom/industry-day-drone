@@ -19,8 +19,9 @@ export type RoutePlanningPhase =
 
 export interface RoutePlanningState {
   phase: RoutePlanningPhase;
-  selectedMonitorIds: MonitorId[];
+  /** 계획 중인 경로. 확정 전까지 여기에 쌓인다. */
   draftRoute: MonitorId[];
+  /** 확정된 경로. phase가 "confirmed"가 되면 draftRoute와 같아진다. */
   confirmedRoute: MonitorId[];
 }
 
@@ -43,10 +44,4 @@ export interface ChatMessage {
   role: "user" | "agent";
   text: string;
   timestamp: number;
-}
-
-export interface AgentResponse {
-  reply: string;
-  state: RoutePlanningState;
-  anomalies: AnomalyResult[];
 }

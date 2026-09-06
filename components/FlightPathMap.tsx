@@ -27,7 +27,6 @@ export default function FlightPathMap({ planningState }: FlightPathMapProps) {
     planningState.phase === "confirmed"
       ? planningState.confirmedRoute
       : planningState.draftRoute;
-  const selectedSet = new Set(planningState.selectedMonitorIds);
   const isConfirmed = planningState.phase === "confirmed";
   const lineColor = isConfirmed ? "#34d399" : "#facc15";
 
@@ -92,7 +91,6 @@ export default function FlightPathMap({ planningState }: FlightPathMapProps) {
 
           {MONITORS.map((monitor) => {
             const routeIndex = visibleRoute.indexOf(monitor.id);
-            const isSelected = selectedSet.has(monitor.id);
             return (
               <div
                 key={monitor.id}
@@ -101,9 +99,7 @@ export default function FlightPathMap({ planningState }: FlightPathMapProps) {
                     ? isConfirmed
                       ? "border-emerald-400"
                       : "border-amber-300"
-                    : isSelected
-                      ? "border-sky-500"
-                      : "border-slate-700"
+                    : "border-slate-700"
                 }`}
                 style={{ left: `${monitor.x}%`, top: `${monitor.y}%` }}
               >
@@ -130,11 +126,7 @@ export default function FlightPathMap({ planningState }: FlightPathMapProps) {
                     {monitor.label}
                   </span>
                   <span className="text-[10px] uppercase tracking-wide text-slate-400">
-                    {routeIndex >= 0
-                      ? `${routeIndex + 1}번째`
-                      : isSelected
-                        ? "선택됨"
-                        : "대기"}
+                    {routeIndex >= 0 ? `${routeIndex + 1}번째` : "대기"}
                   </span>
                 </div>
               </div>

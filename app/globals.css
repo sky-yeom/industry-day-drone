@@ -1,26 +1,16 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
+/* 등폭 폰트만 Tailwind 토큰으로 노출한다. 배경/전경 색 변수는 두지 않는다.
+   대시보드가 모든 면에서 어두운 색을 직접 지정하고 있어서(DashboardLayout의
+   bg-black 등) 테마 변수는 어디에서도 읽히지 않았다. */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: #000;
+  color: #ededed;
+  /* 한글이 포함된 UI라서 한글 글리프가 있는 시스템 폰트를 먼저 찾는다. */
+  font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic",
+    system-ui, -apple-system, "Segoe UI", sans-serif;
 }

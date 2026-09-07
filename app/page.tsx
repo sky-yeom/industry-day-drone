@@ -107,10 +107,6 @@ export default function Home() {
       header={
         <header className="flex min-h-16 flex-wrap items-center justify-between gap-4 px-1 py-2 sm:px-2">
           <div className="flex items-stretch gap-3">
-            <div
-              className="w-1 rounded-full bg-[linear-gradient(to_bottom,#8661c5,#0078d4,#49c5b1)]"
-              aria-hidden="true"
-            />
             <div>
               <div className="mb-0.5 flex items-center gap-2">
                 <span className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#8661c5]">

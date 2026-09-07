@@ -59,6 +59,24 @@ export default function Home() {
     void fetchRelayConfig().then(setRelayConfig);
   }, []);
 
+  const handleReset = useCallback(() => {
+    // 음성 세션은 detectionPhase가 "complete"가 될 때 이미 멈춰 있다. 다음
+    // 시작 때 VoiceSession이 새 WebSocket을 새로 열고, 릴레이도 매 연결마다
+    // 새 SurveySession을 만들기 때문에 서버에 별도로 reset을 요청할 필요는
+    // 없다 -- 여기서는 프런트엔드 화면 상태만 처음으로 되돌리면 된다.
+    setActiveWorkspace("route");
+    setPlanningState(INITIAL_STATE);
+    setTranscript([]);
+    setTools([]);
+    setTtfaMs(null);
+    setStatus("idle");
+    setStatusDetail(undefined);
+    streamingRef.current = { user: null, agent: null };
+    advancedToPromptRef.current = false;
+    advancedToImagesRef.current = false;
+    advancedToResultsRef.current = false;
+  }, []);
+
   const upsertTranscript = useCallback(
     (role: "user" | "agent", text: string, final: boolean) => {
       const existingId = streamingRef.current[role];
@@ -275,6 +293,7 @@ export default function Home() {
               <ResultsPanel
                 score={planningState.score}
                 userPromptText={planningState.userPromptText}
+                onReset={handleReset}
               />
             )}
           </div>

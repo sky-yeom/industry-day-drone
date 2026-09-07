@@ -119,7 +119,7 @@ export default function FlightPathMap({ planningState }: FlightPathMapProps) {
             return (
               <div
                 key={monitor.id}
-                className={`absolute z-20 w-[36%] max-w-52 -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl border bg-white/95 shadow-[0_12px_28px_rgba(42,68,111,0.13)] backdrop-blur transition-[transform,box-shadow,border-color] duration-200 hover:-translate-y-[52%] hover:shadow-[0_18px_36px_rgba(42,68,111,0.18)] ${
+                className={`absolute z-20 w-[36%] max-w-52 -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl border bg-white/95 shadow-[0_12px_28px_rgba(42,68,111,0.13)] backdrop-blur transition-[box-shadow,border-color] duration-200 hover:shadow-[0_18px_36px_rgba(42,68,111,0.18)] ${
                   routeIndex >= 0
                     ? isConfirmed
                       ? "border-[#0078d4] ring-4 ring-[#0078d4]/10"

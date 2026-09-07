@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import FlightPathMap from "@/components/FlightPathMap";
 import DroneImagePanel from "@/components/DroneImagePanel";
-import ChatPanel from "@/components/ChatPanel";
 import VoiceControl from "@/components/VoiceControl";
 import { formatRoute, INITIAL_ROUTE_STATE } from "@/data/monitors";
 import {
@@ -14,13 +13,7 @@ import {
   type ToolActivity,
   type VoiceStatus,
 } from "@/lib/voiceClient";
-import type { ChatMessage, RoutePlanningState } from "@/lib/types";
-
-let messageId = 0;
-function nextId() {
-  messageId += 1;
-  return `msg-${messageId}`;
-}
+import type { RoutePlanningState } from "@/lib/types";
 
 export default function Home() {
   const [activeWorkspace, setActiveWorkspace] = useState<"route" | "images">(
@@ -28,57 +21,19 @@ export default function Home() {
   );
   const [planningState, setPlanningState] =
     useState<RoutePlanningState>(INITIAL_ROUTE_STATE);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
 
   const [status, setStatus] = useState<VoiceStatus>("idle");
   const [statusDetail, setStatusDetail] = useState<string>();
   const [level, setLevel] = useState(0);
   const [ttfaMs, setTtfaMs] = useState<number | null>(null);
   const [tools, setTools] = useState<ToolActivity[]>([]);
-  const [isThinking, setIsThinking] = useState(false);
   const [relayConfig, setRelayConfig] = useState<RelayConfig | null>(null);
 
   const sessionRef = useRef<VoiceSession | null>(null);
-  // Ids of the bubbles currently being streamed into, one per speaker.
-  const streamingRef = useRef<{ user: string | null; agent: string | null }>({
-    user: null,
-    agent: null,
-  });
 
   useEffect(() => {
     void fetchRelayConfig().then(setRelayConfig);
   }, []);
-
-  const upsertTranscript = useCallback(
-    (role: "user" | "agent", text: string, final: boolean) => {
-      const existingId = streamingRef.current[role];
-
-      // An empty final transcript means speech was detected but nothing was
-      // recognised, so drop the reserved placeholder instead of leaving "…".
-      if (final && !text.trim()) {
-        if (existingId) {
-          setMessages((prev) => prev.filter((m) => m.id !== existingId));
-          streamingRef.current[role] = null;
-        }
-        return;
-      }
-
-      if (!text.trim()) return;
-
-      if (existingId) {
-        setMessages((prev) =>
-          prev.map((m) => (m.id === existingId ? { ...m, text } : m))
-        );
-      } else {
-        const id = nextId();
-        streamingRef.current[role] = id;
-        setMessages((prev) => [...prev, { id, role, text, timestamp: Date.now() }]);
-      }
-
-      if (final) streamingRef.current[role] = null;
-    },
-    []
-  );
 
   const getSession = useCallback(() => {
     if (sessionRef.current) return sessionRef.current;
@@ -89,11 +44,17 @@ export default function Home() {
         setStatusDetail(detail);
       },
       onLevel: setLevel,
-      onTranscript: upsertTranscript,
+      // Transcript text is no longer displayed anywhere; the orb is the
+      // entire voice UI now.
+      onTranscript: () => {},
       onRouteState: (state) => {
         setPlanningState(state);
         if (state.phase === "confirmed") {
           setActiveWorkspace("images");
+          // Route is locked in and the view has handed off to the drone
+          // feed; the voice agent has nothing left to do, so end the
+          // session automatically instead of leaving the mic open.
+          void sessionRef.current?.stop();
         }
       },
       onTool: (activity) => {
@@ -106,10 +67,10 @@ export default function Home() {
         });
       },
       onTtfa: setTtfaMs,
-      onBusy: setIsThinking,
+      onBusy: () => {},
     });
     return sessionRef.current;
-  }, [upsertTranscript]);
+  }, []);
 
   const handleToggle = useCallback(async () => {
     const session = getSession();
@@ -117,32 +78,14 @@ export default function Home() {
       await session.stop();
       return;
     }
-    // Reset the visible conversation. The relay pushes authoritative route
-    // state as soon as the new session opens.
-    setMessages([]);
     setTools([]);
     setTtfaMs(null);
-    streamingRef.current = { user: null, agent: null };
     try {
       await session.start();
     } catch {
       /* status already reflects the failure */
     }
   }, [getSession]);
-
-  const handleSend = useCallback((prompt: string) => {
-    const session = sessionRef.current;
-    if (!session?.isRunning) return;
-    // 보내는 데 실패하면(응답 생성 중) 아무것도 건드리지 않는다. 여기서 먼저
-    // streamingRef를 지우면 진행 중이던 "…" 말풍선이 미아가 된다.
-    if (!session.sendText(prompt)) return;
-    // 타이핑한 입력은 전사되어 돌아오지 않으므로 화면에 직접 그린다.
-    streamingRef.current.user = null;
-    setMessages((prev) => [
-      ...prev,
-      { id: nextId(), role: "user", text: prompt, timestamp: Date.now() },
-    ]);
-  }, []);
 
   useEffect(() => {
     return () => {
@@ -158,8 +101,6 @@ export default function Home() {
         : planningState.phase === "selecting-order"
           ? "순서 정하는 중"
           : "첫 경유지 선택";
-
-  const live = status !== "idle" && status !== "error";
 
   return (
     <DashboardLayout
@@ -243,14 +184,18 @@ export default function Home() {
         </div>
       }
       chatPanel={
-        <ChatPanel
-          messages={messages}
-          onSend={handleSend}
-          isThinking={isThinking}
-          disabledReason={
-            live ? undefined : "세션을 시작하면 대화할 수 있습니다"
-          }
-          toolbar={
+        <div className="flex h-full w-full flex-col">
+          <div className="flex items-start justify-between gap-3 px-5 pb-3 pt-5 sm:px-6 sm:pt-6">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#8661c5]">
+                Azure AI voice agent
+              </p>
+              <h2 className="text-lg font-semibold tracking-[-0.02em] text-[#091f2c]">
+                Foundry Copilot
+              </h2>
+            </div>
+          </div>
+          <div className="relative min-h-0 flex-1">
             <VoiceControl
               status={status}
               detail={statusDetail}
@@ -259,8 +204,8 @@ export default function Home() {
               tools={tools}
               onToggle={handleToggle}
             />
-          }
-        />
+          </div>
+        </div>
       }
     />
   );

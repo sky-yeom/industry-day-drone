@@ -1,0 +1,122 @@
+<mxfile host="app.diagrams.net" modified="2026-09-07T00:36:00.000Z" agent="GitHub Copilot CLI" version="24.7.17" type="device">
+  <diagram id="voice-live-architecture" name="Voice Live Architecture">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="Drone Survey Dashboard - Realtime Voice Architecture" style="text;html=1;align=center;verticalAlign=middle;fontSize=26;fontStyle=1;fontColor=#091F2C;" vertex="1" parent="1">
+          <mxGeometry x="330" y="20" width="940" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" value="Native Azure AI Voice Live speech-to-speech with relay-owned route state" style="text;html=1;align=center;verticalAlign=middle;fontSize=14;fontColor=#5F6B76;" vertex="1" parent="1">
+          <mxGeometry x="430" y="65" width="740" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="user" value="User&#xa;Korean voice conversation" style="shape=mxgraph.azure.user;html=1;whiteSpace=wrap;fillColor=#E8F3FC;strokeColor=#0078D4;fontColor=#091F2C;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="40" y="180" width="150" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="browser-zone" value="Browser - Next.js :3000" style="swimlane;html=1;rounded=1;startSize=38;fillColor=#F8F7F8;swimlaneFillColor=#F8F7F8;strokeColor=#8661C5;fontColor=#463668;fontStyle=1;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="230" y="120" width="390" height="660" as="geometry" />
+        </mxCell>
+        <mxCell id="voice-client" value="VoiceSession&#xa;lib/voiceClient.ts&#xa;&#xa;- Microphone capture&#xa;- PCM16 mono / 24 kHz&#xa;- WebSocket events&#xa;- Barge-in and playback queue" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEE8F7;strokeColor=#8661C5;fontColor=#091F2C;align=left;spacingLeft=12;fontSize=13;" vertex="1" parent="browser-zone">
+          <mxGeometry x="30" y="70" width="330" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="audio-worklets" value="Audio Worklets&#xa;public/audio-worklets.js&#xa;&#xa;Capture PCM frames and play native response audio" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F0FA;strokeColor=#B39DDB;fontColor=#091F2C;align=left;spacingLeft=12;fontSize=13;" vertex="1" parent="browser-zone">
+          <mxGeometry x="30" y="245" width="330" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="browser-ui" value="Dashboard UI&#xa;&#xa;VoiceControl - session and mic status&#xa;ChatPanel - auxiliary transcripts&#xa;FlightPathMap - rendered route" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#8DC8E8;fontColor=#091F2C;align=left;spacingLeft=12;fontSize=13;" vertex="1" parent="browser-zone">
+          <mxGeometry x="30" y="380" width="330" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="browser-note" value="No Azure credentials and no route mutation in the browser" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E6;strokeColor=#E5A000;fontColor=#7F5A1A;fontStyle=1;fontSize=12;" vertex="1" parent="browser-zone">
+          <mxGeometry x="30" y="545" width="330" height="65" as="geometry" />
+        </mxCell>
+
+        <mxCell id="relay-zone" value="Local Relay - FastAPI :8080" style="swimlane;html=1;rounded=1;startSize=38;fillColor=#F3F8FC;swimlaneFillColor=#F3F8FC;strokeColor=#0078D4;fontColor=#2A446F;fontStyle=1;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="680" y="120" width="400" height="660" as="geometry" />
+        </mxCell>
+        <mxCell id="bridge" value="WebSocket Bridge&#xa;relay/server.py&#xa;&#xa;- Browser WS to Voice Live WSS&#xa;- Realtime event forwarding&#xa;- Tool call lifecycle&#xa;- TTFA measurement" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D9EDF8;strokeColor=#0078D4;fontColor=#091F2C;align=left;spacingLeft=12;fontSize=13;" vertex="1" parent="relay-zone">
+          <mxGeometry x="30" y="70" width="340" height="145" as="geometry" />
+        </mxCell>
+        <mxCell id="prompt-tools" value="Conversation Contract&#xa;relay/tools.py&#xa;&#xa;- Natural Korean prompt&#xa;- select_stop / confirm_route&#xa;- Ordinal mapping guidance&#xa;- Facts + next-question results" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF4FB;strokeColor=#49A5D8;fontColor=#091F2C;align=left;spacingLeft=12;fontSize=13;" vertex="1" parent="relay-zone">
+          <mxGeometry x="30" y="245" width="340" height="135" as="geometry" />
+        </mxCell>
+        <mxCell id="survey-state" value="Authoritative Route State&#xa;relay/survey.py&#xa;&#xa;resolve_monitor() normalizes Korean forms&#xa;SurveySession owns draft and confirmed route&#xa;Remaining third monitor is added automatically" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E7F6F2;strokeColor=#49C5B1;fontColor=#091F2C;align=left;spacingLeft=12;fontSize=13;" vertex="1" parent="relay-zone">
+          <mxGeometry x="30" y="410" width="340" height="145" as="geometry" />
+        </mxCell>
+        <mxCell id="credential" value="DefaultAzureCredential&#xa;Entra bearer token stays in relay" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF1F2;strokeColor=#D65A67;fontColor=#73262F;fontStyle=1;fontSize=12;" vertex="1" parent="relay-zone">
+          <mxGeometry x="30" y="580" width="340" height="55" as="geometry" />
+        </mxCell>
+
+        <mxCell id="azure-zone" value="Azure AI Voice Live - Southeast Asia" style="swimlane;html=1;rounded=1;startSize=38;fillColor=#F3FAF7;swimlaneFillColor=#F3FAF7;strokeColor=#49C5B1;fontColor=#07641D;fontStyle=1;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="1140" y="120" width="410" height="660" as="geometry" />
+        </mxCell>
+        <mxCell id="realtime-model" value="gpt-realtime + shimmer&#xa;Native speech-to-speech&#xa;&#xa;- Streaming audio understanding&#xa;- Automatic realtime response&#xa;- Natural Korean audio generation&#xa;- Tool selection" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DFF3ED;strokeColor=#1F9D83;fontColor=#091F2C;align=left;spacingLeft=12;fontSize=14;fontStyle=1;" vertex="1" parent="azure-zone">
+          <mxGeometry x="30" y="70" width="350" height="155" as="geometry" />
+        </mxCell>
+        <mxCell id="vad" value="Azure Semantic VAD Multilingual&#xa;&#xa;Korean turn detection, interruption, echo cancellation, and deep noise suppression" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEF8F5;strokeColor=#49C5B1;fontColor=#091F2C;align=left;spacingLeft=12;fontSize=13;" vertex="1" parent="azure-zone">
+          <mxGeometry x="30" y="255" width="350" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="transcription" value="gpt-4o-transcribe&#xa;Auxiliary transcription only&#xa;&#xa;Used for chat display and diagnostics. It is not a separate STT-to-TTS response pipeline." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E6;strokeColor=#E5A000;fontColor=#7F5A1A;align=left;spacingLeft=12;fontSize=13;" vertex="1" parent="azure-zone">
+          <mxGeometry x="30" y="390" width="350" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="managed-note" value="Fully managed Voice Live model&#xa;No Azure OpenAI deployment required" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#7ABFAD;fontColor=#07641D;fontStyle=1;fontSize=12;" vertex="1" parent="azure-zone">
+          <mxGeometry x="30" y="545" width="350" height="65" as="geometry" />
+        </mxCell>
+
+        <mxCell id="user-mic" value="Speech" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=3;strokeColor=#8661C5;fontColor=#463668;fontStyle=1;endArrow=block;endFill=1;" edge="1" parent="1" source="user" target="voice-client">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="browser-relay-audio" value="PCM audio + control events&#xa;ws://127.0.0.1:8080/ws" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=3;strokeColor=#0078D4;fontColor=#2A446F;fontStyle=1;endArrow=block;endFill=1;" edge="1" parent="1" source="voice-client" target="bridge">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="relay-azure-audio" value="Realtime PCM audio and events&#xa;WSS + Entra bearer token" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=3;strokeColor=#1F9D83;fontColor=#07641D;fontStyle=1;endArrow=block;endFill=1;" edge="1" parent="1" source="bridge" target="realtime-model">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="azure-relay-response" value="Native audio deltas + tool calls" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=3;strokeColor=#49C5B1;fontColor=#07641D;endArrow=block;endFill=1;" edge="1" parent="1" source="realtime-model" target="bridge">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1110" y="340" />
+              <mxPoint x="1110" y="340" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="tool-dispatch" value="Tool dispatch" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#0078D4;fontColor=#2A446F;endArrow=block;endFill=1;" edge="1" parent="1" source="bridge" target="prompt-tools">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="tool-state" value="Validated action" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#49C5B1;fontColor=#07641D;endArrow=block;endFill=1;" edge="1" parent="1" source="prompt-tools" target="survey-state">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="route-push" value="route.state push" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#8661C5;fontColor=#463668;fontStyle=1;endArrow=block;endFill=1;" edge="1" parent="1" source="survey-state" target="browser-ui">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="650" y="690" />
+              <mxPoint x="650" y="565" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="transcript-flow" value="Auxiliary transcript events" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;dashPattern=8 4;strokeWidth=2;strokeColor=#E5A000;fontColor=#7F5A1A;endArrow=block;endFill=1;" edge="1" parent="1" source="transcription" target="browser-ui">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1110" y="650" />
+              <mxPoint x="650" y="650" />
+              <mxPoint x="650" y="565" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="playback-user" value="Native response audio" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=3;strokeColor=#8661C5;fontColor=#463668;fontStyle=1;endArrow=block;endFill=1;" edge="1" parent="1" source="audio-worklets" target="user">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="210" y="440" />
+              <mxPoint x="210" y="310" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="legend" value="Solid blue/green: realtime audio and control path    |    Purple: dashboard state/output    |    Dashed amber: auxiliary transcript" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D7D2CB;fontColor=#5F6B76;fontSize=12;align=center;" vertex="1" parent="1">
+          <mxGeometry x="310" y="835" width="980" height="50" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

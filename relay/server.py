@@ -86,6 +86,9 @@ def build_session() -> dict:
                 "silence_duration_ms": config.SILENCE_DURATION_MS,
                 # 사용자가 끼어들면 즉시 모델이 말을 멈춘다.
                 "interrupt_response": True,
+                # 오디오를 들은 모델이 전사 완료를 기다리지 않고 바로 답해야
+                # speech-to-speech 특유의 낮은 지연과 자연스러운 턴 전환이 유지된다.
+                "create_response": True,
                 # "음", "어" 같은 소리로 잘못 끼어들기 판정되는 걸 줄인다.
                 "remove_filler_words": True,
             },
@@ -178,14 +181,8 @@ class Bridge:
 
     # --- tool calls -----------------------------------------------------------
 
-    async def handle_tool_call(self, event: dict) -> None:
-        name = event.get("name", "")
-        call_id = event.get("call_id", "")
-        try:
-            args = json.loads(event.get("arguments") or "{}")
-        except json.JSONDecodeError:
-            args = {}
-
+    async def run_tool(self, name: str, args: dict) -> dict:
+        """Execute a route tool and publish its activity and resulting state."""
         log.info("tool call: %s(%s)", name, args)
         await self.send_browser({"type": "tool.started", "name": name, "args": args})
 
@@ -203,6 +200,17 @@ class Bridge:
             {"type": "tool.finished", "name": name, "result": result, "ms": elapsed_ms}
         )
         await self.push_state()
+        return result
+
+    async def handle_tool_call(self, event: dict) -> None:
+        name = event.get("name", "")
+        call_id = event.get("call_id", "")
+        try:
+            args = json.loads(event.get("arguments") or "{}")
+        except json.JSONDecodeError:
+            args = {}
+
+        result = await self.run_tool(name, args)
 
         if self.upstream is None:
             self._pending_tools = max(0, self._pending_tools - 1)
@@ -257,6 +265,8 @@ class Bridge:
                             "content": [{"type": "input_text", "text": msg.get("text", "")}],
                         },
                     }))
+                    # Same path as a real voice turn: let the model decide
+                    # whether/which tool to call, no server-side shortcuts.
                     await self.upstream.send(json.dumps({"type": "response.create"}))
                 continue
 

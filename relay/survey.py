@@ -21,42 +21,19 @@ LABELS = {
     "monitor-3": "모니터 3",
 }
 
-# 음성 인식은 "monitor-1" 같은 문자열을 거의 만들지 않는다.
-# 사람이 실제로 말하는 형태를 받아주되, 순서를 가리키는 말("첫번째")은 일부러
-# 넣지 않는다. 그건 "어느 모니터"에 대한 답이 아니라 위치를 말한 것이라서,
-# 임의로 모니터 1로 해석하면 사용자가 고르지도 않은 곳이 경로에 들어간다.
-ALIASES = {
-    "1": "monitor-1", "one": "monitor-1", "일": "monitor-1", "하나": "monitor-1",
-    "1번": "monitor-1", "monitor 1": "monitor-1",
-    "모니터 1": "monitor-1", "모니터1": "monitor-1", "monitor-1": "monitor-1",
-    "2": "monitor-2", "two": "monitor-2", "이": "monitor-2", "둘": "monitor-2",
-    "2번": "monitor-2", "monitor 2": "monitor-2",
-    "모니터 2": "monitor-2", "모니터2": "monitor-2", "monitor-2": "monitor-2",
-    "3": "monitor-3", "three": "monitor-3", "삼": "monitor-3", "셋": "monitor-3",
-    "3번": "monitor-3", "monitor 3": "monitor-3",
-    "모니터 3": "monitor-3", "모니터3": "monitor-3", "monitor-3": "monitor-3",
-}
-
-# 순서를 가리키는 말. 모니터 이름으로 오해하면 안 되므로 명시적으로 거절한다.
-ORDINALS = {"첫번째", "첫 번째", "두번째", "두 번째", "세번째", "세 번째",
-            "처음", "다음", "마지막", "아무거나", "아무데나"}
 
 def resolve_monitor(raw: str) -> str | None:
-    """모델이 넘긴 값을 표준 모니터 id로 맞춘다. 불명확하면 None."""
-    if not raw:
-        return None
-    key = str(raw).strip().lower()
+    """모델이 넘긴 값을 표준 모니터 id로 맞춘다. 그 외에는 None.
 
-    if key in ORDINALS:
-        return None
-    if key in ALIASES:
-        return ALIASES[key]
-
-    # "모니터 2번으로 가주세요" 같은 문장에서 숫자를 뽑되, 서로 다른 숫자가
-    # 여러 개 섞여 있으면(예: "1이랑 3") 어느 쪽인지 알 수 없으므로 거절한다.
-    found = {d for d in ("1", "2", "3") if d in key}
-    if len(found) == 1:
-        return f"monitor-{found.pop()}"
+    `select_stop`의 `monitor` 인자는 도구 스키마의 enum
+    (`monitor-1`/`monitor-2`/`monitor-3`)으로 이미 제한돼 있으므로, 여기서는
+    정확히 그 셋 중 하나인지만 확인한다. 예전에는 "첫번째", "1번" 같은 자연어
+    문장을 정규식으로 직접 해석했지만, 그 로직은 모델이 이미 값을 정확히 넘겨주는
+    실제 음성 경로에서는 쓰이지 않았고, 문장 아무 곳에 있는 숫자까지 주워 담는
+    등 엉뚱하게 오판할 여지만 있었다. 입력이 정확히 셋 중 하나가 아니면 그냥
+    거절한다."""
+    if raw in MONITOR_IDS:
+        return raw
     return None
 
 

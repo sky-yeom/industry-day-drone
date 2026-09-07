@@ -27,9 +27,9 @@ RELAY = "ws://127.0.0.1:8080/ws"
 #  실제로 불려야 하는지)
 SCRIPT = [
     ("아 맞다, 하나만 물어볼게요. 오늘 점심 뭐 드실 거예요?", False),
-    ("3번째부터 보여줘.", False),
+    ("모니터 삼부터 보여줘.", False),
     ("어.", True),
-    ("두 번째로 가자.", False),
+    ("모니터 하나로 가자.", False),
     ("어.", True),
     ("네.", True),
     # 경로 확정 이후: 브리핑 -> 주의사항 진술(아직 확인 전, 도구 없음) ->
@@ -120,11 +120,11 @@ async def main():
             all(turn_checks)
             and final_state
             and final_state["phase"] == "confirmed"
-            # 사용자가 2개만 골랐는데(3번째 -> 두 번째) 나머지 monitor-1이
-            # 자동으로 마지막 순서에 채워져야 한다
-            and route[:2] == ["monitor-3", "monitor-2"]
+            # 사용자가 2개만 골랐는데("모니터 삼" -> "모니터 하나") 나머지
+            # monitor-2가 자동으로 마지막 순서에 채워져야 한다
+            and route[:2] == ["monitor-3", "monitor-1"]
             and len(route) == 3
-            and route[2] == "monitor-1"
+            and route[2] == "monitor-2"
             and final_state["promptPhase"] == "confirmed"
             and bool(final_state["userPromptText"])
             and final_state["detectionPhase"] == "complete"

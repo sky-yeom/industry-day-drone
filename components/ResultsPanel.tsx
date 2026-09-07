@@ -30,13 +30,15 @@ export default function ResultsPanel({ score, userPromptText, onReset }: Results
             말씀하신 주의사항과 실제 발견된 이상 징후를 비교한 결과입니다.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onReset}
-          className="shrink-0 rounded-full border border-[#c5b4e3]/70 bg-white/75 px-4 py-2 text-xs font-semibold text-[#463668] shadow-sm transition-colors hover:border-[#8661c5] hover:bg-[#eee8f7]"
-        >
-          처음으로
-        </button>
+        {score && (
+          <button
+            type="button"
+            onClick={onReset}
+            className="shrink-0 rounded-full border border-[#c5b4e3]/70 bg-white/75 px-4 py-2 text-xs font-semibold text-[#463668] shadow-sm transition-colors hover:border-[#8661c5] hover:bg-[#eee8f7]"
+          >
+            처음으로
+          </button>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 sm:px-4">

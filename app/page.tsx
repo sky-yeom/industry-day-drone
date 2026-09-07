@@ -31,6 +31,14 @@ function nextId() {
 
 type Workspace = "route" | "prompt" | "images" | "results";
 
+const VOICE_SESSION_LABEL: Record<VoiceStatus, string> = {
+  idle: "세션 준비",
+  connecting: "세션 시작 중",
+  listening: "세션 진행 중",
+  speaking: "세션 진행 중",
+  error: "세션 오류",
+};
+
 export default function Home() {
   const [activeWorkspace, setActiveWorkspace] = useState<Workspace>("route");
   const [planningState, setPlanningState] = useState<DashboardState>(INITIAL_STATE);
@@ -310,6 +318,18 @@ export default function Home() {
                 Foundry Copilot
               </h2>
             </div>
+            <span className="flex shrink-0 items-center gap-1.5 rounded-full border border-[#c5b4e3]/70 bg-white/75 px-3 py-1.5 text-[11px] font-semibold text-[#463668] shadow-sm">
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  status === "error"
+                    ? "bg-[#e5484d]"
+                    : status === "idle"
+                      ? "bg-[#8c8279]"
+                      : "bg-[#49c5b1]"
+                }`}
+              />
+              {VOICE_SESSION_LABEL[status]}
+            </span>
           </div>
           <div className="relative min-h-0 flex-1">
             <VoiceControl

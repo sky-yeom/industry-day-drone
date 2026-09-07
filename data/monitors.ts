@@ -7,7 +7,7 @@ export const MONITORS: MonitorDestination[] = [
     shortLabel: "1",
     image: "/monitors/monitor-1.svg",
     x: 20,
-    y: 24,
+    y: 38,
   },
   {
     id: "monitor-2",

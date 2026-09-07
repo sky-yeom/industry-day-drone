@@ -68,7 +68,7 @@ export default function FlightPathMap({ planningState }: FlightPathMapProps) {
 
           <div className="absolute left-5 top-5 z-20 flex items-center gap-2 rounded-full border border-white/80 bg-white/70 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#2a446f] shadow-sm backdrop-blur">
             <span className="h-2 w-2 rounded-full bg-[#49c5b1]" />
-            Digital twin workspace
+            Digital workspace
           </div>
 
           <svg

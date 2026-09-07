@@ -10,7 +10,7 @@
  * forwards `route.state` pushes to the caller.
  */
 
-import type { RoutePlanningState } from "@/lib/types";
+import type { DashboardState } from "@/lib/types";
 
 const SAMPLE_RATE = 24000;
 
@@ -43,7 +43,7 @@ export interface VoiceHandlers {
   onLevel: (peak: number) => void;
   /** Streaming transcript. `final` marks the end of that speaker's turn. */
   onTranscript: (role: "user" | "agent", text: string, final: boolean) => void;
-  onRouteState: (state: RoutePlanningState) => void;
+  onRouteState: (state: DashboardState) => void;
   onTool: (activity: ToolActivity) => void;
   onTtfa: (ms: number) => void;
   /** True while a response is generating. Sending during one is rejected. */
@@ -334,7 +334,7 @@ export class VoiceSession {
       }
 
       case "route.state": {
-        this.handlers.onRouteState(msg.state as RoutePlanningState);
+        this.handlers.onRouteState(msg.state as DashboardState);
         return;
       }
 

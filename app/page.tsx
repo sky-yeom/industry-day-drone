@@ -4,8 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import FlightPathMap from "@/components/FlightPathMap";
 import DroneImagePanel from "@/components/DroneImagePanel";
+import PromptWorkspace from "@/components/PromptWorkspace";
+import ResultsPanel from "@/components/ResultsPanel";
 import VoiceControl from "@/components/VoiceControl";
 import { formatRoute, INITIAL_ROUTE_STATE } from "@/data/monitors";
+import { INITIAL_MISSION_STATE } from "@/data/scenario";
 import {
   fetchRelayConfig,
   VoiceSession,
@@ -13,14 +16,25 @@ import {
   type ToolActivity,
   type VoiceStatus,
 } from "@/lib/voiceClient";
-import type { RoutePlanningState } from "@/lib/types";
+import type { ChatMessage, DashboardState } from "@/lib/types";
+
+const INITIAL_STATE: DashboardState = {
+  ...INITIAL_ROUTE_STATE,
+  ...INITIAL_MISSION_STATE,
+};
+
+let messageId = 0;
+function nextId() {
+  messageId += 1;
+  return `msg-${messageId}`;
+}
+
+type Workspace = "route" | "prompt" | "images" | "results";
 
 export default function Home() {
-  const [activeWorkspace, setActiveWorkspace] = useState<"route" | "images">(
-    "route"
-  );
-  const [planningState, setPlanningState] =
-    useState<RoutePlanningState>(INITIAL_ROUTE_STATE);
+  const [activeWorkspace, setActiveWorkspace] = useState<Workspace>("route");
+  const [planningState, setPlanningState] = useState<DashboardState>(INITIAL_STATE);
+  const [transcript, setTranscript] = useState<ChatMessage[]>([]);
 
   const [status, setStatus] = useState<VoiceStatus>("idle");
   const [statusDetail, setStatusDetail] = useState<string>();
@@ -30,10 +44,51 @@ export default function Home() {
   const [relayConfig, setRelayConfig] = useState<RelayConfig | null>(null);
 
   const sessionRef = useRef<VoiceSession | null>(null);
+  // Ids of the bubbles currently being streamed into, one per speaker.
+  const streamingRef = useRef<{ user: string | null; agent: string | null }>({
+    user: null,
+    agent: null,
+  });
+  // 각 단계 전환은 딱 한 번만 자동으로 일어나야 한다. 사용자가 수동으로 다른
+  // 탭을 클릭해도 이 값들이 다시 false가 되지 않으므로 되돌아가지 않는다.
+  const advancedToPromptRef = useRef(false);
+  const advancedToImagesRef = useRef(false);
+  const advancedToResultsRef = useRef(false);
 
   useEffect(() => {
     void fetchRelayConfig().then(setRelayConfig);
   }, []);
+
+  const upsertTranscript = useCallback(
+    (role: "user" | "agent", text: string, final: boolean) => {
+      const existingId = streamingRef.current[role];
+
+      // An empty final transcript means speech was detected but nothing was
+      // recognised, so drop the reserved placeholder instead of leaving "…".
+      if (final && !text.trim()) {
+        if (existingId) {
+          setTranscript((prev) => prev.filter((m) => m.id !== existingId));
+          streamingRef.current[role] = null;
+        }
+        return;
+      }
+
+      if (!text.trim()) return;
+
+      if (existingId) {
+        setTranscript((prev) =>
+          prev.map((m) => (m.id === existingId ? { ...m, text } : m))
+        );
+      } else {
+        const id = nextId();
+        streamingRef.current[role] = id;
+        setTranscript((prev) => [...prev, { id, role, text, timestamp: Date.now() }]);
+      }
+
+      if (final) streamingRef.current[role] = null;
+    },
+    []
+  );
 
   const getSession = useCallback(() => {
     if (sessionRef.current) return sessionRef.current;
@@ -44,16 +99,23 @@ export default function Home() {
         setStatusDetail(detail);
       },
       onLevel: setLevel,
-      // Transcript text is no longer displayed anywhere; the orb is the
-      // entire voice UI now.
-      onTranscript: () => {},
+      onTranscript: upsertTranscript,
       onRouteState: (state) => {
         setPlanningState(state);
-        if (state.phase === "confirmed") {
+
+        if (state.phase === "confirmed" && !advancedToPromptRef.current) {
+          advancedToPromptRef.current = true;
+          setActiveWorkspace("prompt");
+        }
+        if (state.promptPhase === "confirmed" && !advancedToImagesRef.current) {
+          advancedToImagesRef.current = true;
           setActiveWorkspace("images");
-          // Route is locked in and the view has handed off to the drone
-          // feed; the voice agent has nothing left to do, so end the
-          // session automatically instead of leaving the mic open.
+        }
+        if (state.detectionPhase === "complete" && !advancedToResultsRef.current) {
+          advancedToResultsRef.current = true;
+          setActiveWorkspace("results");
+          // 임무가 끝났으니 더 이상 에이전트가 할 일이 없다. 마이크를 계속
+          // 열어둘 이유가 없으므로 세션을 자동으로 끝낸다.
           void sessionRef.current?.stop();
         }
       },
@@ -70,7 +132,7 @@ export default function Home() {
       onBusy: () => {},
     });
     return sessionRef.current;
-  }, []);
+  }, [upsertTranscript]);
 
   const handleToggle = useCallback(async () => {
     const session = getSession();
@@ -94,13 +156,17 @@ export default function Home() {
   }, []);
 
   const headerStatus =
-    planningState.phase === "confirmed"
-      ? `확정 경로: ${formatRoute(planningState.confirmedRoute)}`
-      : planningState.phase === "awaiting-confirmation"
-        ? `제안 경로: ${formatRoute(planningState.draftRoute)}`
-        : planningState.phase === "selecting-order"
-          ? "순서 정하는 중"
-          : "첫 경유지 선택";
+    planningState.detectionPhase === "complete"
+      ? `정확도 ${planningState.score?.accuracyPercent ?? 0}%`
+      : planningState.promptPhase === "confirmed"
+        ? "이상 징후 탐지 중"
+        : planningState.phase === "confirmed"
+          ? "임무 브리핑 중"
+          : planningState.phase === "awaiting-confirmation"
+            ? `제안 경로: ${formatRoute(planningState.draftRoute)}`
+            : planningState.phase === "selecting-order"
+              ? "순서 정하는 중"
+              : "첫 경유지 선택";
 
   return (
     <DashboardLayout
@@ -158,23 +224,58 @@ export default function Home() {
             <button
               type="button"
               role="tab"
+              aria-selected={activeWorkspace === "prompt"}
+              onClick={() => setActiveWorkspace("prompt")}
+              className={`relative h-full border-b-2 px-0.5 pt-1 text-xs font-semibold transition-colors ${
+                activeWorkspace === "prompt"
+                  ? "border-[#8661c5] text-[#463668]"
+                  : "border-transparent text-[#8c8279] hover:text-[#463668]"
+              }`}
+            >
+              프롬프트
+            </button>
+            <button
+              type="button"
+              role="tab"
               aria-selected={activeWorkspace === "images"}
               onClick={() => setActiveWorkspace("images")}
-              className={`relative flex h-full items-center gap-2 border-b-2 px-0.5 pt-1 text-xs font-semibold transition-colors ${
+              className={`relative h-full border-b-2 px-0.5 pt-1 text-xs font-semibold transition-colors ${
                 activeWorkspace === "images"
                   ? "border-[#8661c5] text-[#463668]"
                   : "border-transparent text-[#8c8279] hover:text-[#463668]"
               }`}
             >
               드론 이미지
-              <span className="h-1.5 w-1.5 rounded-full bg-[#8661c5]" />
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeWorkspace === "results"}
+              onClick={() => setActiveWorkspace("results")}
+              className={`relative h-full border-b-2 px-0.5 pt-1 text-xs font-semibold transition-colors ${
+                activeWorkspace === "results"
+                  ? "border-[#8661c5] text-[#463668]"
+                  : "border-transparent text-[#8c8279] hover:text-[#463668]"
+              }`}
+            >
+              결과
             </button>
           </div>
           <div className="min-h-0 flex-1">
-            {activeWorkspace === "route" ? (
-              <FlightPathMap planningState={planningState} />
-            ) : (
-              <DroneImagePanel />
+            {activeWorkspace === "route" && <FlightPathMap planningState={planningState} />}
+            {activeWorkspace === "prompt" && (
+              <PromptWorkspace
+                transcript={transcript}
+                userPromptText={planningState.userPromptText}
+                confirmed={planningState.promptPhase === "confirmed"}
+              />
+            )}
+            {activeWorkspace === "images" && <DroneImagePanel />}
+            {activeWorkspace === "results" && (
+              <ResultsPanel
+                score={planningState.score}
+                userPromptText={planningState.userPromptText}
+              />
             )}
           </div>
         </div>
@@ -206,3 +307,4 @@ export default function Home() {
     />
   );
 }
+

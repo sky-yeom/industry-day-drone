@@ -2,7 +2,7 @@
 
 import unittest
 
-from relay.survey import SurveySession, resolve_monitor
+from relay.survey import GROUND_TRUTH_ANOMALIES, SurveySession, resolve_monitor, score_prompt
 
 
 class ResolveMonitorTests(unittest.TestCase):
@@ -46,6 +46,64 @@ class SurveySessionTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(session.state.draftRoute, [])
+
+
+class ScorePromptTests(unittest.TestCase):
+    def test_matches_keywords_present_in_prompt(self):
+        score = score_prompt("침수 구역이랑 균열 위주로 볼게요.")
+
+        matched_ids = {a["id"] for a in score["matched"]}
+        self.assertIn("standing-water", matched_ids)
+        self.assertIn("structural-crack", matched_ids)
+        self.assertEqual(score["totalGroundTruth"], len(GROUND_TRUTH_ANOMALIES))
+        self.assertEqual(score["matchedCount"] + score["missedCount"], score["totalGroundTruth"])
+
+    def test_no_keywords_scores_zero(self):
+        score = score_prompt("그냥 전체적으로 한번 둘러봐 주세요.")
+
+        self.assertEqual(score["matchedCount"], 0)
+        self.assertEqual(score["accuracyPercent"], 0)
+
+
+class MissionFlowTests(unittest.TestCase):
+    def _confirmed_route_session(self) -> SurveySession:
+        session = SurveySession()
+        session.select_stop("monitor-1")
+        session.select_stop("monitor-2")
+        session.confirm_route()
+        return session
+
+    def test_confirm_prompt_requires_nonempty_text(self):
+        session = self._confirmed_route_session()
+
+        result = session.confirm_prompt("")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(session.mission.promptPhase, "briefing")
+
+    def test_report_detection_requires_confirmed_prompt(self):
+        session = self._confirmed_route_session()
+
+        result = session.report_detection()
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(session.mission.detectionPhase, "idle")
+
+    def test_full_mission_flow(self):
+        session = self._confirmed_route_session()
+
+        confirmed = session.confirm_prompt("침수랑 균열 위주로 볼게요")
+        detected = session.report_detection()
+
+        self.assertTrue(confirmed["ok"])
+        self.assertEqual(session.mission.promptPhase, "confirmed")
+        self.assertTrue(detected["ok"])
+        self.assertEqual(session.mission.detectionPhase, "complete")
+        self.assertEqual(
+            len(session.mission.detectedAnomalies), len(GROUND_TRUTH_ANOMALIES)
+        )
+        self.assertIsNotNone(session.mission.score)
+        self.assertEqual(session.mission.score["totalGroundTruth"], len(GROUND_TRUTH_ANOMALIES))
 
 
 if __name__ == "__main__":

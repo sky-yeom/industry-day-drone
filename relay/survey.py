@@ -21,6 +21,46 @@ LABELS = {
     "monitor-3": "모니터 3",
 }
 
+# 임시(placeholder) 정답 이상 징후 목록. data/scenario.ts의 GROUND_TRUTH_ANOMALIES와
+# 반드시 같은 내용으로 맞춰둔다 (실제 시나리오가 정해지면 두 파일을 함께 교체).
+GROUND_TRUTH_ANOMALIES = [
+    {"id": "standing-water", "monitorId": "monitor-1", "label": "침수 구역",
+     "keywords": ["침수", "물", "홍수", "고인 물"]},
+    {"id": "structural-crack", "monitorId": "monitor-2", "label": "구조물 균열",
+     "keywords": ["균열", "금", "구조물", "붕괴"]},
+    {"id": "debris-field", "monitorId": "monitor-2", "label": "잔해물 산재",
+     "keywords": ["잔해", "쓰레기", "파편"]},
+    {"id": "crop-stress", "monitorId": "monitor-3", "label": "작물 손상",
+     "keywords": ["작물", "농작물", "식물", "고사"]},
+]
+
+
+def score_prompt(prompt_text: str) -> dict:
+    """사용자가 말한 주의사항과 정답 이상 징후 목록을 비교해 점수를 매긴다.
+
+    실제 이미지 기반 판정이 아니라, 사용자의 문장에 정답 항목의 키워드가
+    포함돼 있는지 보는 단순 매칭이다. 결과 탭을 끝까지 동작하게 만드는
+    임시(placeholder) 채점 방식이며, 실제 시나리오/정답 데이터가 정해지면
+    교체될 예정이다.
+    """
+    matched, missed = [], []
+    for anomaly in GROUND_TRUTH_ANOMALIES:
+        if any(kw in prompt_text for kw in anomaly["keywords"]):
+            matched.append(anomaly)
+        else:
+            missed.append(anomaly)
+
+    total = len(GROUND_TRUTH_ANOMALIES)
+    accuracy = round((len(matched) / total) * 100) if total else 0
+    return {
+        "matchedCount": len(matched),
+        "missedCount": len(missed),
+        "totalGroundTruth": total,
+        "accuracyPercent": accuracy,
+        "matched": matched,
+        "missed": missed,
+    }
+
 
 def resolve_monitor(raw: str) -> str | None:
     """모델이 넘긴 값을 표준 모니터 id로 맞춘다. 그 외에는 None.
@@ -49,14 +89,25 @@ class RouteState:
     confirmedRoute: list[str] = field(default_factory=list)
 
 
+@dataclass
+class MissionState:
+    # 필드명은 lib/types.ts의 MissionState와 정확히 일치시킨다.
+    promptPhase: str = "briefing"
+    userPromptText: str = ""
+    detectionPhase: str = "idle"
+    detectedAnomalies: list[dict] = field(default_factory=list)
+    score: dict | None = None
+
+
 class SurveySession:
-    """대시보드 세션 하나의 경로 계획 상태."""
+    """대시보드 세션 하나의 경로 계획 + 임무(브리핑/탐지) 상태."""
 
     def __init__(self) -> None:
         self.state = RouteState()
+        self.mission = MissionState()
 
     def snapshot(self) -> dict:
-        return asdict(self.state)
+        return {**asdict(self.state), **asdict(self.mission)}
 
     # --- 도구 -----------------------------------------------------------------
 
@@ -138,3 +189,44 @@ class SurveySession:
         return {"ok": True,
                 "facts": f"임시 경로는 {names(s.draftRoute)}, 아직 확정 전",
                 "ask": ""}
+
+    # --- 임무(브리핑/탐지) 도구 -------------------------------------------------
+
+    def confirm_prompt(self, prompt_text: str) -> dict:
+        """사용자가 자기 말로 확인해준 주의사항을 확정한다."""
+        text = prompt_text.strip()
+        if not text:
+            return {"ok": False,
+                    "facts": "사용자가 뭘 주의 깊게 볼지 아직 말하지 않음",
+                    "ask": "어떤 점을 특히 주의해서 볼지 물어볼 것"}
+
+        self.mission.userPromptText = text
+        self.mission.promptPhase = "confirmed"
+        return {
+            "ok": True,
+            "facts": f"사용자가 확정한 주의사항: {text}",
+            "ask": "이제 스캔을 시작한다고 안내하고 이어서 탐지 결과를 말할 것",
+        }
+
+    def report_detection(self) -> dict:
+        """(임시) 탐지 결과를 채우고 사용자의 주의사항과 비교해 채점한다."""
+        if self.mission.promptPhase != "confirmed":
+            return {"ok": False,
+                    "facts": "아직 주의사항이 확정되지 않아서 탐지를 시작할 수 없음",
+                    "ask": "어떤 점을 주의해서 볼지 먼저 확인할 것"}
+
+        self.mission.detectedAnomalies = [
+            {"id": a["id"], "monitorId": a["monitorId"], "label": a["label"]}
+            for a in GROUND_TRUTH_ANOMALIES
+        ]
+        self.mission.score = score_prompt(self.mission.userPromptText)
+        self.mission.detectionPhase = "complete"
+
+        found = ", ".join(a["label"] for a in self.mission.detectedAnomalies)
+        return {
+            "ok": True,
+            "facts": f"탐지 완료. 발견된 이상 징후: {found}. "
+                     f"사용자가 맞춘 개수: {self.mission.score['matchedCount']}"
+                     f"/{self.mission.score['totalGroundTruth']}",
+            "ask": "",
+        }

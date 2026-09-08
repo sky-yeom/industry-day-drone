@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import FlightPathMap from "@/components/FlightPathMap";
 import DroneImagePanel from "@/components/DroneImagePanel";
+import OpeningScreen from "@/components/OpeningScreen";
 import PromptWorkspace from "@/components/PromptWorkspace";
 import ResultsPanel from "@/components/ResultsPanel";
 import VoiceControl from "@/components/VoiceControl";
@@ -31,6 +32,9 @@ function nextId() {
 
 type Workspace = "route" | "prompt" | "images" | "results";
 
+/** 브리핑 전(오프닝 화면) vs 대시보드. 리셋하면 다시 "opening"으로 돌아간다. */
+type Stage = "opening" | "dashboard";
+
 const VOICE_SESSION_LABEL: Record<VoiceStatus, string> = {
   idle: "세션 준비",
   connecting: "세션 시작 중",
@@ -40,7 +44,8 @@ const VOICE_SESSION_LABEL: Record<VoiceStatus, string> = {
 };
 
 export default function Home() {
-  const [activeWorkspace, setActiveWorkspace] = useState<Workspace>("route");
+  const [stage, setStage] = useState<Stage>("opening");
+  const [activeWorkspace, setActiveWorkspace] = useState<Workspace>("prompt");
   const [planningState, setPlanningState] = useState<DashboardState>(INITIAL_STATE);
   const [transcript, setTranscript] = useState<ChatMessage[]>([]);
 
@@ -59,7 +64,8 @@ export default function Home() {
   });
   // 각 단계 전환은 딱 한 번만 자동으로 일어나야 한다. 사용자가 수동으로 다른
   // 탭을 클릭해도 이 값들이 다시 false가 되지 않으므로 되돌아가지 않는다.
-  const advancedToPromptRef = useRef(false);
+  // 순서: 프롬프트 확정 -> 비행 경로, 경로 확정 -> 드론 이미지, 탐지 완료 -> 결과.
+  const advancedToRouteRef = useRef(false);
   const advancedToImagesRef = useRef(false);
   const advancedToResultsRef = useRef(false);
 
@@ -72,7 +78,10 @@ export default function Home() {
     // 시작 때 VoiceSession이 새 WebSocket을 새로 열고, 릴레이도 매 연결마다
     // 새 SurveySession을 만들기 때문에 서버에 별도로 reset을 요청할 필요는
     // 없다 -- 여기서는 프런트엔드 화면 상태만 처음으로 되돌리면 된다.
-    setActiveWorkspace("route");
+    // "처음으로"는 대시보드가 아니라 오프닝(브리핑 시작) 화면으로 완전히
+    // 되돌아간다 -- 깨끗한 새 실행을 위해서다.
+    setStage("opening");
+    setActiveWorkspace("prompt");
     setPlanningState(INITIAL_STATE);
     setTranscript([]);
     setTools([]);
@@ -80,7 +89,7 @@ export default function Home() {
     setStatus("idle");
     setStatusDetail(undefined);
     streamingRef.current = { user: null, agent: null };
-    advancedToPromptRef.current = false;
+    advancedToRouteRef.current = false;
     advancedToImagesRef.current = false;
     advancedToResultsRef.current = false;
   }, []);
@@ -129,11 +138,11 @@ export default function Home() {
       onRouteState: (state) => {
         setPlanningState(state);
 
-        if (state.phase === "confirmed" && !advancedToPromptRef.current) {
-          advancedToPromptRef.current = true;
-          setActiveWorkspace("prompt");
+        if (state.promptPhase === "confirmed" && !advancedToRouteRef.current) {
+          advancedToRouteRef.current = true;
+          setActiveWorkspace("route");
         }
-        if (state.promptPhase === "confirmed" && !advancedToImagesRef.current) {
+        if (state.phase === "confirmed" && !advancedToImagesRef.current) {
           advancedToImagesRef.current = true;
           setActiveWorkspace("images");
         }
@@ -175,6 +184,13 @@ export default function Home() {
     }
   }, [getSession]);
 
+  // 오프닝 화면의 "브리핑 시작" 버튼: 대시보드로 넘어가면서 음성 세션도 같이
+  // 자동으로 시작한다. 수동 마이크 버튼은 더 이상 없다.
+  const handleStart = useCallback(() => {
+    setStage("dashboard");
+    void handleToggle();
+  }, [handleToggle]);
+
   useEffect(() => {
     return () => {
       void sessionRef.current?.stop();
@@ -184,15 +200,19 @@ export default function Home() {
   const headerStatus =
     planningState.detectionPhase === "complete"
       ? `정확도 ${planningState.score?.accuracyPercent ?? 0}%`
-      : planningState.promptPhase === "confirmed"
+      : planningState.phase === "confirmed"
         ? "이상 징후 탐지 중"
-        : planningState.phase === "confirmed"
-          ? "임무 브리핑 중"
-          : planningState.phase === "awaiting-confirmation"
+        : planningState.promptPhase === "confirmed"
+          ? planningState.phase === "awaiting-confirmation"
             ? `제안 경로: ${formatRoute(planningState.draftRoute)}`
             : planningState.phase === "selecting-order"
               ? "순서 정하는 중"
-              : "첫 경유지 선택";
+              : "첫 경유지 선택"
+          : "주의사항 확인 중";
+
+  if (stage === "opening") {
+    return <OpeningScreen onStart={handleStart} />;
+  }
 
   return (
     <DashboardLayout
@@ -237,19 +257,6 @@ export default function Home() {
             <button
               type="button"
               role="tab"
-              aria-selected={activeWorkspace === "route"}
-              onClick={() => setActiveWorkspace("route")}
-              className={`relative h-full border-b-2 px-0.5 pt-1 text-xs font-semibold transition-colors ${
-                activeWorkspace === "route"
-                  ? "border-[#8661c5] text-[#463668]"
-                  : "border-transparent text-[#8c8279] hover:text-[#463668]"
-              }`}
-            >
-              비행 경로
-            </button>
-            <button
-              type="button"
-              role="tab"
               aria-selected={activeWorkspace === "prompt"}
               onClick={() => setActiveWorkspace("prompt")}
               className={`relative h-full border-b-2 px-0.5 pt-1 text-xs font-semibold transition-colors ${
@@ -259,6 +266,19 @@ export default function Home() {
               }`}
             >
               프롬프트
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeWorkspace === "route"}
+              onClick={() => setActiveWorkspace("route")}
+              className={`relative h-full border-b-2 px-0.5 pt-1 text-xs font-semibold transition-colors ${
+                activeWorkspace === "route"
+                  ? "border-[#8661c5] text-[#463668]"
+                  : "border-transparent text-[#8c8279] hover:text-[#463668]"
+              }`}
+            >
+              비행 경로
             </button>
             <button
               type="button"

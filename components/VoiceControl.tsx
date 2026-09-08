@@ -22,10 +22,11 @@ const STATUS_LABEL: Record<VoiceStatus, string> = {
 };
 
 /**
- * Icon-only voice control: the orb is purely visual (no click), a start
- * button sits centered at the bottom while idle, and an X button sits at
- * the bottom-right once a session is live, to leave it. Nothing renders as
- * visible text; labels remain as `title`/`aria-label` only.
+ * Icon-only voice control: the orb is purely visual (no click). The session
+ * auto-starts from the opening screen's "브리핑 시작" button, but a start
+ * button (bottom-center, while idle) and an X button (bottom-right, while
+ * live) remain as a manual safety fallback in case auto-start fails or the
+ * user needs to stop/restart early.
  */
 export default function VoiceControl({
   status,

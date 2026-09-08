@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { formatRoute, MONITOR_MAP, MONITORS } from "@/data/monitors";
+import { MONITOR_CLUES } from "@/data/scenario";
 import type { MonitorId, RoutePlanningState } from "@/lib/types";
 
 interface FlightPathMapProps {
@@ -154,6 +155,9 @@ export default function FlightPathMap({ planningState }: FlightPathMapProps) {
                     {routeIndex >= 0 ? `${routeIndex + 1}번째` : "대기"}
                   </span>
                 </div>
+                <p className="px-3 pb-2.5 text-[11px] leading-snug text-[#5c4738]">
+                  {MONITOR_CLUES[monitor.id]}
+                </p>
               </div>
             );
           })}

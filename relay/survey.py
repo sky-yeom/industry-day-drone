@@ -34,6 +34,19 @@ GROUND_TRUTH_ANOMALIES = [
      "keywords": ["작물", "농작물", "식물", "고사"]},
 ]
 
+# 임시(placeholder) 모니터별 단서. 실제 시나리오가 정해지면 이 문구만 교체하면
+# 된다. confirm_prompt가 성공한 직후 facts로 함께 내려가서, 에이전트가 경로
+# 순서를 묻기 전에 이 단서들을 자기 말로 먼저 안내하게 한다.
+MONITOR_CLUES = {
+    "monitor-1": "모니터 1 쪽에서는 침수 흔적으로 보이는 신호가 잡힘",
+    "monitor-2": "모니터 2 쪽에서는 구조물 손상 가능성을 시사하는 신호가 잡힘",
+    "monitor-3": "모니터 3 쪽에서는 작물/식생 이상 가능성을 시사하는 신호가 잡힘",
+}
+
+
+def clue_summary() -> str:
+    return " / ".join(f"{LABELS[mid]}: {text}" for mid, text in MONITOR_CLUES.items())
+
 
 def score_prompt(prompt_text: str) -> dict:
     """사용자가 말한 주의사항과 정답 이상 징후 목록을 비교해 점수를 매긴다.
@@ -113,6 +126,11 @@ class SurveySession:
 
     def select_stop(self, monitor: str) -> dict:
         """경유지를 하나 고른다. 두 개가 정해지면 남은 하나는 자동으로 붙는다."""
+        if self.mission.promptPhase != "confirmed":
+            return {"ok": False,
+                    "facts": "아직 주의사항(무엇을 찾을지)이 확정되지 않아서 경로를 정할 수 없음",
+                    "ask": "먼저 무엇을 주의 깊게 볼지 물어볼 것"}
+
         mid = resolve_monitor(monitor)
         if not mid:
             return {"ok": False,
@@ -159,6 +177,11 @@ class SurveySession:
                 "ask": "확정할지 물어볼 것"}
 
     def confirm_route(self) -> dict:
+        if self.mission.promptPhase != "confirmed":
+            return {"ok": False,
+                    "facts": "아직 주의사항(무엇을 찾을지)이 확정되지 않아서 경로를 확정할 수 없음",
+                    "ask": "먼저 무엇을 주의 깊게 볼지 물어볼 것"}
+
         if len(self.state.draftRoute) < 3:
             return {"ok": False,
                     "facts": "아직 경로가 다 정해지지 않아서 확정할 수 없음",
@@ -204,8 +227,8 @@ class SurveySession:
         self.mission.promptPhase = "confirmed"
         return {
             "ok": True,
-            "facts": f"사용자가 확정한 주의사항: {text}",
-            "ask": "이제 스캔을 시작한다고 안내하고 이어서 탐지 결과를 말할 것",
+            "facts": f"사용자가 확정한 주의사항: {text}. 모니터별 단서: {clue_summary()}",
+            "ask": "먼저 각 모니터의 단서를 자기 말로 안내한 뒤, 어디부터 갈지 물어볼 것",
         }
 
     def report_detection(self) -> dict:

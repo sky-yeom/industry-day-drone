@@ -23,6 +23,7 @@
 package dji.v5.ux.core.widget.fpv
 
 import android.view.Surface
+import android.os.Looper
 import dji.sdk.keyvalue.key.CameraKey
 import dji.sdk.keyvalue.key.FlightControllerKey
 import dji.sdk.keyvalue.value.camera.CameraType
@@ -58,6 +59,11 @@ class FPVWidgetModel(
 ) : WidgetModel(djiSdkModel, keyedStore), ICameraIndex {
 
     private var currentLensType = CameraLensType.CAMERA_LENS_DEFAULT
+    private var changingCameraSource = false
+    private val surfaceBindings = SurfaceBindingOwner<Surface, ICameraStreamManager> { owner, surface ->
+        check(Looper.myLooper() == Looper.getMainLooper()) { "Surface removal must run on the main thread" }
+        owner.removeCameraStreamSurface(surface)
+    }
     private val streamSourceCameraTypeProcessor = DataProcessor.create(CameraVideoStreamSourceType.UNKNOWN)
     private val resolutionAndFrameRateProcessor: DataProcessor<VideoResolutionFrameRate> = DataProcessor.create(VideoResolutionFrameRate())
     private val cameraTypeProcessor: DataProcessor<CameraType> = DataProcessor.create(CameraType.NOT_SUPPORTED)
@@ -96,7 +102,9 @@ class FPVWidgetModel(
     override fun updateCameraSource(cameraIndex: ComponentIndexType, lensType: CameraLensType) {
         if (currentCameraIndex != cameraIndex) {
             currentCameraIndex = cameraIndex
-            restart()
+            // Reconfigure keys without detaching an unchanged Surface from the decoder.
+            changingCameraSource = true
+            try { restart() } finally { changingCameraSource = false }
         }
     }
 
@@ -139,6 +147,7 @@ class FPVWidgetModel(
     }
 
     override fun inCleanup() {
+        if (!changingCameraSource) clearCameraStreamSurface()
         currentLensType = CameraLensType.CAMERA_LENS_DEFAULT
     }
 
@@ -173,13 +182,33 @@ class FPVWidgetModel(
         width: Int,
         height: Int,
         scaleType: ICameraStreamManager.ScaleType
-    ) {
-        MediaDataCenter.getInstance().cameraStreamManager.putCameraStreamSurface(currentCameraIndex, surface, width, height, scaleType)
+    ): Boolean = tryPutCameraStreamSurface(surface, width, height, scaleType, currentStreamManager())
+
+    internal fun currentStreamManager(): ICameraStreamManager? = try {
+        MediaDataCenter.getInstance().cameraStreamManager
+    } catch (error: RuntimeException) { null }
+
+    internal fun hasSurfaceBinding(surface: Surface, owner: ICameraStreamManager): Boolean =
+        surfaceBindings.hasBinding(surface, owner)
+
+    internal fun tryPutCameraStreamSurface(surface: Surface, width: Int, height: Int,
+                                         scaleType: ICameraStreamManager.ScaleType, owner: ICameraStreamManager?): Boolean {
+        if (owner == null || !surface.isValid || width <= 0 || height <= 0 || currentCameraIndex == ComponentIndexType.UNKNOWN) return false
+        return surfaceBindings.put(surface, owner) {
+            check(Looper.myLooper() == Looper.getMainLooper()) { "Surface binding must run on the main thread" }
+            owner.putCameraStreamSurface(currentCameraIndex, surface, width, height, scaleType)
+        }
     }
 
     fun removeCameraStreamSurface(surface: Surface) {
-        MediaDataCenter.getInstance().cameraStreamManager.removeCameraStreamSurface(surface)
+        surfaceBindings.clear(surface)
     }
+
+    internal fun clearCameraStreamSurface() { surfaceBindings.clear() }
+
+    internal fun surfaceDiagnostics(): Map<String, Any?> = linkedMapOf(
+        "surface_put_attempts" to surfaceBindings.puts, "surface_put_successes" to surfaceBindings.successes,
+        "surface_remove_attempts" to surfaceBindings.removes, "surface_error" to surfaceBindings.lastError)
 
     fun enableVisionAssist() {
         MediaDataCenter.getInstance().cameraStreamManager.enableVisionAssist(true, null)

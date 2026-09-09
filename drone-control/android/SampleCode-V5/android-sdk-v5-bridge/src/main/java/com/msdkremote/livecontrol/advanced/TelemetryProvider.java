@@ -13,6 +13,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import com.msdkremote.lifecycle.PollLease;
+import com.msdkremote.lifecycle.PendingSdkReads;
+import com.msdkremote.lifecycle.FcHealthTracker;
+import com.msdkremote.PcBridge;
 import java.util.function.BiConsumer;
 
 import dji.sdk.keyvalue.key.DJIKey;
@@ -35,10 +38,20 @@ public final class TelemetryProvider {
 
     private final Object lock = new Object();
     private boolean started = false;
+    private KeyManager listenerManager;
+    private Object listenerHolder;
+    private boolean cleanupFailed;
     private ScheduledExecutorService poller = null;
     private long pollTicks = 0;
     private long pollFailures = 0;
     private long generation = 0;
+    private final FcHealthTracker health = new FcHealthTracker();
+    private final PollLease motorsPollInFlight = new PollLease(2000), connectionPollInFlight = new PollLease(2000);
+    private Boolean areMotorsOn;
+    private long motorsMs;
+    private long sourceGeneration = -1;
+    private final DJIKey<Boolean> motorsKey = KeyTools.createKey(FlightControllerKey.KeyAreMotorsOn);
+    private final DJIKey<Boolean> connectionKey = KeyTools.createKey(FlightControllerKey.KeyConnection);
     private String lastPollError = null;
     private long lastPollErrorMs = 0;
 
@@ -84,64 +97,92 @@ public final class TelemetryProvider {
     /** Only for ground video repair, never flight authorization. Unknown/stale means false. */
     public boolean isGroundedFresh(long maxAgeMs) {
         synchronized (lock) {
-            long age = SystemClock.elapsedRealtime() - flyingMs;
-            return started && Boolean.FALSE.equals(isFlying) && flyingMs > 0
-                    && age >= 0 && age <= maxAgeMs;
+            long now = SystemClock.elapsedRealtime();
+            return started && sourceGeneration == PcBridge.connectionGeneration()
+                    && Boolean.FALSE.equals(isFlying) && Boolean.FALSE.equals(areMotorsOn)
+                    && flyingMs > 0 && motorsMs > 0 && now >= flyingMs && now >= motorsMs
+                    && now-flyingMs <= maxAgeMs && now-motorsMs <= maxAgeMs;
         }
     }
 
     public void start() {
         final long session;
+        final KeyManager bindingManager=KeyManager.getInstance();
+        final Object bindingHolder=new Object();
         synchronized (lock) {
             if (started) {
                 return;
             }
+            if(cleanupFailed)throw new IllegalStateException("TELEMETRY_LISTENER_CLEANUP_FAILED");
+            listenerManager=bindingManager;listenerHolder=bindingHolder;
             started = true;
             session = ++generation;
+            sourceGeneration = PcBridge.connectionGeneration();
+            health.reset(generation);
         }
         try {
         Log.i(TAG, "Starting telemetry listeners");
-        KeyManager.getInstance().listen(velocityKey, this, (oldValue, newValue) -> {
+        bindingManager.listen(velocityKey, bindingHolder, (oldValue, newValue) -> {
             synchronized (lock) {
-                if (!started || generation != session) return;
+                if (!started || generation != session || sourceGeneration != PcBridge.connectionGeneration()) return;
                 velocity = newValue;
+                health.listen("AircraftVelocity", SystemClock.elapsedRealtime(), newValue != null);
                 velocityMs = SystemClock.elapsedRealtime();
             }
         });
-        KeyManager.getInstance().listen(attitudeKey, this, (oldValue, newValue) -> {
+        bindingManager.listen(attitudeKey, bindingHolder, (oldValue, newValue) -> {
             synchronized (lock) {
-                if (!started || generation != session) return;
+                if (!started || generation != session || sourceGeneration != PcBridge.connectionGeneration()) return;
                 attitude = newValue;
+                health.listen("AircraftAttitude", SystemClock.elapsedRealtime(), newValue != null);
                 attitudeMs = SystemClock.elapsedRealtime();
             }
         });
-        KeyManager.getInstance().listen(heightKey, this, (oldValue, newValue) -> {
+        bindingManager.listen(heightKey, bindingHolder, (oldValue, newValue) -> {
             synchronized (lock) {
-                if (!started || generation != session) return;
+                if (!started || generation != session || sourceGeneration != PcBridge.connectionGeneration()) return;
                 ultrasonicHeightDm = newValue;
+                health.listen("UltrasonicHeight", SystemClock.elapsedRealtime(), newValue != null);
                 heightMs = SystemClock.elapsedRealtime();
             }
         });
-        KeyManager.getInstance().listen(flyingKey, this, (oldValue, newValue) -> {
+        bindingManager.listen(flyingKey, bindingHolder, (oldValue, newValue) -> {
             synchronized (lock) {
-                if (!started || generation != session) return;
+                if (!started || generation != session || sourceGeneration != PcBridge.connectionGeneration()) return;
                 isFlying = newValue;
+                health.listen("IsFlying", SystemClock.elapsedRealtime(), newValue != null);
                 flyingMs = SystemClock.elapsedRealtime();
             }
         });
-        KeyManager.getInstance().listen(batteryKey, this, (oldValue, newValue) -> {
+        bindingManager.listen(batteryKey, bindingHolder, (oldValue, newValue) -> {
             synchronized (lock) {
-                if (!started || generation != session) return;
+                if (!started || generation != session || sourceGeneration != PcBridge.connectionGeneration()) return;
                 batteryPercent = newValue;
             }
         });
-        KeyManager.getInstance().listen(flightModeKey, this, (oldValue, newValue) -> {
+        bindingManager.listen(flightModeKey, bindingHolder, (oldValue, newValue) -> {
             synchronized (lock) {
-                if (!started || generation != session) return;
+                if (!started || generation != session || sourceGeneration != PcBridge.connectionGeneration()) return;
                 flightMode = newValue;
+                health.listen("FlightMode", SystemClock.elapsedRealtime(), newValue != null);
                 flightModeMs = SystemClock.elapsedRealtime();
             }
         });
+
+        bindingManager.listen(motorsKey, bindingHolder, (oldValue, newValue) -> {
+            synchronized(lock) {
+                if (!started || generation != session || sourceGeneration != PcBridge.connectionGeneration()) return;
+                areMotorsOn=newValue; motorsMs=newValue==null?0:SystemClock.elapsedRealtime();
+                health.listen("AreMotorsOn",SystemClock.elapsedRealtime(),newValue!=null);
+            }
+        });
+        bindingManager.listen(connectionKey, bindingHolder, (oldValue, newValue) -> {
+            synchronized(lock) {
+                if (!started || generation != session || sourceGeneration != PcBridge.connectionGeneration()) return;
+                health.connection(newValue); health.listen("Connection",SystemClock.elapsedRealtime(),newValue!=null);
+            }
+        });
+        pollValue(connectionKey, connectionPollInFlight, "Connection", 1000, (v,t)->health.connection(v));
 
         // DJI listeners are change notifications. In a steady hover the
         // decimetre height and zero velocity can remain unchanged for many
@@ -149,7 +190,7 @@ public final class TelemetryProvider {
         // 5 Hz as well; one in-flight request per key prevents a slow handler
         // from building an unbounded callback queue.
         synchronized (lock) {
-            if (!started || generation != session) return;
+            if (!started || generation != session || sourceGeneration != PcBridge.connectionGeneration()) return;
             poller = Executors.newSingleThreadScheduledExecutor(runnable -> {
                 Thread thread = new Thread(runnable, "telemetry-5hz");
                 thread.setDaemon(true);
@@ -165,49 +206,58 @@ public final class TelemetryProvider {
 
     public void stop() {
         ScheduledExecutorService toStop;
+        final KeyManager ownerManager;final Object ownerHolder;
         synchronized (lock) {
             started = false;
+            ownerManager=listenerManager;ownerHolder=listenerHolder;
             generation++;
             toStop = poller;
             poller = null;
             velocity = null; attitude = null; ultrasonicHeightDm = null;
-            isFlying = null; flightMode = null; batteryPercent = null;
+            isFlying = null; areMotorsOn = null; motorsMs = 0; flightMode = null; batteryPercent = null;
+            health.reset(generation);
+            if(Boolean.FALSE.equals(PcBridge.productConnected()))health.connection(false);
             velocityMs = attitudeMs = heightMs = flyingMs = flightModeMs = 0;
             velocityPollInFlight.invalidate(); attitudePollInFlight.invalidate();
             heightPollInFlight.invalidate(); flyingPollInFlight.invalidate();
             batteryPollInFlight.invalidate(); flightModePollInFlight.invalidate();
+            motorsPollInFlight.invalidate(); connectionPollInFlight.invalidate();
         }
         if (toStop != null) {
             toStop.shutdownNow();
         }
-        try { KeyManager.getInstance().cancelListen(this); }
-        catch (RuntimeException error) { Log.w(TAG, "telemetry listener cleanup failed", error); }
+        try {
+            if(ownerManager!=null&&ownerHolder!=null)ownerManager.cancelListen(ownerHolder);
+            synchronized(lock){if(listenerHolder==ownerHolder){listenerHolder=null;listenerManager=null;cleanupFailed=false;}}
+        }catch(RuntimeException error){synchronized(lock){cleanupFailed=true;}Log.w(TAG,"telemetry listener cleanup failed",error);}
+
     }
 
     private void pollSafely() {
         try {
-            pollValue(velocityKey, velocityPollInFlight, (value, when) -> {
+            pollValue(velocityKey, velocityPollInFlight, "AircraftVelocity", 200, (value, when) -> {
                 velocity = value;
                 velocityMs = when;
             });
-            pollValue(attitudeKey, attitudePollInFlight, (value, when) -> {
+            pollValue(attitudeKey, attitudePollInFlight, "AircraftAttitude", 200, (value, when) -> {
                 attitude = value;
                 attitudeMs = when;
             });
-            pollValue(heightKey, heightPollInFlight, (value, when) -> {
+            pollValue(heightKey, heightPollInFlight, "UltrasonicHeight", 200, (value, when) -> {
                 ultrasonicHeightDm = value;
                 heightMs = when;
             });
-            pollValue(flyingKey, flyingPollInFlight, (value, when) -> {
+            pollValue(flyingKey, flyingPollInFlight, "IsFlying", 200, (value, when) -> {
                 isFlying = value;
                 flyingMs = when;
             });
-            pollValue(flightModeKey, flightModePollInFlight, (value, when) -> {
+            pollValue(flightModeKey, flightModePollInFlight, "FlightMode", 200, (value, when) -> {
                 flightMode = value;
                 flightModeMs = when;
             });
             if (++pollTicks % 5 == 0) {
-                pollValue(batteryKey, batteryPollInFlight,
+                pollValue(motorsKey, motorsPollInFlight, "AreMotorsOn", 1000, (value, when) -> { areMotorsOn=value; motorsMs=when; });
+                pollValue(batteryKey, batteryPollInFlight, "BatteryPowerPercent", 1000,
                         (value, when) -> batteryPercent = value);
             }
         } catch (Throwable error) {
@@ -215,57 +265,65 @@ public final class TelemetryProvider {
         }
     }
 
-    private <T> void pollValue(
-            DJIKey<T> key, PollLease inFlight, BiConsumer<T, Long> update) {
-        final long session;
-        final long request;
+    private <T> void pollValue(DJIKey<T> key, PollLease inFlight, String id, long interval, BiConsumer<T, Long> update) {
+        final long session, product, request;
+        final PendingSdkReads.Read physical;
         synchronized (lock) {
             if (!started) return;
-            session = generation;
-            request = inFlight.begin(SystemClock.elapsedRealtime());
-            if (request == 0) return;
+            if (sourceGeneration != PcBridge.connectionGeneration()) {
+                sourceGeneration=PcBridge.connectionGeneration(); generation++; health.reset(generation);
+                velocityPollInFlight.invalidate();attitudePollInFlight.invalidate();heightPollInFlight.invalidate();
+                flyingPollInFlight.invalidate();flightModePollInFlight.invalidate();batteryPollInFlight.invalidate();
+                motorsPollInFlight.invalidate();connectionPollInFlight.invalidate();
+                velocity=null; attitude=null; ultrasonicHeightDm=null; isFlying=null; areMotorsOn=null; flightMode=null;
+                velocityMs=attitudeMs=heightMs=flyingMs=motorsMs=flightModeMs=0;
+            }
+            long now=SystemClock.elapsedRealtime();
+            if (!health.due(id,now))return;
+            session=generation; product=sourceGeneration;
+            long expired=inFlight.expiredCount();
+            request=inFlight.begin(now);
+            if(inFlight.expiredCount()>expired){PendingSdkReads.SHARED.telemetryDeadline(key,now);health.timeout(id,now);inFlight.complete(request);return;}
+            if(request==0)return;
+            physical=PendingSdkReads.SHARED.reserve(key,PendingSdkReads.Owner.TELEMETRY,product,now,
+                    "IsFlying".equals(id)||"AreMotorsOn".equals(id));
+            if(physical==null){inFlight.complete(request);return;}
+            health.issued(id,now);
         }
         try {
-            KeyManager.getInstance().getValue(
-                    key,
-                    new CommonCallbacks.CompletionCallbackWithParam<T>() {
-                        @Override
-                        public void onSuccess(T value) {
-                            long now = SystemClock.elapsedRealtime();
-                            synchronized (lock) {
-                                if (!started || session != generation || !inFlight.complete(request)) return;
-                                if (value != null) {
-                                    update.accept(value, now);
-                                }
-                            }
-                        }
-
-                        @Override
-                        public void onFailure(@NonNull IDJIError error) {
-                            long failures;
-                            synchronized (lock) {
-                                if (!started || session != generation || !inFlight.complete(request)) return;
-                                failures = ++pollFailures;
-                                lastPollError = key + ": " + error;
-                                lastPollErrorMs = SystemClock.elapsedRealtime();
-                            }
-                            if (failures == 1 || failures % 50 == 0) {
-                                Log.w(TAG, "telemetry GET failed (count="
-                                        + failures + "): " + error);
-                            }
-                        }
-                    });
-        } catch (RuntimeException error) {
-            synchronized (lock) {
-                if (session == generation && inFlight.complete(request)) {
-                    pollFailures++;
-                    lastPollError = key + ": " + error;
-                    lastPollErrorMs = SystemClock.elapsedRealtime();
+            KeyManager.getInstance().getValue(key,new CommonCallbacks.CompletionCallbackWithParam<T>() {
+                @Override public void onSuccess(T value) {
+                    if(!PendingSdkReads.SHARED.complete(physical.id))return;
+                    synchronized(lock) {
+                        if(!started || session!=generation || product!=PcBridge.connectionGeneration()
+                                || !inFlight.complete(request))return;
+                        long now=SystemClock.elapsedRealtime();
+                        health.success(id,now,value!=null,interval);
+                        if(value!=null)update.accept(value,now);
+                    }
+                }
+                @Override public void onFailure(@NonNull IDJIError error) {
+                    if(!PendingSdkReads.SHARED.complete(physical.id))return;
+                    synchronized(lock) {
+                        if(!started || session!=generation || product!=PcBridge.connectionGeneration()
+                                || !inFlight.complete(request))return;
+                        pollFailures++; lastPollError=key+": "+error; lastPollErrorMs=SystemClock.elapsedRealtime();
+                        health.failed(id,lastPollErrorMs,error.errorCode(),error.toString());
+                    }
+                }
+            });
+        } catch(RuntimeException error) {
+            PendingSdkReads.SHARED.uncertain(physical.id);
+            synchronized(lock) {
+                if(session==generation && inFlight.complete(request)) {
+                    pollFailures++;lastPollError=error.toString();lastPollErrorMs=SystemClock.elapsedRealtime();
+                    health.failed(id,lastPollErrorMs,"SDK_SUBMISSION_UNCERTAIN");
                 }
             }
-            Log.e(TAG, "telemetry GET threw", error);
         }
     }
+
+    public FcHealthTracker healthTracker() { return health; }
 
     /** One-line state used by the Virtual Stick send diagnostic. */
     public String summaryForLog() {
@@ -303,7 +361,7 @@ public final class TelemetryProvider {
         long now;
         JSONObject json = new JSONObject();
         try {
-            json.put("bridge_build_id", "5.18-telemetry-age.20260906.4");
+            json.put("bridge_build_id", "5.18-connectivity.20260910.5");
             json.put("bridge_health", com.msdkremote.PcBridge.diagnostics());
             json.put("max_tilt_angle_deg", StickControlManager.MAX_TILT_ANGLE_DEG);
             JSONObject video = com.msdkremote.livevideo.VideoServerManager.getInstance().diagnostics();
@@ -313,6 +371,12 @@ public final class TelemetryProvider {
                 // callback cannot make a fresh sample appear to have negative age.
                 now = SystemClock.elapsedRealtime();
                 json.put("telemetry_started", started);
+                json.put("fc_health", new JSONObject(health.snapshot(now)).put("recovery_state", PcBridge.recoveryState())
+                        .put("recovery_reason", PcBridge.recoveryReason()));
+                json.put("are_motors_on", areMotorsOn==null?JSONObject.NULL:areMotorsOn);
+                json.put("are_motors_on_age_ms", areMotorsOn==null||motorsMs==0?JSONObject.NULL:Math.max(0,now-motorsMs));
+                json.put("sdk_reads_pending",PendingSdkReads.SHARED.size());
+                json.put("sdk_read_requests",new org.json.JSONArray(PendingSdkReads.SHARED.snapshot(now)));
                 json.put("telemetry_generation", generation);
                 json.put("telemetry_poll_failures", pollFailures);
                 json.put("telemetry_last_error", lastPollError == null ? JSONObject.NULL : lastPollError);

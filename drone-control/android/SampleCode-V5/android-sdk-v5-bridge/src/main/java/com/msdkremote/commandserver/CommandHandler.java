@@ -19,5 +19,7 @@ public interface CommandHandler
      * @param commandServer the server from which this call was made
      * @param command the command that was received.
      */
+    default void onCommand(@NonNull CommandServer server,@NonNull String command,long epoch) { onCommand(server,command); }
+
     public void onCommand(@NonNull CommandServer commandServer, @NonNull String command);
 }

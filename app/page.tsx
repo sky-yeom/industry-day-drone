@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
 import FlightPathMap, { MISSION_LABELS, MissionCountdownSummary } from "@/components/FlightPathMap";
 import DroneImagePanel from "@/components/DroneImagePanel";
+import DroneStatusBanner from "@/components/DroneStatusBanner";
 import OpeningScreen from "@/components/OpeningScreen";
 import PromptWorkspace from "@/components/PromptWorkspace";
 import ResultsPanel from "@/components/ResultsPanel";
@@ -221,12 +222,17 @@ export default function Home() {
         >{workspace.label}</button>)}
       </div>
       <div className="flex min-h-0 flex-1 flex-col">
+      <DroneStatusBanner state={state} connected={connected}
+        onAbort={() => sessionRef.current?.sendCommand("abort_mission")} />
+      {config?.droneReady === false && <div role="alert" className="mx-4 mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+        {config.droneError || "실제 드론 제어 설정을 확인해야 합니다."}
+      </div>}
       {(!config || !visionReady) && <div role="alert" className="mx-4 mt-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
         {config?.visionError || (config ? "이미지 분석 서비스가 준비되지 않아 출발할 수 없습니다." : "관제 서버 설정을 확인할 수 없습니다. 릴레이 실행 상태를 확인해 주세요.")}
       </div>}
       {state.error && <div role="alert" className="mx-4 mt-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-900">
         <strong>{state.missionPhase === "paused" ? "시계가 일시 정지되었습니다. " : "작전 오류: "}</strong>{state.error}
-        {state.missionPhase === "paused" && (status === "idle" && connected ? <div className="mt-2 flex gap-3">
+        {state.missionPhase === "paused" && state.droneControlMode !== "live" && (status === "idle" && connected ? <div className="mt-2 flex gap-3">
           <button type="button" onClick={() => sessionRef.current?.sendCommand("retry_mission")} className="rounded-lg border border-red-300 px-3 py-1">다시 시도</button>
           <button type="button" onClick={() => sessionRef.current?.sendCommand("abort_mission")} className="rounded-lg border border-red-300 px-3 py-1">작전 중단</button>
         </div> : <p className="mt-2">계속하려면 “다시 시도해 줘”, 중단하려면 “작전을 중단해 줘”라고 말해주세요.</p>)}

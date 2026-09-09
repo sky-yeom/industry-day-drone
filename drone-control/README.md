@@ -2,11 +2,12 @@
 
 이 폴더는 드론 제어 담당 코드와 구현 계획입니다. Speech 대화·방문 순서 결정·대시보드·시나리오 채점은 상대 팀 담당입니다. 우리는 전달받은 목적지 순서를 검증하고 실행 상태·센서·사진·오류를 반환합니다.
 
-**현재 Tool 실행은 mock 전용입니다.** 실제 비행 adapter, 영속 중복 방지, HTTP service 및 계획된 앱 통신 수정은 아직 적용하지 않았습니다. 기존 기체 제어 소스가 포함돼 있다는 사실을 Speech 실기 연동 완료로 해석하지 마세요.
+**2026-09-10: 최신 대시보드와 연결하는 HTTP 도구 서비스·실제 태그 비행 adapter·앱 연결 수정 코드를 추가했습니다.** 기본 실행은 mock입니다. 실제 모드는 새 APK, 현장 설정과 Azure 분석 설정을 명시해야 하며, 코드 검증과 실기 검증은 구분합니다. 설치·실행·검증 범위는 [현재 통합 안내](docs/CONTROL_INTEGRATION_20260910.md)를 따릅니다.
 
 | 위치 | 내용 |
 |---|---|
-| [integration/speech_control_contract](integration/speech_control_contract/README.md) | Tool7개, 엄격한 인자 검증, 비동기 호출 wrapper, 단일 mock 임무·중복/중단 처리와 테스트 |
+| [현재 통합 안내](docs/CONTROL_INTEGRATION_20260910.md) | Windows 실행, 7개 HTTP tools, durable journal, 실제 비행·촬영·중단 연결 |
+| [integration/speech_control_contract](integration/speech_control_contract/README.md) | 공통 Tool 인자 스키마와 이전의 독립 mock 예제 |
 | [Tool 정의](integration/speech_control_contract/tools.json) | capabilities/status/execute/get mission/stop/sensors/captures |
 | [우리 구현 계획](docs/fix_ready_20260907/DRONE_TOOL_CONTROL_IMPLEMENTATION_PLAN_20260908.md) | 변경할 파일·함수, 실행 조건, 중단·오류·센서/사진 계약 |
 | [앱 수정 적용 순서](docs/fix_ready_20260907/APPLY_ORDER.md) | FC·query·영상·PC 상세 계획 |
@@ -35,7 +36,7 @@ python -B -m unittest discover -s pc/tests -v
 
 환경 준비가 필요한 경우 pyproject.toml의 `vision` 선택 의존성을 설치합니다. 샘플 설정은 측정값을 대신하지 않으며 `actual_measurements_confirmed`와 calibration이 완료된 현장 설정은 별도로 관리합니다. 개인 설정·키·APK·비행 원본 로그/사진은 이 커밋에 포함하지 않았습니다.
 
-## 게시 검증과 출처
+## 최초 snapshot 게시 검증과 출처 (수정 전 기록)
 
 - PC 오프라인 테스트88개, Tool 계약 테스트11개 통과.
 - PC production source는 줄바꿈·파일 끝 공백 정리 외에는 원래 작업 폴더와 같습니다. 테스트3개만 비공개 config.local 대신 샘플 설정을 사용하도록 정리했습니다.

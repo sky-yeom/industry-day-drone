@@ -10,6 +10,7 @@ local.properties
 local-flight.properties
 pc/logs/
 pc/captures/
+android/artifacts/
 *.apk
 *.zip
 *.jks

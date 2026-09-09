@@ -10,7 +10,7 @@
  * forwards `route.state` pushes to the caller.
  */
 
-import type { DashboardState, DetectionMode } from "@/lib/types";
+import type { DashboardState, DetectionMode, DroneControlMode } from "@/lib/types";
 
 const SAMPLE_RATE = 24000;
 
@@ -61,6 +61,9 @@ export interface RelayConfig {
   mode: DetectionMode;
   visionReady: boolean;
   visionError: string | null;
+  droneControlMode: DroneControlMode;
+  droneReady: boolean;
+  droneError: string | null;
 }
 
 export async function fetchRelayConfig(): Promise<RelayConfig | null> {

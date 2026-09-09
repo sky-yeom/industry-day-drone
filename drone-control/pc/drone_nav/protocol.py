@@ -9,6 +9,7 @@ from pathlib import Path
 import socket
 import time
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
@@ -161,6 +162,21 @@ class Telemetry:
     height_m: float | None = None
     height_age_s: float | None = None
     is_flying: bool | None = None
+    is_flying_age_s: float | None = None
+    are_motors_on: bool | None = None
+    are_motors_on_age_s: float | None = None
+    bridge_health: dict[str, Any] | None = None
+    fc_health: dict[str, Any] | None = None
+    oa_diagnostics: dict[str, Any] | None = None
+    video: dict[str, Any] | None = None
+    telemetry_started: bool | None = None
+    telemetry_generation: int | None = None
+    telemetry_poll_failures: int | None = None
+    telemetry_expired_gets: int | None = None
+    sdk_reads_pending: int | None = None
+    telemetry_last_error: str | None = None
+    telemetry_last_error_age_s: float | None = None
+    parse_issues: tuple[str, ...] = ()
     armed: bool | None = None
     battery_percent: float | None = None
     rc_override_age_s: float | None = None
@@ -191,21 +207,21 @@ class Telemetry:
     vision_positioning_enabled: bool | None = None
     oa_horizontal_angle_interval_deg: float | None = None
     oa_horizontal_distances_mm: tuple[int, ...] | None = None
-    oa_horizontal_sample_count: float | None = None
+    oa_horizontal_sample_count: int | None = None
     oa_upward_distance_mm: float | None = None
     oa_downward_distance_mm: float | None = None
     oa_obstacle_data_age_s: float | None = None
     time_watchdog_enabled: bool | None = None
     disconnect_release_enabled: bool | None = None
-    direct_frames_sent: float | None = None
-    direct_frames_succeeded: float | None = None
-    direct_frames_failed: float | None = None
-    direct_consecutive_failures: float | None = None
+    direct_frames_sent: int | None = None
+    direct_frames_succeeded: int | None = None
+    direct_frames_failed: int | None = None
+    direct_consecutive_failures: int | None = None
     direct_callback_age_s: float | None = None
     direct_last_error: str | None = None
-    official_advanced_frames_sent: float | None = None
+    official_advanced_frames_sent: int | None = None
     official_advanced_frame_age_s: float | None = None
-    active_command_sequence: float | None = None
+    active_command_sequence: int | None = None
     active_command_age_s: float | None = None
     requested_forward_mps: float | None = None
     requested_right_mps: float | None = None
@@ -224,12 +240,12 @@ class Telemetry:
     sdk_roll_pitch_units: str | None = None
     sdk_roll_pitch_mode: str | None = None
     sdk_submit_result: str | None = None
-    sdk_submit_sequence: float | None = None
-    sdk_submit_frame: float | None = None
+    sdk_submit_sequence: int | None = None
+    sdk_submit_frame: int | None = None
     sdk_submit_age_s: float | None = None
     sdk_result: str | None = None
-    sdk_result_sequence: float | None = None
-    sdk_result_frame: float | None = None
+    sdk_result_sequence: int | None = None
+    sdk_result_frame: int | None = None
     sdk_result_age_s: float | None = None
     sdk_result_error: str | None = None
     bridge_build_id: str | None = None
@@ -238,8 +254,9 @@ class Telemetry:
     @classmethod
     def from_ack_payload(cls, payload: dict[str, Any]) -> "Telemetry | None":
         raw = payload.get("telemetry")
-        if not isinstance(raw, dict):
+        if not isinstance(raw, dict) or not raw:
             return None
+        issues = []
 
         def number(name: str, scale: float = 1.0) -> float | None:
             value = raw.get(name)
@@ -247,7 +264,31 @@ class Telemetry:
                 return None
             if not math.isfinite(value):
                 return None
+            if name.endswith("_age_ms") and value < 0:
+                return None
             return float(value) * scale
+
+        def integer(name):
+            value = raw.get(name)
+            return value if type(value) is int and value >= 0 else None
+
+        def diagnostics(name):
+            value = raw.get(name)
+            if not isinstance(value, dict):
+                return None
+            def clean(item, key=""):
+                if isinstance(item, dict):
+                    return {k: clean(v, k) for k, v in item.items() if isinstance(k, str)}
+                if isinstance(item, list):
+                    return [clean(v) for v in item]
+                if key.endswith("_age_ms") or key == "age_ms":
+                    return item if type(item) in (int, float) and math.isfinite(item) and item >= 0 else None
+                if key in {"generation", "connection_generation", "callback_sequence", "consecutive_failures"}:
+                    return item if type(item) is int and item >= 0 else None
+                if isinstance(item, float) and not math.isfinite(item):
+                    return None
+                return deepcopy(item)
+            return clean(value)
 
         def boolean(name: str) -> bool | None:
             value = raw.get(name)
@@ -260,10 +301,13 @@ class Telemetry:
         def integer_tuple(name: str) -> tuple[int, ...] | None:
             value = raw.get(name)
             if not isinstance(value, list):
+                if value is not None:
+                    issues.append(name + ": expected integer array")
                 return None
             parsed: list[int] = []
             for item in value:
                 if isinstance(item, bool) or not isinstance(item, int):
+                    issues.append(name + ": invalid element; whole array unavailable")
                     return None
                 parsed.append(item)
             return tuple(parsed)
@@ -280,6 +324,16 @@ class Telemetry:
             height_m=number("height_m"),
             height_age_s=number("height_age_ms", 1e-3),
             is_flying=boolean("is_flying"),
+            is_flying_age_s=number("is_flying_age_ms", 1e-3),
+            are_motors_on=boolean("are_motors_on"),
+            are_motors_on_age_s=number("are_motors_on_age_ms", 1e-3),
+            bridge_health=diagnostics("bridge_health"), fc_health=diagnostics("fc_health"),
+            oa_diagnostics=diagnostics("oa_diagnostics"), video=diagnostics("video"),
+            telemetry_started=boolean("telemetry_started"), telemetry_generation=integer("telemetry_generation"),
+            telemetry_poll_failures=integer("telemetry_poll_failures"),
+            telemetry_expired_gets=integer("telemetry_expired_gets"), sdk_reads_pending=integer("sdk_reads_pending"),
+            telemetry_last_error=text("telemetry_last_error"),
+            telemetry_last_error_age_s=number("telemetry_last_error_age_ms", 1e-3),
             armed=boolean("armed"),
             battery_percent=number("battery_percent"),
             rc_override_age_s=number("rc_override_age_ms", 1e-3),
@@ -312,23 +366,23 @@ class Telemetry:
             oa_horizontal_distances_mm=integer_tuple(
                 "oa_horizontal_distances_mm"
             ),
-            oa_horizontal_sample_count=number("oa_horizontal_sample_count"),
+            oa_horizontal_sample_count=integer("oa_horizontal_sample_count"),
             oa_upward_distance_mm=number("oa_upward_distance_mm"),
             oa_downward_distance_mm=number("oa_downward_distance_mm"),
             oa_obstacle_data_age_s=number("oa_obstacle_data_age_ms", 1e-3),
             time_watchdog_enabled=boolean("time_watchdog_enabled"),
             disconnect_release_enabled=boolean("disconnect_release_enabled"),
-            direct_frames_sent=number("direct_frames_sent"),
-            direct_frames_succeeded=number("direct_frames_succeeded"),
-            direct_frames_failed=number("direct_frames_failed"),
-            direct_consecutive_failures=number("direct_consecutive_failures"),
+            direct_frames_sent=integer("direct_frames_sent"),
+            direct_frames_succeeded=integer("direct_frames_succeeded"),
+            direct_frames_failed=integer("direct_frames_failed"),
+            direct_consecutive_failures=integer("direct_consecutive_failures"),
             direct_callback_age_s=number("direct_callback_age_ms", 1e-3),
             direct_last_error=text("direct_last_error"),
-            official_advanced_frames_sent=number("official_advanced_frames_sent"),
+            official_advanced_frames_sent=integer("official_advanced_frames_sent"),
             official_advanced_frame_age_s=number(
                 "official_advanced_frame_age_ms", 1e-3
             ),
-            active_command_sequence=number("active_command_sequence"),
+            active_command_sequence=integer("active_command_sequence"),
             active_command_age_s=number("active_command_age_ms", 1e-3),
             requested_forward_mps=number("requested_forward_mps"),
             requested_right_mps=number("requested_right_mps"),
@@ -347,12 +401,12 @@ class Telemetry:
             sdk_roll_pitch_units=text("sdk_roll_pitch_units"),
             sdk_roll_pitch_mode=text("sdk_roll_pitch_mode"),
             sdk_submit_result=text("sdk_submit_result"),
-            sdk_submit_sequence=number("sdk_submit_sequence"),
-            sdk_submit_frame=number("sdk_submit_frame"),
+            sdk_submit_sequence=integer("sdk_submit_sequence"),
+            sdk_submit_frame=integer("sdk_submit_frame"),
             sdk_submit_age_s=number("sdk_submit_age_ms", 1e-3),
             sdk_result=text("sdk_result"),
-            sdk_result_sequence=number("sdk_result_sequence"),
-            sdk_result_frame=number("sdk_result_frame"),
+            sdk_result_sequence=integer("sdk_result_sequence"),
+            sdk_result_frame=integer("sdk_result_frame"),
             sdk_result_age_s=number("sdk_result_age_ms", 1e-3),
             sdk_result_error=text("sdk_result_error"),
             bridge_build_id=text("bridge_build_id"),
@@ -364,6 +418,7 @@ class Telemetry:
                 if isinstance(raw.get("oa_sensors_working"), str)
                 else None
             ),
+            parse_issues=tuple(issues),
         )
 
 
@@ -607,6 +662,12 @@ class NDJSONClient:
         self._file = None
         self._armed = False
         self.last_telemetry: Telemetry | None = None
+        self.last_known_telemetry: Telemetry | None = None
+        self.last_telemetry_received_pc_monotonic_ns: int | None = None
+        self.pc_connection_epoch = 0
+        self._health_baseline = None
+        self._telemetry_scope = None
+        self.last_health_delta = None
         self.last_result: ControlResult | None = None
         self.last_motion_assessment: MotionAssessment | None = None
         self.session_id: str | None = None
@@ -619,20 +680,21 @@ class NDJSONClient:
 
     def connect(self) -> None:
         # Android resets its sequence state per connection; match that scope.
+        if self._socket is not None or self._file is not None:
+            self.close()
         self.protocol = Protocol(self.protocol.version)
-        self.last_telemetry = None
-        self.last_result = None
-        self.last_motion_assessment = None
-        self._motion_signature = None
-        self._motion_previous_ns = None
-        self._motion_streak_started_ns = None
-        self._motion_streak_sequence = None
+        self._invalidate_telemetry()
+        self._health_baseline = None
+        self._telemetry_scope = None
+        self.last_health_delta = None
         self._open_session_log()
         try:
             self._socket = socket.create_connection(self._address, self._timeout)
             self._socket.settimeout(self._timeout)
             self._file = self._socket.makefile("rb")
-            self._log_event("network_connected", {"address": list(self._address)})
+            self.pc_connection_epoch += 1
+            self._log_event("network_connected", {"address": list(self._address),
+                                                  "pc_connection_epoch": self.pc_connection_epoch})
         except BaseException as error:
             self._log_event("connection_failed", {"error": repr(error)})
             if self._socket is not None:
@@ -650,10 +712,47 @@ class NDJSONClient:
             self._socket.close()
         self._file = self._socket = None
         self._armed = False
+        self._invalidate_telemetry()
         self._log_event("session_closed", {})
         if self._log_file is not None:
             self._log_file.close()
             self._log_file = None
+
+    def _invalidate_telemetry(self):
+        if self.last_telemetry is not None:
+            self.last_known_telemetry = self.last_telemetry
+        self.last_telemetry = None
+        self.last_telemetry_received_pc_monotonic_ns = None
+        self.last_result = None
+        self.last_motion_assessment = None
+        self._motion_signature = self._motion_previous_ns = None
+        self._motion_streak_started_ns = self._motion_streak_sequence = None
+
+    def _record_health_delta(self, telemetry):
+        health = telemetry.bridge_health or {}
+        process = health.get("process_start_id")
+        generation, failures = telemetry.telemetry_generation, telemetry.telemetry_poll_failures
+        scope = (process, generation)
+        if self._telemetry_scope is not None and scope != self._telemetry_scope:
+            self._motion_signature = self._motion_previous_ns = None
+            self._motion_streak_started_ns = self._motion_streak_sequence = None
+        self._telemetry_scope = scope
+        current = (process, generation, failures)
+        previous = self._health_baseline
+        delta = None
+        if not isinstance(process, str) or not process or generation is None or failures is None:
+            status = "EVIDENCE_INCOMPLETE"
+            self._health_baseline = None
+        else:
+            status = "BASELINE" if previous is None else "GENERATION_CHANGED"
+            if previous and previous[:2] == current[:2]:
+                status = "COUNTER_RESET" if failures < previous[2] else "DELTA"
+                delta = None if failures < previous[2] else failures - previous[2]
+            self._health_baseline = current
+        self.last_health_delta = {"status": status, "poll_failures_delta": delta,
+            "process_start_id": process, "telemetry_generation": generation,
+            "telemetry_poll_failures": failures}
+        self._log_event("telemetry_health_delta", self.last_health_delta)
 
     def send(
         self,
@@ -662,6 +761,7 @@ class NDJSONClient:
         timeout_s: float | None = None,
     ) -> Message:
         if self._socket is None or self._file is None:
+            self._invalidate_telemetry()
             raise ConnectionError("client is not connected")
         expected_sequence = self.protocol._out_sequence
         if timeout_s is not None:
@@ -685,6 +785,7 @@ class NDJSONClient:
                 },
             )
         except BaseException as error:
+            self._invalidate_telemetry()
             self._log_event(
                 "transport_error",
                 {"command_type": kind, "error": repr(error)},
@@ -694,13 +795,25 @@ class NDJSONClient:
             if timeout_s is not None:
                 self._socket.settimeout(self._timeout)
         if not line:
+            self._invalidate_telemetry()
             raise ConnectionError("Android bridge closed before acknowledgement")
-        acknowledgement = self.protocol.decode(line)
-        if acknowledgement.type != "ack" or acknowledgement.sequence != expected_sequence:
-            raise ConnectionError("invalid acknowledgement")
+        try:
+            acknowledgement = self.protocol.decode(line)
+            if acknowledgement.type != "ack" or acknowledgement.sequence != expected_sequence:
+                raise ConnectionError("invalid acknowledgement")
+        except (ValueError, TypeError, KeyError, UnicodeError, ConnectionError) as error:
+            self._invalidate_telemetry()
+            actual = response_for_log.get("sequence") if isinstance(response_for_log, dict) else None
+            self._log_event("protocol_error", {"expected_sequence": expected_sequence,
+                "actual_sequence": actual, "pc_connection_epoch": getattr(self, "_connection_epoch", self.pc_connection_epoch),
+                "error": type(error).__name__})
+            raise
         telemetry = Telemetry.from_ack_payload(acknowledgement.payload)
         if telemetry is not None:
             self.last_telemetry = telemetry
+            self.last_known_telemetry = telemetry
+            self.last_telemetry_received_pc_monotonic_ns = received_at
+            self._record_health_delta(telemetry)
             streak_age_s, streak_sequence = self._update_motion_streak(telemetry)
             self.last_motion_assessment = assess_motion(
                 telemetry,
@@ -716,6 +829,10 @@ class NDJSONClient:
                     "evidence": self.last_motion_assessment.evidence,
                 },
             )
+        else:
+            self._invalidate_telemetry()
+            self._log_event("telemetry_unavailable", {"ack_sequence": acknowledgement.sequence,
+                "pc_connection_epoch": getattr(self, "_connection_epoch", self.pc_connection_epoch)})
         self.last_result = ControlResult.from_ack_payload(acknowledgement.payload)
         if not acknowledgement.payload["ok"]:
             raise PermissionError(

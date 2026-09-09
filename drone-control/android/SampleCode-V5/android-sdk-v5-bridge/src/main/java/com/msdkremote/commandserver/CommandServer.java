@@ -1,453 +1,92 @@
 package com.msdkremote.commandserver;
 
-
 import android.util.Log;
-
-import androidx.annotation.IntRange;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.HashSet;
-import java.util.Set;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.CopyOnWriteArraySet;
 
-/**
- * Bidirectional command server, for receiving commands and sending messages.
- */
-public class CommandServer
-{
-    /* --------------------------- Local Variables --------------------------- */
-
-    // Thread configurations
+/** Every dispatch and queued reply belongs to one accepted socket epoch. */
+public class CommandServer {
+    public interface SessionEndListener { void onSessionEnded(CommandServer server,long epoch); }
     private final int port;
-    private final String TAG;
+    private final String tag;
     private final CommandServerStateListener stateListener;
-
-
-    // Thread specific variables
-    private final Object threadLock = new Object();
-    private Thread serverThread = null;
-    private boolean serverStarted = false;
-
-    private CommandServerReader commandReader = null;
-    private CommandServerWriter commandWriter = null;
-
-    private ServerSocket serverSocket = null;
-    private Socket clientSocket = null;
-
-
-    // Command Handlers
-    private final Set<CommandHandler> commandHandlerSet = new HashSet<>();
-    private final Object commandHandlerSetLock = new Object();
-
-    private final MessageQueue messageQueue = new MessageQueue();
-
-    // Incremented for every accepted client. Messages produced for an older
-    // connection (e.g. late asynchronous ACKs) are dropped instead of leaking
-    // into the next client's stream.
-    private final AtomicLong connectionEpoch = new AtomicLong(0);
-
-
-
-    /* --------------------------- Basic Commands --------------------------- */
-
-    /**
-     * Construct new bidirectional command server.
-     * The command will not log on logcat.
-     *
-     * @param stateListener listener on the server state.
-     * @param port port number for the server to listen on.
-     */
-    public CommandServer(
-            @Nullable CommandServerStateListener stateListener,
-            @IntRange(from = 1, to = 65535) int port)
-    {
-        this.stateListener = stateListener;
-        this.port = port;
-        this.TAG = null;
+    private final MessageQueue queue=new MessageQueue(256);
+    private final CopyOnWriteArraySet<CommandHandler> handlers=new CopyOnWriteArraySet<>();
+    private final CopyOnWriteArraySet<SessionEndListener> ends=new CopyOnWriteArraySet<>();
+    private volatile ServerSocket serverSocket;
+    private volatile Socket clientSocket;
+    private volatile Thread serverThread;
+    private volatile boolean running;
+    private long epoch;
+    private boolean active;
+    public CommandServer(@Nullable CommandServerStateListener listener,int port){this(listener,port,null);}
+    public CommandServer(@Nullable CommandServerStateListener listener,int port,@Nullable String tag){stateListener=listener;this.port=port;this.tag=tag;}
+    public synchronized void startServer(){if(running)return;running=true;serverThread=new Thread(this::run,"commands-"+port);serverThread.start();}
+    public void stopServer() throws InterruptedException {
+        Thread thread;
+        synchronized(this){running=false;thread=serverThread;}
+        closeSession(getConnectionEpoch());close(clientSocket);close(serverSocket);
+        if(thread!=null&&thread!=Thread.currentThread()){thread.interrupt();thread.join();}
+        synchronized(this){if(serverThread==thread)serverThread=null;}
     }
-
-
-    /**
-     * Construct new bidirectional command server.
-     *
-     * @param stateListener listener on the server state.
-     * @param port port number for the server to listen on.
-     * @param TAG tag to print with on logcat.
-     */
-    public CommandServer(
-            @Nullable CommandServerStateListener stateListener,
-            @IntRange(from = 1, to = 65535) int port,
-            @NonNull String TAG)
-    {
-        this.stateListener = stateListener;
-        this.port = port;
-        this.TAG = TAG;
-    }
-
-
-    /**
-     * Start the server thread in a new thread.
-     */
-    public synchronized void startServer()
-    {
-        // If the server is alive, don't do anything
-        if (serverStarted || (serverThread != null && serverThread.isAlive())) {
-            log_i("Start server called on running server.");
-            return;
-        }
-
-        // Flag to stop the server from double running
-        serverStarted = true;
-
-        // Lunch server
-        log_i("Starting server.");
-
-        // Reset all the inner variables
-        this.commandReader = null;
-        this.commandWriter = null;
-
-        this.serverSocket = null;
-        this.clientSocket = null;
-
-        // Start the server thread
-        this.serverThread = new Thread(this::run);
-        this.serverThread.start();
-    }
-
-
-    /**
-     * Stops the server thread from running.
-     * This method will return after the thread is terminated.
-     *
-     * @throws InterruptedException if calling thread interrupted while executing this method.
-     */
-    public synchronized void stopServer() throws InterruptedException
-    {
-        // If the server is closed, don't do anything
-        if (serverThread == null) {
-            log_i("Stop server called on terminated server.");
-            return;
-        }
-
-        // Terminate server
-        log_i("Terminating the server.");
-
-        // Rise interrupt flag
-        this.serverThread.interrupt();
-
-        // Stop the thread if its waiting for new clients
-        if (this.serverSocket != null) {
-            try {
-                this.serverSocket.close();
-            }
-            catch (IOException ignored) { }
-        }
-
-        // Closing the client should be enough to make all the threads to close.
-        if (this.clientSocket != null) {
-            try {
-                this.clientSocket.close();
-            }
-            catch (IOException ignored) { }
-        }
-
-        // Wait for the thread to fully close.
-        this.serverThread.join();
-        log_i("Server terminated.");
-
-        // Reset all the inner variables
-        if (this.commandReader != null) {
-            this.commandReader.stopServer();
-            this.commandReader = null;
-        }
-
-        if (this.commandWriter != null) {
-            this.commandWriter.stopServer();
-            this.commandWriter = null;
-        }
-
-        this.serverSocket = null;
-        this.clientSocket = null;
-
-        this.serverThread = null;
-    }
-
-
-    /**
-     * The server thread main function.
-     * This function is the solly defines the server thread.
-     */
-    private void run()
-    {
-        // The server started -
-        // from now can look at thread.isAlive()
-        serverStarted = false;
-
-        // Inform the state listener that the server started
-        if (this.stateListener != null)
-            this.stateListener.onServerRunning();
-
-        // Create server socket
+    private static void close(java.io.Closeable c){if(c!=null)try{c.close();}catch(IOException ignored){}}
+    private void run() {
         try {
-            log_v("Creating new server socket.");
-            this.serverSocket = new ServerSocket(this.port);
-        }
-        catch (IOException e) {
-            // Inform about exception
-            if (this.stateListener != null)
-                this.stateListener.onServerException(e);
-
-            log_w("Couldn't create server socket.", e);
-            return;
-        }
-
-        try {
-            // Network loop
-            while (!this.serverThread.isInterrupted())
-            {
-                // Accept new client
-                this.clientSocket = this.serverSocket.accept();
-
-                // Catch interrupts that occurred while accepting the client.
-                if (this.serverThread.isInterrupted())
-                    break;
-
-                // New session: invalidate stale messages from the previous
-                // client and drop anything still queued. Shares the queue
-                // monitor with sendMessage(String, long) so a stale callback
-                // cannot pass the epoch check and enqueue after the clear.
-                synchronized (this.messageQueue) {
-                    this.connectionEpoch.incrementAndGet();
-                    this.messageQueue.clear();
+            ServerSocket listening=new ServerSocket(port);serverSocket=listening;
+            if(!running){close(listening);return;}
+            if(stateListener!=null)stateListener.onServerRunning();
+            while(running&&!Thread.currentThread().isInterrupted()) {
+                Socket socket=listening.accept();clientSocket=socket;
+                if(!running){close(socket);break;}
+                final long acceptedEpoch;
+                acceptedEpoch=openSession();
+                CommandServerWriter writer=null;
+                try {
+                    if(stateListener!=null)stateListener.onClientConnected(socket.getInetAddress());
+                    writer=new CommandServerWriter(socket.getOutputStream(),queue);
+                    CommandServerReader reader=new CommandServerReader(socket.getInputStream(),
+                        command->dispatch(command,acceptedEpoch));
+                    reader.joinServer();
+                } finally {
+                    closeSession(acceptedEpoch);close(socket);
+                    if(writer!=null)writer.stopServer();
+                    if(clientSocket==socket)clientSocket=null;
                 }
-
-                // Inform the state listener about new client
-                if (this.stateListener != null)
-                    this.stateListener.onClientConnected(this.clientSocket.getInetAddress());
-
-                // Create command reader and writer without tag
-                if (this.TAG == null) {
-                    this.commandWriter = new CommandServerWriter(
-                            this.clientSocket.getOutputStream(),
-                            this.messageQueue);
-                    this.commandReader = new CommandServerReader(
-                            this.clientSocket.getInputStream(),
-                            this.commandDistribute);
-                }
-                // Create command reader and writer wit tag
-                else {
-                    this.commandWriter = new CommandServerWriter(
-                            this.clientSocket.getOutputStream(),
-                            this.messageQueue,
-                            this.TAG);
-                    this.commandReader = new CommandServerReader(
-                            this.clientSocket.getInputStream(),
-                            this.commandDistribute,
-                            this.TAG);
-                }
-
-                // Wait for the command reader threads to close.
-                // this will happen when the connection is closed.
-                this.commandReader.joinServer();
-                this.commandWriter.stopServer();
-
-                this.commandWriter = null;
-                this.commandReader = null;
-                this.clientSocket = null;
-
-                if (this.stateListener != null)
-                    this.stateListener.onClientDisconnected();
             }
-        }
-        catch (InterruptedException e) {
-            log_i("Server thread was interrupted and closing.");
-        }
-        catch (IOException e) {
-            // Didn't call state listener as it might be due to closing the thread.
-            log_w("Server thread got IO exception", e);
-        }
+        } catch(InterruptedException e){Thread.currentThread().interrupt();}
+        catch(Exception error){if(running&&stateListener!=null)stateListener.onServerException(error);}
         finally {
-            // Close the server socket
-            try {
-                this.serverSocket.close();
-            } catch (IOException ignored) { }
-
-            // Close the client socket
-            try {
-                if (this.clientSocket != null)
-                    this.clientSocket.close();
-            } catch (IOException ignored) { }
-        }
-
-        // Inform the state listener that the server is closing
-        if (this.stateListener != null)
-            this.stateListener.onServerClosed();
-
-    }
-
-
-    /**
-     * Sending specific message over this command server.
-     * Note: this will schedule the message,
-     *   and send it only when a connection is established.
-     *
-     * @param message the message to send.
-     */
-    public void sendMessage(@NonNull String message)
-    {
-        log_v("Message registered: " + message);
-        messageQueue.addMessage(message);
-    }
-
-
-    /**
-     * Current connection generation. Capture this when handling a command and
-     * pass it to {@link #sendMessage(String, long)} from asynchronous callbacks.
-     */
-    public long getConnectionEpoch()
-    {
-        return connectionEpoch.get();
-    }
-
-
-    /**
-     * Sending a message bound to a specific connection generation.
-     * Dropped silently when that connection is no longer the active one.
-     *
-     * @param message the message to send.
-     * @param epoch the connection epoch the message belongs to.
-     */
-    public void sendMessage(@NonNull String message, long epoch)
-    {
-        synchronized (messageQueue) {
-            if (epoch != connectionEpoch.get()) {
-                log_w("Dropping message for stale connection: " + message);
-                return;
-            }
-            sendMessage(message);
+            closeSession(getConnectionEpoch());close(clientSocket);close(serverSocket);running=false;
+            if(stateListener!=null)stateListener.onServerClosed();
         }
     }
-
-
-    /**
-     * Log informative message (if TAG was set).
-     *
-     * @param message message to log.
-     */
-    private void log_i(@NonNull String message)
-    {
-        if (this.TAG != null)
-            Log.i(this.TAG, message);
-    }
-
-    /**
-     * Log verbose message (if TAG was set).
-     *
-     * @param message message to log.
-     */
-    private void log_v(@NonNull String message)
-    {
-        if (this.TAG != null)
-            Log.v(this.TAG, message);
-    }
-
-    /**
-     * Log error message (if TAG was set).
-     *
-     * @param message message to log.
-     */
-    private void log_w(@NonNull String message)
-    {
-        if (this.TAG != null)
-            Log.w(this.TAG, message);
-    }
-
-    /**
-     * Log error message and its error (if TAG was set).
-     *
-     * @param message message to log.
-     * @param e error message to log.
-     */
-    private void log_w(@NonNull String message, @NonNull Throwable e)
-    {
-        if (this.TAG != null)
-            Log.w(this.TAG, message, e);
-    }
-
-
-
-    /* --------------------------- Command Handlers --------------------------- */
-
-    /**
-     * Adding command handler to this server.
-     * All the handlers will receive the same messages,
-     * its up to them to process rightly the command.
-     *
-     * @param commandHandler handler to add receiving updates on.
-     */
-    public void addCommandHandler(@NonNull CommandHandler commandHandler)
-    {
-        synchronized (commandHandlerSetLock) {
-            log_v("Adding new handler to the server.");
-            commandHandlerSet.add(commandHandler);
+    long openSession(){synchronized(queue){long accepted=++epoch;active=true;queue.clear();return accepted;}}
+    int queuedMessages(){return queue.getSize();}
+    void dispatch(String command,long acceptedEpoch) {
+        if(!isSessionActive(acceptedEpoch))return;
+        for(CommandHandler handler:handlers){
+            if(!isSessionActive(acceptedEpoch))return;
+            try{handler.onCommand(this,command,acceptedEpoch);}catch(RuntimeException error){if(tag!=null)Log.e(tag,"Command dispatch failed",error);}
         }
     }
-
-
-    /**
-     * Removes handler from the server.
-     *
-     * @param commandHandler the handler to remove from this server.
-     * @return true if the handler was removed,
-     *         false if the handler wasn't registered in the first place.
-     */
-    public boolean removeCommandHandler(@NonNull CommandHandler commandHandler)
-    {
-        synchronized (commandHandlerSetLock) {
-            log_v("Removing handler from the server.");
-            return commandHandlerSet.remove(commandHandler);
-        }
+    public long getConnectionEpoch(){synchronized(queue){return epoch;}}
+    public boolean isSessionActive(long expected){synchronized(queue){return active&&epoch==expected;}}
+    public void closeSession(long expected) {
+        synchronized(queue){if(!active||epoch!=expected)return;active=false;epoch++;queue.clear();}
+        // Never call SDK owners under the queue monitor; exactly one close notification.
+        for(SessionEndListener listener:ends)try{listener.onSessionEnded(this,expected);}catch(RuntimeException error){if(tag!=null)Log.w(tag,"Session cleanup failed",error);}
+        if(stateListener!=null)try{stateListener.onClientDisconnected();}
+        catch(RuntimeException error){if(tag!=null)Log.w(tag,"Disconnect notification failed",error);}
     }
-
-
-    /**
-     * Removes all the handles from this server.
-     * If a command comes when there are no handles,
-     * the message is simply discarded.
-     */
-    public void removeAllCommandHandlers()
-    {
-        synchronized (commandHandlerSetLock) {
-            log_v("Removing all handlers from the server.");
-            commandHandlerSet.clear();
-        }
-    }
-
-
-    /**
-     * Proxy handler, to call all the registered handlers with pointer
-     * to the server which the call was made from.
-     */
-    private final CommandServerReaderHandler commandDistribute
-            = new CommandServerReaderHandler() {
-        @Override
-        public void onCommand(@NonNull String command)
-        {
-            log_v("New command received: " + command);
-
-            // Get the list of the handlers, to not stuck on the lock.
-            CommandHandler[] handlers = new CommandHandler[0];
-            synchronized (commandHandlerSetLock) {
-                handlers = commandHandlerSet.toArray(handlers);
-            }
-
-            // Iterate over the handlers
-            for (CommandHandler handler : handlers)
-                handler.onCommand(CommandServer.this, command);
-        }
-    };
+    public void sendMessage(@NonNull String message){sendMessage(message,getConnectionEpoch());}
+    public void sendMessage(@NonNull String message,long expected){synchronized(queue){if(active&&epoch==expected)queue.addMessage(message);}}
+    public void addSessionEndListener(SessionEndListener listener){ends.add(listener);}
+    public void removeSessionEndListener(SessionEndListener listener){ends.remove(listener);}
+    public void addCommandHandler(@NonNull CommandHandler handler){handlers.add(handler);}
+    public boolean removeCommandHandler(@NonNull CommandHandler handler){return handlers.remove(handler);}
+    public void removeAllCommandHandlers(){handlers.clear();}
 }

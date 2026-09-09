@@ -108,6 +108,12 @@ def parse_sdk_response(
     method = "ACTION" if method.upper() == "CALL" else method.upper()
     prefix = f"{module} {key} " if module and key else ""
     payload = raw[len(prefix):] if prefix and raw.startswith(prefix) else raw
+    if payload.startswith("QUERY_LOCAL_ERROR") or raw.startswith("QUERY_LOCAL_ERROR"):
+        return SdkApiResult(1, False, "QUERY_LOCAL_ERROR", "Android 조회 경계에서 로컬 오류가 발생했습니다.",
+                            method, module, key, None, None, raw)
+    if prefix and not raw.startswith(prefix):
+        return SdkApiResult(1, False, "QUERY_PREFIX_MISMATCH", "조회 응답의 module/key가 요청과 다릅니다.",
+                            method, module, key, None, None, raw)
     error = (
         {name: value for name, value in _ERROR_FIELD.findall(payload)}
         if "ErrorImp{" in payload

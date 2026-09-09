@@ -21,12 +21,16 @@ try:
     from . import config, tools
     from .survey import SurveySession
     from .mission_runner import MissionRunner
+    from .live_mission import LiveMissionRunner
+    from .drone_client import DroneClient, DroneError
     from .vision import create_providers
 except ImportError:
     import config
     import tools
     from survey import SurveySession
     from mission_runner import MissionRunner
+    from live_mission import LiveMissionRunner
+    from drone_client import DroneClient, DroneError
     from vision import create_providers
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -48,11 +52,24 @@ def credential():
 async def api_config():
     _, vision = create_providers(config.TRIAGE_MODE)
     error = vision.readiness()
+    drone_error = None
+    if config.DRONE_CONTROL_MODE == "live":
+        if config.TRIAGE_MODE != "azure":
+            drone_error = "실제 드론은 TRIAGE_MODE=azure로 실제 촬영 이미지를 분석해야 합니다."
+        else:
+            try:
+                drone_error = DroneClient("relay-readiness").readiness()
+            except DroneError as exc:
+                drone_error = str(exc)
+    elif config.DRONE_CONTROL_MODE != "mock":
+        drone_error = "DRONE_CONTROL_MODE는 mock 또는 live여야 합니다."
     return {
         "resource": config.RESOURCE, "model": config.MODEL, "voice": config.VOICE_NAME,
         "voiceType": config.VOICE_TYPE, "apiVersion": config.API_VERSION,
         "region": config.REGION, "sampleRate": config.SAMPLE_RATE,
         "mode": config.TRIAGE_MODE, "visionReady": error is None, "visionError": error,
+        "droneControlMode": config.DRONE_CONTROL_MODE,
+        "droneReady": drone_error is None, "droneError": drone_error,
     }
 
 
@@ -115,7 +132,11 @@ class Bridge:
         self._completed_commands = {}
         self._closing = False
         camera, vision = providers or create_providers(session.data["mode"])
-        self.runner = MissionRunner(session, camera, vision, self.publish_mission)
+        if session.data["droneControlMode"] == "live":
+            self.runner = LiveMissionRunner(session, camera, vision, self.publish_mission,
+                drone_client=DroneClient("relay-" + session.run_id))
+        else:
+            self.runner = MissionRunner(session, camera, vision, self.publish_mission)
 
     async def send_browser(self, payload):
         async with self._browser_lock:
@@ -461,7 +482,7 @@ class Bridge:
 @app.websocket("/ws")
 async def ws_endpoint(browser: WebSocket):
     await browser.accept()
-    session = SurveySession(mode=config.TRIAGE_MODE)
+    session = SurveySession(mode=config.TRIAGE_MODE, drone_control_mode=config.DRONE_CONTROL_MODE)
     bridge = Bridge(browser, session)
     pumps = []
     try:

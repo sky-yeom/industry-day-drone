@@ -158,14 +158,18 @@ class VideoServer {
                     .put("client_written_bytes", s.bytes).put("client_written_frames", s.frames)
                     .put("client_age_ms", s.connectionAgeMs).put("socket_write_age_ms", s.writeAgeMs)
                     .put("socket_writing_age_ms", s.writingAgeMs).put("ground_recoveries", s.recoveries)
+                    .put("recovery_reason", s.recoveryReason).put("recovery_blocked", s.recoveryBlocked)
+                    .put("recoveries_without_progress", s.recoveriesWithoutProgress)
+                    .put("android_elapsed_ms", SystemClock.elapsedRealtime())
                     .put("write_semantics", "accepted_by_local_tcp_not_pc_decode_ack");
         }
     }
 
-    public boolean recoverGroundDelivery(boolean groundDisarmed, long cameraAgeMs) {
+    public boolean recoverGroundDelivery(boolean enabled, boolean groundDisarmed,
+                                         long cameraAgeMs, boolean waitingKeyframe) {
         synchronized (stateLock) {
             DeliveryHealth.Recovery action = delivery.claimRecovery(
-                    SystemClock.elapsedRealtime(), groundDisarmed, cameraAgeMs);
+                    SystemClock.elapsedRealtime(), enabled, groundDisarmed, cameraAgeMs, waitingKeyframe);
             if (action == DeliveryHealth.Recovery.CLOSE_STALLED_CLIENT) {
                 Log.w(TAG, "Ground video write stalled; closing only the video client");
                 closeQuietly(clientSocket);

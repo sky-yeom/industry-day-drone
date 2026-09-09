@@ -145,6 +145,18 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(self.io.events[:3], [("query", "IsFlying"), ("query", "AreMotorsOn"), ("connect",)])
         self.assertTrue(self.io.closed)
 
+    def test_connectivity_build_requires_watchdog_and_fresh_motor_telemetry(self):
+        for override, passed in [({"time_watchdog_enabled": True, "are_motors_on": False, "are_motors_on_age_ms": 0}, True),
+                                  ({"time_watchdog_enabled": False, "are_motors_on": False, "are_motors_on_age_ms": 0}, False),
+                                  ({"time_watchdog_enabled": True, "are_motors_on": False, "are_motors_on_age_ms": 600}, False),
+                                  ({"time_watchdog_enabled": True}, False)]:
+            with self.subTest(override=override):
+                self.reset_fake()
+                self.io.ground_override = {"bridge_build_id": runner_module.CONNECTIVITY_BUILD, **override}
+                result = self.runner.run(check_only=True)
+                self.assertEqual(result["status"] == "GROUND_CHECK_PASSED", passed)
+                self.assertEqual(self.io.commands, ["status"])
+
     def test_unknown_ground_proof_never_opens_control_connection(self):
         for key, value in (("IsFlying", True), ("IsFlying", None), ("AreMotorsOn", True), ("AreMotorsOn", None)):
             with self.subTest(key=key, value=value):

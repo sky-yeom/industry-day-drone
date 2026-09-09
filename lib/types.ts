@@ -1,5 +1,7 @@
 export type MonitorId = "monitor-1" | "monitor-2" | "monitor-3";
 export type DetectionMode = "mock" | "azure";
+export type DroneControlMode = "mock" | "live";
+export type DroneStopState = "not_requested" | "requesting" | "stop_requested" | "confirmed" | "unknown" | "awaiting_manual";
 export type MissionPhase =
   | "briefing"
   | "ready"
@@ -58,6 +60,11 @@ export interface CapturedImage {
   status: "captured" | "analyzing" | "detected" | "not-found" | "error";
   evidence: DetectionEvidence | null;
   mode: DetectionMode;
+  droneControlMode?: DroneControlMode;
+  missionId?: string | null;
+  visitIndex?: number | null;
+  destinationId?: string | null;
+  capturedAtUnixMs?: number | null;
 }
 
 export interface PersonState {
@@ -97,6 +104,12 @@ export interface MissionState {
   unsupportedAppearance: string[];
   missionPhase: MissionPhase;
   mode: DetectionMode;
+  droneControlMode: DroneControlMode;
+  droneMissionId: string | null;
+  droneState: string;
+  droneStopState: DroneStopState;
+  droneErrorCode: string | null;
+  activeVisitIndex: number | null;
   elapsedMs: number;
   clockRunning: boolean;
   activeMonitorId: MonitorId | null;

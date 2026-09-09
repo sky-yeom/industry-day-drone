@@ -44,6 +44,8 @@ public class QueryServerManager
 
 
 
+    public void onSourceChanged(){QuerySessionRegistry.SHARED.onSourceChanged();}
+
     /* ------------------- Server Control ------------------- */
 
     /**
@@ -63,6 +65,7 @@ public class QueryServerManager
         Log.i(TAG, "Starting new Query Server, port : " + port + ".");
         this.queryServer = new CommandServer(new commandServerStateListener(), port);
 
+        queryServer.addSessionEndListener(QuerySessionRegistry.SHARED);
         queryServer.addCommandHandler(new QueryCommandHandler(armToken));
         queryServer.startServer();
     }

@@ -3,138 +3,130 @@ package com.msdkremote.livevideo;
 import android.os.SystemClock;
 import android.util.Log;
 import androidx.annotation.NonNull;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import dji.sdk.keyvalue.value.common.ComponentIndexType;
-import dji.sdk.keyvalue.key.CameraKey;
-import dji.sdk.keyvalue.key.KeyTools;
-import dji.v5.manager.KeyManager;
 import dji.v5.manager.datacenter.MediaDataCenter;
 import dji.v5.manager.interfaces.ICameraStreamManager;
 import org.json.JSONObject;
 import org.json.JSONException;
 
-/** Reacquires the current SDK manager after a reconnect, with bounded backoff.
- * Old-generation camera callbacks cannot refill a newly reset stream. */
+/** All SDK binding effects belong to video-binding; STATUS reads immutable snapshots. */
 public final class AvailableCameraListener {
     private static final String TAG = "AvailableCamera";
-    private ICameraStreamManager manager;
-    private ICameraStreamManager.AvailableCameraUpdatedListener availableListener;
-    private ICameraStreamManager.ReceiveStreamListener receiver;
-    private ComponentIndexType camera;
-    private FrameBuffer buffer;
-    private long generation;
-    private long nextRetryMs;
-    private long retryDelayMs = 3000;
-    private long rebinds;
-    private String lastError;
-    private Boolean enabled;
-    private boolean running;
+    private static final String PROCESS_SESSION_ID = UUID.randomUUID().toString();
+    private final ScheduledThreadPoolExecutor worker = new ScheduledThreadPoolExecutor(1, runnable -> {
+        Thread thread = new Thread(runnable, "video-binding");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private volatile FrameBuffer buffer;
+    private SdkManager currentAdapter;
+    private String lastState;
+    private final StreamBindingController<ComponentIndexType, Frame> controller;
 
-    public synchronized void startListener(FrameBuffer frames) {
-        buffer = frames;
-        running = true;
-        ensureBound();
+    public AvailableCameraListener() {
+        worker.setRemoveOnCancelPolicy(true);
+        controller = new StreamBindingController<>(worker, SystemClock::elapsedRealtime,
+                this::currentManager,
+                list -> list.contains(ComponentIndexType.LEFT_OR_MAIN)
+                        ? ComponentIndexType.LEFT_OR_MAIN : list.get(0),
+                new StreamBindingController.FrameSink<Frame>() {
+                    @Override public void beginGeneration(long generation) {
+                        FrameBuffer frames = buffer;
+                        if (frames != null) frames.beginCameraGeneration(generation);
+                    }
+                    @Override public boolean add(Frame frame, long generation) {
+                        FrameBuffer frames = buffer;
+                        return frames != null && frames.addFrame(frame, generation);
+                    }
+                });
+        worker.scheduleWithFixedDelay(() -> {
+            controller.ensure();
+            Map<String, Object> value = controller.snapshot();
+            String state = value.get("activation_state") + ":" + value.get("camera_generation")
+                    + ":" + value.get("binding_error");
+            if (!state.equals(lastState)) {
+                lastState = state;
+                Log.i(TAG, "video state session=" + PROCESS_SESSION_ID + " " + value);
+            }
+        }, 1, 1, TimeUnit.SECONDS);
     }
 
-    public synchronized void ensureBound() {
-        if (!running || buffer == null) return;
-        long now = SystemClock.elapsedRealtime();
-        ICameraStreamManager current = MediaDataCenter.getInstance().getCameraStreamManager();
-        long age = buffer.cameraAgeMs();
-        if (current == manager && receiver != null && age >= 0 && age < 3000) {
-            retryDelayMs = 3000;
-            lastError = null;
-            return;
-        }
-        if (now < nextRetryMs) return;
-        nextRetryMs = now + retryDelayMs;
-        retryDelayMs = Math.min(30000, retryDelayMs * 2);
-        try {
-            // Re-add available-camera listener too: it may itself be detached.
-            detach();
-            manager = current;
-            final long ticket = ++generation;
-            availableListener = new ICameraStreamManager.AvailableCameraUpdatedListener() {
-                @Override public void onAvailableCameraUpdated(@NonNull List<ComponentIndexType> list) {
-                    synchronized (AvailableCameraListener.this) {
-                        if (!running || generation != ticket) return;
-                        if (list.isEmpty()) return; // wait for camera/product reconnect
-                        ComponentIndexType selected = list.contains(ComponentIndexType.LEFT_OR_MAIN)
-                                ? ComponentIndexType.LEFT_OR_MAIN : list.get(0);
-                        if (receiver == null || camera != selected) bind(selected, ticket);
-                    }
+    public void startListener(FrameBuffer frames) {
+        buffer = frames;
+        controller.start();
+    }
+
+    public void ensureBound() { controller.ensure(); }
+    public void stopListener() { controller.stop(); }
+
+    /** Only VideoServerManager's explicit fresh-ground policy may call this. */
+    public void recoverDelivery() { controller.recoverReceiver(); }
+
+    /** App shutdown only. Product disconnect uses restartable stopListener(). */
+    public void close() {
+        controller.stop();
+        worker.shutdown(); // queued detach is allowed to complete
+    }
+
+    public JSONObject diagnostics() throws JSONException {
+        JSONObject result = new JSONObject();
+        for (Map.Entry<String, Object> entry : controller.snapshot().entrySet())
+            result.put(entry.getKey(), entry.getValue() == null ? JSONObject.NULL : entry.getValue());
+        return result.put("process_session_id", PROCESS_SESSION_ID).put("worker", "video-binding");
+    }
+
+    private StreamBindingController.Manager<ComponentIndexType, Frame> currentManager() {
+        ICameraStreamManager manager = MediaDataCenter.getInstance().getCameraStreamManager();
+        if (manager == null) { currentAdapter = null; return null; }
+        if (currentAdapter == null || currentAdapter.owner != manager) currentAdapter = new SdkManager(manager);
+        return currentAdapter;
+    }
+
+    /** These maps and registration calls are touched only by the serial video worker. */
+    private static final class SdkManager implements StreamBindingController.Manager<ComponentIndexType, Frame> {
+        final ICameraStreamManager owner;
+        final Map<StreamBindingController.CameraEvents<ComponentIndexType>,
+                ICameraStreamManager.AvailableCameraUpdatedListener> available = new IdentityHashMap<>();
+        final Map<Consumer<Frame>, ICameraStreamManager.ReceiveStreamListener> receivers = new IdentityHashMap<>();
+        SdkManager(ICameraStreamManager owner) { this.owner = owner; }
+        @Override public Object identity() { return owner; }
+        @Override public void addAvailable(StreamBindingController.CameraEvents<ComponentIndexType> events) {
+            ICameraStreamManager.AvailableCameraUpdatedListener listener =
+                    new ICameraStreamManager.AvailableCameraUpdatedListener() {
+                @Override public void onAvailableCameraUpdated(@NonNull List<ComponentIndexType> cameras) {
+                    events.available(cameras);
                 }
                 @Override public void onCameraStreamEnableUpdate(@NonNull Map<ComponentIndexType, Boolean> states) {
-                    synchronized (AvailableCameraListener.this) {
-                        if (generation == ticket) enabled = states.get(ComponentIndexType.LEFT_OR_MAIN);
-                    }
+                    events.enabled(states);
                 }
             };
-            manager.addAvailableCameraUpdatedListener(availableListener);
-            // A cached connection is sufficient to attempt a read-only listener
-            // registration; it is NOT used to authorize flight.
-            Boolean connected = KeyManager.getInstance().getValue(KeyTools.createKey(CameraKey.KeyConnection));
-            if (receiver == null && Boolean.TRUE.equals(connected))
-                bind(ComponentIndexType.LEFT_OR_MAIN, ticket);
-            if (camera != null && Boolean.FALSE.equals(enabled))
-                manager.enableStream(camera, true); // main image stream only, not vision sensors
-        } catch (RuntimeException e) {
-            lastError = e.toString();
-            Log.e(TAG, "camera binding failed; will retry", e);
-            detach();
+            available.put(events, listener);
+            owner.addAvailableCameraUpdatedListener(listener);
         }
-    }
-
-    private void bind(ComponentIndexType selected, long ticket) {
-        if (receiver != null) manager.removeReceiveStreamListener(receiver);
-        camera = selected;
-        buffer.nextKeyFrame();
-        receiver = (data, offset, length, info) -> {
-            synchronized (AvailableCameraListener.this) {
-                if (!running || generation != ticket) return;
-                buffer.addFrame(new Frame(data, offset, length, info));
-            }
-        };
-        manager.addReceiveStreamListener(selected, receiver);
-        rebinds++;
-        Log.i(TAG, "camera attached generation=" + ticket + " camera=" + selected);
-    }
-
-    private void detach() {
-        generation++;
-        if (manager != null) {
-            try { if (receiver != null) manager.removeReceiveStreamListener(receiver); }
-            catch (RuntimeException e) { Log.w(TAG, "receiver detach", e); }
-            try { if (availableListener != null) manager.removeAvailableCameraUpdatedListener(availableListener); }
-            catch (RuntimeException e) { Log.w(TAG, "camera list detach", e); }
+        @Override public void removeAvailable(StreamBindingController.CameraEvents<ComponentIndexType> events) {
+            ICameraStreamManager.AvailableCameraUpdatedListener listener = available.remove(events);
+            if (listener != null) owner.removeAvailableCameraUpdatedListener(listener);
         }
-        receiver = null; availableListener = null; camera = null; manager = null; enabled = null;
-        if (buffer != null) buffer.nextKeyFrame();
-    }
-
-    public synchronized void stopListener() {
-        running = false;
-        detach();
-        nextRetryMs = 0;
-        retryDelayMs = 3000;
-    }
-
-    /** Explicit bounded ground recovery when camera input is fresh but no bytes leave. */
-    public synchronized void recoverDelivery() {
-        if (!running) return;
-        Log.w(TAG, "Camera input alive but video delivery stalled; reattaching our listener only");
-        detach();
-        nextRetryMs = 0;
-        retryDelayMs = 3000;
-        ensureBound();
-    }
-
-    public synchronized JSONObject diagnostics() throws JSONException {
-        return new JSONObject().put("binding_running", running).put("binding_generation", generation)
-                .put("binding_attempts", rebinds).put("camera_selected", camera == null ? JSONObject.NULL : camera.name())
-                .put("stream_enabled", enabled == null ? JSONObject.NULL : enabled)
-                .put("binding_error", lastError == null ? JSONObject.NULL : lastError)
-                .put("retry_in_ms", Math.max(0, nextRetryMs - SystemClock.elapsedRealtime()));
+        @Override public void addReceiver(ComponentIndexType camera, Consumer<Frame> consumer) {
+            ICameraStreamManager.ReceiveStreamListener listener = (data, offset, length, info) -> {
+                // SDK owns/reuses data. Copy here, never defer the SDK byte array to a worker.
+                if (offset < 0 || length < 0 || length > 8_000_000 || offset > data.length - length) return;
+                consumer.accept(new Frame(data, offset, length, info));
+            };
+            receivers.put(consumer, listener);
+            owner.addReceiveStreamListener(camera, listener);
+        }
+        @Override public void removeReceiver(Consumer<Frame> consumer) {
+            ICameraStreamManager.ReceiveStreamListener listener = receivers.remove(consumer);
+            if (listener != null) owner.removeReceiveStreamListener(listener);
+        }
+        @Override public void enable(ComponentIndexType camera) { owner.enableStream(camera, true); }
     }
 }

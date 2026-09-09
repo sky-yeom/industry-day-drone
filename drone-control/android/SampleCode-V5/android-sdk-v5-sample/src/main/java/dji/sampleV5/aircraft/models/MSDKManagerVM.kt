@@ -45,6 +45,7 @@ class MSDKManagerVM : ViewModel() {
 
             override fun onProductChanged(productId: Int) {
                 lvProductChanges.postValue(productId)
+                com.msdkremote.PcBridge.onProductChanged(productId)
             }
 
             override fun onInitProcess(event: DJISDKInitEvent, totalProcess: Int) {

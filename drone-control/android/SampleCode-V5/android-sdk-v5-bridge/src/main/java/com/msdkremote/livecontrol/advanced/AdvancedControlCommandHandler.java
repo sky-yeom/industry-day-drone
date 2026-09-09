@@ -36,9 +36,11 @@ public final class AdvancedControlCommandHandler implements CommandHandler {
 
     @Override
     public void onCommand(@NonNull CommandServer server, @NonNull String command) {
-        // Responses produced by asynchronous DJI callbacks must never leak
-        // into a later client session: bind them to the current connection.
-        final long connectionEpoch = server.getConnectionEpoch();
+        onCommand(server,command,server.getConnectionEpoch());
+    }
+
+    @Override public void onCommand(@NonNull CommandServer server,@NonNull String command,long connectionEpoch) {
+        if(!server.isSessionActive(connectionEpoch))return;
 
         final JSONObject request;
         try {
@@ -75,8 +77,7 @@ public final class AdvancedControlCommandHandler implements CommandHandler {
             lastTimestampNs = timestampNs;
         }
 
-        // Preserve the most recent command time for diagnostics. Time-based
-        // zero/release is disabled in this build.
+        // Link activity is diagnostic only; it cannot renew the motion lease.
         stickManager.touchKeepalive();
 
         switch (type) {
@@ -100,8 +101,9 @@ public final class AdvancedControlCommandHandler implements CommandHandler {
                 if (!isTokenValid(payload)) {
                     send(server, connectionEpoch, sequence, false, "invalid_confirmation_token");
                 } else {
+                    final long landingGeneration=com.msdkremote.PcBridge.connectionGeneration();
                     stickManager.disarm((ignoredSuccess, ignoredDetail) ->
-                            FlightCommands.startLanding((success, detail) ->
+                            FlightCommands.startLanding(landingGeneration,(success, detail) ->
                                     send(server, connectionEpoch, sequence, success, detail)));
                 }
                 break;

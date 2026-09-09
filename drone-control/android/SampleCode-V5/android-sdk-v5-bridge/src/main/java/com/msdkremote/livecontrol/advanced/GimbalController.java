@@ -1,6 +1,7 @@
 package com.msdkremote.livecontrol.advanced;
 
 import androidx.annotation.NonNull;
+import com.msdkremote.lifecycle.MaintenanceGate;
 
 import dji.sdk.keyvalue.key.GimbalKey;
 import dji.sdk.keyvalue.key.KeyTools;
@@ -33,19 +34,23 @@ public final class GimbalController {
         rotation.setMode(GimbalAngleRotationMode.ABSOLUTE_ANGLE);
         rotation.setPitch(pitchDeg);
         rotation.setDuration(1.0);
-        KeyManager.getInstance().performAction(
+        final long permit=MaintenanceGate.SHARED.beginMutation("GIMBAL_PITCH",false,false);
+        if(permit==0){callback.onResult(false,"MAINTENANCE_IN_PROGRESS_OR_ACTION_PENDING");return;}
+        try { KeyManager.getInstance().performAction(
                 KeyTools.createKey(GimbalKey.KeyRotateByAngle),
                 rotation,
                 new CommonCallbacks.CompletionCallbackWithParam<EmptyMsg>() {
                     @Override
                     public void onSuccess(EmptyMsg value) {
+                        MaintenanceGate.SHARED.completeMutation(permit);
                         callback.onResult(true, "gimbal_set");
                     }
 
                     @Override
                     public void onFailure(@NonNull IDJIError error) {
+                        MaintenanceGate.SHARED.completeMutation(permit);
                         callback.onResult(false, error.toString());
                     }
-                });
+                }); }catch(RuntimeException error){callback.onResult(false,"SDK_SUBMISSION_UNCERTAIN");}
     }
 }

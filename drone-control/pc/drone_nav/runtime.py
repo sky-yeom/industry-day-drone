@@ -20,6 +20,7 @@ from .controller import GoalVisualAligner, LineFollower, Velocity
 from .estimator import PoseEstimator
 from .localization import TagLocalizer
 from .protocol import NDJSONClient, RateLimiter, Telemetry
+from .observation import observe_sector
 from .safety import SafetyFSM, State
 from .transforms import translation, yaw
 from .vision import AprilTagDetector, TcpVideoStream
@@ -1240,49 +1241,19 @@ def _directional_speed(
 
 
 def _nearest_obstacle_m(telemetry: Telemetry | None) -> float | None:
-    """Nearest positive raw horizontal range; direction mapping is not assumed."""
-    if (
-        telemetry is None
-        or telemetry.oa_horizontal_distances_mm is None
-        or telemetry.oa_obstacle_data_age_s is None
-        or telemetry.oa_obstacle_data_age_s > 1.0
-    ):
-        return None
-    valid = [value for value in telemetry.oa_horizontal_distances_mm if value > 0]
-    return min(valid) / 1000.0 if valid else None
+    """Compatibility policy: finite analysis-domain range, callback age <= 1 s."""
+    observation = observe_sector(telemetry, "all")
+    return observation.range_m if observation.callback_recency == "RECENT_CHANGE" else None
 
 
 def _directional_obstacle_m(
     telemetry: Telemetry | None, direction: str
 ) -> float | None:
-    """Nearest fresh range in the commanded lateral sector.
-
-    DJI's official HSI renders the obstacle array clockwise in aircraft BODY
-    coordinates: 0 degrees is front, 90 right, 180 back, and 270 left.
-    """
+    """Compatibility wrapper retaining the existing one-second callback-age policy."""
     if direction not in {"left", "right"}:
         return None
-    if (
-        telemetry is None
-        or telemetry.oa_horizontal_distances_mm is None
-        or telemetry.oa_obstacle_data_age_s is None
-        or telemetry.oa_obstacle_data_age_s > 1.0
-    ):
-        return None
-    values = telemetry.oa_horizontal_distances_mm
-    if not values:
-        return None
-    interval = telemetry.oa_horizontal_angle_interval_deg
-    if interval is None or interval <= 0:
-        interval = 360.0 / len(values)
-    center = 90.0 if direction == "right" else 270.0
-    selected = []
-    for index, value in enumerate(values):
-        angle = (index * interval) % 360.0
-        delta = abs((angle - center + 180.0) % 360.0 - 180.0)
-        if delta <= LATERAL_OBSTACLE_HALF_WIDTH_DEG and value > 0:
-            selected.append(value)
-    return min(selected) / 1000.0 if selected else None
+    observation = observe_sector(telemetry, direction, LATERAL_OBSTACLE_HALF_WIDTH_DEG)
+    return observation.range_m if observation.callback_recency == "RECENT_CHANGE" else None
 
 
 def _diagnostic_velocity(direction: str, command_mps: float, up_mps: float) -> Velocity:

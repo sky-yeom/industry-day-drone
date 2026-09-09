@@ -16,6 +16,14 @@ import dji.v5.manager.aircraft.perception.listener.ObstacleDataListener;
 import dji.v5.manager.aircraft.perception.listener.PerceptionInformationListener;
 
 import java.util.List;
+import java.util.Map;
+import java.util.LinkedHashMap;
+import java.util.function.Consumer;
+import org.json.JSONObject;
+import com.msdkremote.PcBridge;
+import com.msdkremote.lifecycle.PerceptionBinding;
+import com.msdkremote.lifecycle.MaintenanceGate;
+import dji.v5.manager.interfaces.IPerceptionManager;
 
 /**
  * Public obstacle-avoidance settings and observations, not firmware bypass.
@@ -53,7 +61,19 @@ public final class ObstacleAvoidanceController {
     private static volatile int upwardObstacleDistanceMm = -1;
     private static volatile int downwardObstacleDistanceMm = -1;
     private static volatile long obstacleDataUpdatedMs = 0;
-    private static boolean listenerStarted = false;
+    private static final PerceptionBinding binding=new PerceptionBinding(SystemClock::elapsedRealtime,
+            PcBridge::connectionGeneration,PcBridge.processStartId());
+    private static volatile long mutationGeneration;
+    private static volatile String lastMutation="NONE";
+    public static JSONObject snapshotJson() {
+        JSONObject result=new JSONObject(binding.snapshot());
+        try {result.put("oa_horizontal_switch_support",horizontalSwitchSupport);
+            result.put("oa_upward_switch_support",upwardSwitchSupport);result.put("oa_last_mutation",lastMutation);}
+        catch(org.json.JSONException ignored){}
+        return result;
+    }
+    public static void stopPerceptionListener(){binding.stop();}
+
 
     public interface ResultCallback {
         void onResult(boolean success, String detail);
@@ -64,11 +84,11 @@ public final class ObstacleAvoidanceController {
 
     /** Comma-separated directions whose vision sensors report working. */
     public static String workingSensors() {
-        return workingSensors;
+        Object v=binding.snapshot().get("oa_sensors_working");return v==null?"":v.toString();
     }
 
     public static String avoidanceType() {
-        return avoidanceType;
+        Object v=binding.snapshot().get("oa_type");return v==null?"UNKNOWN":v.toString();
     }
 
     public static String horizontalSwitchSupport() {
@@ -80,103 +100,81 @@ public final class ObstacleAvoidanceController {
     }
 
     public static boolean horizontalAvoidanceEnabled() {
-        return horizontalAvoidanceEnabled;
+        return Boolean.TRUE.equals(binding.snapshot().get("oa_horizontal_enabled"));
     }
 
     public static boolean upwardAvoidanceEnabled() {
-        return upwardAvoidanceEnabled;
+        return Boolean.TRUE.equals(binding.snapshot().get("oa_upward_enabled"));
     }
 
     public static boolean downwardAvoidanceEnabled() {
-        return downwardAvoidanceEnabled;
+        return Boolean.TRUE.equals(binding.snapshot().get("oa_downward_enabled"));
     }
 
     public static boolean visionPositioningEnabled() {
-        return visionPositioningEnabled;
+        return Boolean.TRUE.equals(binding.snapshot().get("vision_positioning_enabled"));
     }
 
     public static int horizontalAngleIntervalDeg() {
-        return horizontalAngleIntervalDeg;
+        Object v=binding.snapshot().get("oa_horizontal_angle_interval_deg");return v instanceof Number?((Number)v).intValue():0;
     }
 
     /** Raw 360-degree aircraft obstacle matrix, in DJI's published order. */
     public static int[] horizontalObstacleDistancesMm() {
-        return horizontalObstacleDistancesMm.clone();
+        return ((int[])binding.snapshot().get("oa_horizontal_distances_mm")).clone();
     }
 
     public static int upwardObstacleDistanceMm() {
-        return upwardObstacleDistanceMm;
+        Object v=binding.snapshot().get("oa_upward_distance_mm");return v instanceof Number?((Number)v).intValue():-1;
     }
 
     public static int downwardObstacleDistanceMm() {
-        return downwardObstacleDistanceMm;
+        Object v=binding.snapshot().get("oa_downward_distance_mm");return v instanceof Number?((Number)v).intValue():-1;
     }
 
     public static long obstacleDataAgeMs() {
-        long updated = obstacleDataUpdatedMs;
-        return updated <= 0 ? -1 : SystemClock.elapsedRealtime() - updated;
+        return ((Number)binding.snapshot().get("oa_obstacle_data_age_ms")).longValue();
     }
 
-    /** Subscribe once so ACKs can carry sensor working states and ranges. */
+    /** Each registration captures its manager and both listener identities before SDK entry. */
     public static void startPerceptionListener() {
-        synchronized (ObstacleAvoidanceController.class) {
-            if (listenerStarted) {
-                return;
+        final IPerceptionManager manager=PerceptionManager.getInstance();
+        binding.ensure(new PerceptionBinding.Adapter() {
+            private PerceptionInformationListener infoListener;
+            private ObstacleDataListener rangeListener;
+            @Override public void prepare(Consumer<Map<String,Object>> callback,Consumer<PerceptionBinding.Range> rangeCallback) {
+                infoListener=info->{
+                    Map<String,Object> values=new LinkedHashMap<>(),directions=new LinkedHashMap<>();
+                    ObstacleAvoidanceType type=info.getObstacleAvoidanceType();
+                    values.put("oa_type",type==null?null:type.name());
+                    values.put("oa_horizontal_enabled",info.isHorizontalObstacleAvoidanceEnabled());
+                    values.put("oa_upward_enabled",info.isUpwardObstacleAvoidanceEnabled());
+                    values.put("oa_downward_enabled",info.isDownwardObstacleAvoidanceEnabled());
+                    values.put("vision_positioning_enabled",info.isVisionPositioningEnabled());
+                    directions.put("left",info.getLeftSideObstacleAvoidanceWorking());
+                    directions.put("right",info.getRightSideObstacleAvoidanceWorking());
+                    directions.put("fwd",info.getForwardObstacleAvoidanceWorking());
+                    directions.put("back",info.getBackwardObstacleAvoidanceWorking());
+                    directions.put("up",info.getUpwardObstacleAvoidanceWorking());
+                    directions.put("down",info.getDownwardObstacleAvoidanceWorking());
+                    StringBuilder working=new StringBuilder();
+                    for(Map.Entry<String,Object> e:directions.entrySet())append(working,e.getKey(),(Boolean)e.getValue());
+                    values.put("oa_sensors_working",working.toString());values.put("working_directions",directions);
+                    callback.accept(values);
+                };
+                rangeListener=data->{
+                    List<Integer> list=data.getHorizontalObstacleDistance();
+                    int[] values=new int[list==null?0:list.size()];
+                    for(int i=0;i<values.length;i++)values[i]=list.get(i)==null?-1:list.get(i);
+                    rangeCallback.accept(new PerceptionBinding.Range(data.getHorizontalAngleInterval(),values,
+                            data.getUpwardObstacleDistance(),data.getDownwardObstacleDistance()));
+                };
             }
-            listenerStarted = true;
-        }
-        try {
-            PerceptionManager.getInstance().addPerceptionInformationListener(
-                    new PerceptionInformationListener() {
-                        @Override
-                        public void onUpdate(@NonNull PerceptionInfo info) {
-                            ObstacleAvoidanceType liveType = info.getObstacleAvoidanceType();
-                            avoidanceType = liveType == null ? "UNKNOWN" : liveType.name();
-                            StringBuilder active = new StringBuilder();
-                            append(active, "left", info.getLeftSideObstacleAvoidanceWorking());
-                            append(active, "right", info.getRightSideObstacleAvoidanceWorking());
-                            append(active, "fwd", info.getForwardObstacleAvoidanceWorking());
-                            append(active, "back", info.getBackwardObstacleAvoidanceWorking());
-                            append(active, "up", info.getUpwardObstacleAvoidanceWorking());
-                            append(active, "down", info.getDownwardObstacleAvoidanceWorking());
-                            horizontalAvoidanceEnabled =
-                                    info.isHorizontalObstacleAvoidanceEnabled();
-                            upwardAvoidanceEnabled = info.isUpwardObstacleAvoidanceEnabled();
-                            downwardAvoidanceEnabled = info.isDownwardObstacleAvoidanceEnabled();
-                            visionPositioningEnabled = info.isVisionPositioningEnabled();
-                            String now = active.toString();
-                            if (!now.equals(workingSensors)) {
-                                Log.i(TAG, "working vision sensors: "
-                                        + (now.isEmpty() ? "(none)" : now));
-                            }
-                            workingSensors = now;
-                        }
-                    });
-            PerceptionManager.getInstance().addObstacleDataListener(
-                    new ObstacleDataListener() {
-                        @Override
-                        public void onUpdate(@NonNull ObstacleData data) {
-                            horizontalAngleIntervalDeg = data.getHorizontalAngleInterval();
-                            List<Integer> values = data.getHorizontalObstacleDistance();
-                            if (values == null || values.isEmpty()) {
-                                horizontalObstacleDistancesMm = new int[0];
-                            } else {
-                                int[] snapshot = new int[values.size()];
-                                for (int i = 0; i < values.size(); i++) {
-                                    Integer value = values.get(i);
-                                    snapshot[i] = value == null ? -1 : value;
-                                }
-                                horizontalObstacleDistancesMm = snapshot;
-                            }
-                            upwardObstacleDistanceMm = data.getUpwardObstacleDistance();
-                            downwardObstacleDistanceMm = data.getDownwardObstacleDistance();
-                            obstacleDataUpdatedMs = SystemClock.elapsedRealtime();
-                        }
-                    });
-            Log.i(TAG, "perception listener started");
-        } catch (RuntimeException error) {
-            Log.e(TAG, "perception listener failed", error);
-        }
+            @Override public void addInfo(Consumer<Map<String,Object>> callback){manager.addPerceptionInformationListener(infoListener);}
+            @Override public void addRange(Consumer<PerceptionBinding.Range> callback){manager.addObstacleDataListener(rangeListener);}
+            @Override public void removeInfo(Consumer<Map<String,Object>> callback){if(infoListener!=null)manager.removePerceptionInformationListener(infoListener);}
+            @Override public void removeRange(Consumer<PerceptionBinding.Range> callback){if(rangeListener!=null)manager.removeObstacleDataListener(rangeListener);}
+        });
     }
 
     private static void append(StringBuilder out, String name, Boolean working) {
@@ -197,6 +195,20 @@ public final class ObstacleAvoidanceController {
      * and precision landing.
      */
     public static void setClose(@NonNull ResultCallback callback) {
+        final long permit=MaintenanceGate.SHARED.beginMutation("OA_SET_CLOSE",false,false);
+        if(permit==0){callback.onResult(false,"MAINTENANCE_IN_PROGRESS_OR_ACTION_PENDING");return;}
+        mutationGeneration=PcBridge.connectionGeneration();
+        lastMutation="operation="+permit+",source=PC_EXPLICIT,requested=CLOSE,started_ms="+SystemClock.elapsedRealtime();
+        final java.util.concurrent.atomic.AtomicBoolean replied=new java.util.concurrent.atomic.AtomicBoolean();
+        setCloseInternal((ok,detail)->{
+            if(detail.contains("threw"))MaintenanceGate.SHARED.uncertainMutation(permit);
+            else MaintenanceGate.SHARED.completeMutation(permit);
+            if(!replied.compareAndSet(false,true))return;
+            lastMutation="operation="+permit+",source=PC_EXPLICIT,requested=CLOSE,completed_ms="+SystemClock.elapsedRealtime()+",ok="+ok+",detail="+detail;
+            callback.onResult(ok,detail);
+        });
+    }
+    private static void setCloseInternal(@NonNull ResultCallback callback) {
         horizontalSwitchSupport = "UNKNOWN";
         upwardSwitchSupport = "UNKNOWN";
         try {
@@ -221,6 +233,7 @@ public final class ObstacleAvoidanceController {
     }
 
     private static void disableHorizontal(@NonNull ResultCallback callback) {
+        if(mutationGeneration!=PcBridge.connectionGeneration()){callback.onResult(false,"SOURCE_CHANGED");return;}
         try {
             PerceptionManager.getInstance().setObstacleAvoidanceEnabled(
                     false,
@@ -254,6 +267,7 @@ public final class ObstacleAvoidanceController {
     }
 
     private static void disableUpward(@NonNull ResultCallback callback) {
+        if(mutationGeneration!=PcBridge.connectionGeneration()){callback.onResult(false,"SOURCE_CHANGED");return;}
         try {
             PerceptionManager.getInstance().setObstacleAvoidanceEnabled(
                     false,
@@ -298,7 +312,7 @@ public final class ObstacleAvoidanceController {
                             if ("UNSUPPORTED".equals(horizontalSwitchSupport)) {
                                 readBackUpward(
                                         typeClosed, name,
-                                        horizontalAvoidanceEnabled, callback);
+                                        horizontalAvoidanceEnabled(), callback);
                             } else {
                                 readBackHorizontal(typeClosed, name, callback);
                             }
@@ -352,7 +366,7 @@ public final class ObstacleAvoidanceController {
         if ("UNSUPPORTED".equals(upwardSwitchSupport)) {
             finishReadBack(
                     typeClosed, typeName, horizontalEnabled,
-                    upwardAvoidanceEnabled, callback);
+                    upwardAvoidanceEnabled(), callback);
             return;
         }
         try {

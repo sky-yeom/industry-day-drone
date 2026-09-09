@@ -5,6 +5,18 @@ import static org.junit.Assert.*;
 import static com.msdkremote.livevideo.DeliveryHealth.Recovery.*;
 
 public class DeliveryHealthTest {
+    @Test public void recoveryIsOptInAndHasABudgetWithoutWriteProgress() {
+        DeliveryHealth d = new DeliveryHealth(); d.connected(0);
+        assertEquals(NONE, d.claimRecovery(3000, false, true, 10, true));
+        assertEquals("automatic_recovery_disabled", d.snapshot(3000).recoveryBlocked);
+        assertEquals(REBIND_CAMERA, d.claimRecovery(3000, true, true, 10, true));
+        assertEquals("waiting_for_next_keyframe", d.snapshot(3000).recoveryReason);
+        assertEquals(REBIND_CAMERA, d.claimRecovery(13000, true, true, 10, true));
+        assertEquals(REBIND_CAMERA, d.claimRecovery(23000, true, true, 10, true));
+        assertEquals(NONE, d.claimRecovery(33000, true, true, 10, true));
+        assertEquals("recovery_budget_exhausted", d.snapshot(33000).recoveryBlocked);
+    }
+
     @Test public void freshCameraDoesNotHideMissingDelivery() {
         DeliveryHealth d = new DeliveryHealth(); d.connected(0);
         assertEquals(NONE, d.claimRecovery(2999, true, 10));

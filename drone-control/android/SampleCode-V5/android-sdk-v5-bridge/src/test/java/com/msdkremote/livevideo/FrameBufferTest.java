@@ -4,6 +4,30 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class FrameBufferTest {
+    @Test(timeout=2000) public void cameraGenerationRejectsOldCopiedFrameWithoutReplacingReader() throws Exception {
+        long[] now = {0};
+        FrameBuffer buffer = new FrameBuffer(100, () -> now[0]);
+        long reader = buffer.openReader();
+        buffer.beginCameraGeneration(1);
+        assertTrue(buffer.addFrame(frame(20, true), 1));
+        assertEquals(0, buffer.cameraAgeMs());
+        Frame copiedBeforeStop = frame(20, true);
+        buffer.beginCameraGeneration(2);
+        assertEquals(-1, buffer.cameraAgeMs());
+        assertFalse(buffer.addFrame(copiedBeforeStop, 1));
+        Frame current = frame(30, true);
+        now[0] = 100;
+        assertTrue(buffer.addFrame(current, 2));
+        assertSame(current, buffer.getFrame(reader));
+    }
+
+    @Test public void sdkByteArrayIsCopiedBeforeCallbackReturns() {
+        byte[] sdk = {1, 2, 3};
+        Frame frame = new Frame(sdk, 0, sdk.length, 1, 1, true, 0, 30, null);
+        sdk[0] = 99;
+        assertArrayEquals(new byte[]{1, 2, 3}, frame.getData());
+    }
+
     private Frame frame(int size, boolean key) {
         return new Frame(new byte[size], 0, size, 1080, 1920, key, 0, 30, null);
     }

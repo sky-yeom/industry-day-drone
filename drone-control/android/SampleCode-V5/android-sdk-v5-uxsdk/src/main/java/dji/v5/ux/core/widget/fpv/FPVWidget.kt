@@ -24,6 +24,10 @@ package dji.v5.ux.core.widget.fpv
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.ContextWrapper
+import android.app.Activity
+import android.os.Looper
+import android.os.SystemClock
 import android.content.res.ColorStateList
 import android.graphics.drawable.Drawable
 import android.util.AttributeSet
@@ -70,9 +74,13 @@ open class FPVWidget @JvmOverloads constructor(
     private var viewWidth = 0
     private var viewHeight = 0
     private var rotationAngle = 0
-    private var surface: Surface? = null
-    private var width = -1
-    private var height = -1
+    private val surfacePolicy = SurfaceBindingPolicy()
+    private val previewDiagnostics = PreviewDiagnostics { SystemClock.elapsedRealtime() }
+    private var probeOwner: ICameraStreamManager? = null
+    private var probeListener: ICameraStreamManager.CameraFrameListener? = null
+    private var probeTimeout: Runnable? = null
+    private var probeError: String? = null
+    private var lastPreviewLogAt = -1L
     private val fpvSurfaceView: SurfaceView = findViewById(R.id.surface_view_fpv)
     private val cameraNameTextView: TextView = findViewById(R.id.textview_camera_name)
     private val cameraSideTextView: TextView = findViewById(R.id.textview_camera_side)
@@ -82,22 +90,28 @@ open class FPVWidget @JvmOverloads constructor(
 
     private val cameraSurfaceCallback = object : SurfaceHolder.Callback {
         override fun surfaceCreated(holder: SurfaceHolder) {
-            surface = holder.surface
-            LogUtils.i(LogPath.SAMPLE, "surfaceCreated: ${widgetModel.getCameraIndex()}")
+            onSurfaceThread {
+                stopDecodedFrameProbe()
+                if (surfacePolicy.surface !== holder.surface) removeSurfaceBinding()
+                surfacePolicy.created(holder.surface)
+                logPreview("created") // size is intentionally unknown until surfaceChanged
+            }
         }
 
         override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-            this@FPVWidget.width = width
-            this@FPVWidget.height = height
-            LogUtils.i(LogPath.SAMPLE, "surfaceChanged: ${widgetModel.getCameraIndex()}", "width:$width", ",height:$height")
-            updateCameraStream()
+            onSurfaceThread {
+                if (surfacePolicy.surface !== holder.surface) removeSurfaceBinding()
+                surfacePolicy.changed(holder.surface, width, height)
+                updateCameraStream()
+                logPreview("changed")
+            }
         }
 
         override fun surfaceDestroyed(holder: SurfaceHolder) {
-            width = 0
-            height = 0
-            LogUtils.i(LogPath.SAMPLE, "surfaceDestroyed: ${widgetModel.getCameraIndex()}")
-            removeSurfaceBinding()
+            onSurfaceThread {
+                try { removeSurfaceBinding() } finally { surfacePolicy.destroy() }
+                logPreview("destroyed")
+            }
         }
     }
 
@@ -280,7 +294,18 @@ open class FPVWidget @JvmOverloads constructor(
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         if (!isInEditMode) {
+            surfacePolicy.attach()
             widgetModel.setup()
+            val holder = fpvSurfaceView.holder
+            if (holder.surface.isValid) {
+                surfacePolicy.created(holder.surface)
+                val size = holder.surfaceFrame
+                if (size.width() > 0 && size.height() > 0) {
+                    surfacePolicy.changed(holder.surface, size.width(), size.height())
+                    updateCameraStream()
+                }
+            }
+            logPreview("attached")
         }
         initializeListeners()
     }
@@ -297,7 +322,9 @@ open class FPVWidget @JvmOverloads constructor(
     override fun onDetachedFromWindow() {
         destroyListeners()
         if (!isInEditMode) {
-            widgetModel.cleanup()
+            surfacePolicy.detach() // invalidate posted updates and forget the destroyed Surface first
+            try { removeSurfaceBinding() } finally { widgetModel.cleanup() }
+            logPreview("detached")
         }
         super.onDetachedFromWindow()
     }
@@ -305,7 +332,9 @@ open class FPVWidget @JvmOverloads constructor(
     override fun reactToModelChanges() {
         addReaction(widgetModel.displayMsgProcessor.toFlowable().observeOn(SchedulerProvider.ui()).subscribe { cameraName: String -> updateCameraName(cameraName) })
         addReaction(widgetModel.cameraSideProcessor.toFlowable().observeOn(SchedulerProvider.ui()).subscribe { cameraSide: String -> updateCameraSide(cameraSide) })
-        addReaction(widgetModel.hasVideoViewChanged.observeOn(SchedulerProvider.ui()).subscribe { delayCalculator() })
+        addReaction(widgetModel.hasVideoViewChanged.observeOn(SchedulerProvider.ui()).subscribe {
+            updateCameraStream()
+        })
     }
 
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
@@ -327,13 +356,16 @@ open class FPVWidget @JvmOverloads constructor(
     }
 
     fun updateVideoSource(source: ComponentIndexType) {
-        LogUtils.i(LogPath.SAMPLE, "updateVideoSource", source, this)
-        widgetModel.updateCameraSource(source, CameraLensType.UNKNOWN)
-        updateCameraStream()
-        if (source == ComponentIndexType.VISION_ASSIST) {
-            widgetModel.enableVisionAssist()
+        onSurfaceThread {
+            if (widgetModel.getCameraIndex() != source) stopDecodedFrameProbe()
+            widgetModel.updateCameraSource(source, CameraLensType.UNKNOWN)
+            surfacePolicy.allowRetry()
+            updateCameraStream()
+            if (source == ComponentIndexType.VISION_ASSIST) {
+                widgetModel.enableVisionAssist()
+            }
+            fpvSurfaceView.invalidate()
         }
-        fpvSurfaceView.invalidate()
     }
 
     fun setOnFPVStreamSourceListener(listener: FPVStreamSourceListener) {
@@ -493,23 +525,106 @@ open class FPVWidget @JvmOverloads constructor(
     }
 
     private fun updateCameraStream() {
-        removeSurfaceBinding()
-        surface?.let {
-            widgetModel.putCameraStreamSurface(
-                it,
-                width,
-                height,
-                ICameraStreamManager.ScaleType.CENTER_INSIDE
-            )
+        if (Looper.myLooper() != Looper.getMainLooper()) { onSurfaceThread { updateCameraStream() }; return }
+        val surface = surfacePolicy.surface as? Surface ?: return
+        val owner = widgetModel.currentStreamManager()
+        val scale = ICameraStreamManager.ScaleType.CENTER_INSIDE
+        val candidate = surfacePolicy.candidate(surface.isValid, owner, widgetModel.getCameraIndex().name, scale.name)
+        if (candidate == null) {
+            if (surfacePolicy.bound != null) removeSurfaceBinding()
+            return
         }
+        if (!surfacePolicy.needsPut(candidate, widgetModel.hasSurfaceBinding(surface, owner!!))) return
+        if (probeOwner != null && probeOwner !== owner) stopDecodedFrameProbe()
+        val success = widgetModel.tryPutCameraStreamSurface(surface, candidate.width, candidate.height, scale, owner)
+        surfacePolicy.putResult(candidate, success)
+        logPreview(if (success) "put_success" else "put_failed")
     }
 
     private fun removeSurfaceBinding() {
-        if (width <= 0 || height <= 0 || surface == null) {
-            if (surface != null) {
-                widgetModel.removeCameraStreamSurface(surface!!)
-            }
+        try { stopDecodedFrameProbe() } finally {
+            try { widgetModel.clearCameraStreamSurface() } finally { surfacePolicy.forgetBinding() }
         }
+    }
+
+    private fun onSurfaceThread(effect: () -> Unit) {
+        val ticket = surfacePolicy.generation
+        if (Looper.myLooper() == Looper.getMainLooper()) effect()
+        else post { if (ticket == surfacePolicy.generation) effect() }
+    }
+
+    /** Optional diagnostics only. OFF by default; explicitly enabled probes stop within 30 seconds. */
+    @JvmOverloads
+    fun setDecodedFrameProbeEnabled(enabled: Boolean, durationMs: Long = 30000) {
+        onSurfaceThread {
+            stopDecodedFrameProbe()
+            if (!enabled || !surfacePolicy.attached) return@onSurfaceThread
+            val camera = widgetModel.getCameraIndex()
+            if (camera != ComponentIndexType.LEFT_OR_MAIN && camera != ComponentIndexType.FPV) return@onSurfaceThread
+            val owner = widgetModel.currentStreamManager() ?: return@onSurfaceThread
+            val surface = surfacePolicy.surface as? Surface ?: return@onSurfaceThread
+            if (!surface.isValid || !widgetModel.hasSurfaceBinding(surface, owner)) return@onSurfaceThread
+            val duration = durationMs.coerceIn(1, 30000)
+            val ticket = previewDiagnostics.startProbe(camera.name, duration)
+            val listener = object : ICameraStreamManager.CameraFrameListener {
+                override fun onFrame(frameData: ByteArray, offset: Int, length: Int, width: Int, height: Int,
+                                     format: ICameraStreamManager.FrameFormat) {
+                    // Counter-only callback; never copy or retain the SDK pixel array.
+                    previewDiagnostics.frame(ticket, width, height, format.name)
+                }
+            }
+            probeOwner = owner; probeListener = listener
+            try {
+                owner.addFrameListener(camera, ICameraStreamManager.FrameFormat.YUV420_888, listener)
+                probeError = null
+                val timeout = Runnable { stopDecodedFrameProbe(); logPreview("probe_timeout") }
+                probeTimeout = timeout
+                postDelayed(timeout, duration)
+            } catch (error: RuntimeException) {
+                probeError = "addFrameListener: ${error.javaClass.simpleName}: ${error.message}"
+                stopDecodedFrameProbe()
+            }
+            logPreview("probe_requested")
+        }
+    }
+
+    private fun stopDecodedFrameProbe() {
+        previewDiagnostics.stopProbe() // old callbacks lose validity before SDK removal
+        probeTimeout?.let { removeCallbacks(it) }; probeTimeout = null
+        val owner = probeOwner; val listener = probeListener
+        probeOwner = null; probeListener = null
+        if (owner != null && listener != null) {
+            try { owner.removeFrameListener(listener) }
+            catch (error: RuntimeException) { probeError = "removeFrameListener: ${error.javaClass.simpleName}: ${error.message}" }
+        }
+    }
+
+    /** Raw transport and PC decoding have independent diagnostics; put success does not prove phone pixels. */
+    fun previewSnapshot(): Map<String, Any?> {
+        var activityContext = context
+        while (activityContext is ContextWrapper && activityContext !is Activity) {
+            val next = activityContext.baseContext
+            if (next === activityContext) break
+            activityContext = next
+        }
+        return previewDiagnostics.snapshot() + widgetModel.surfaceDiagnostics() + linkedMapOf(
+            "context" to context.javaClass.name, "activity" to activityContext.javaClass.name,
+            "widget_identity" to System.identityHashCode(this), "widget_id" to id,
+            "attached" to surfacePolicy.attached, "visibility" to visibility,
+            "surface_generation" to surfacePolicy.generation,
+            "surface_valid" to ((surfacePolicy.surface as? Surface)?.isValid ?: false),
+            "surface_width" to surfacePolicy.width, "surface_height" to surfacePolicy.height,
+            "surface_bound" to (surfacePolicy.bound?.let {
+                widgetModel.hasSurfaceBinding(it.surface as Surface, it.manager as ICameraStreamManager)
+            } ?: false), "camera" to widgetModel.getCameraIndex().name,
+            "probe_error" to probeError)
+    }
+
+    private fun logPreview(event: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (lastPreviewLogAt >= 0 && now - lastPreviewLogAt < 1000) return
+        lastPreviewLogAt = now
+        LogUtils.i(LogPath.SAMPLE, "FPVPreview event=$event ${previewSnapshot()}")
     }
 
     /**

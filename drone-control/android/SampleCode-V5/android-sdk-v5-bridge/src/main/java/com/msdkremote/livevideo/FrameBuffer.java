@@ -20,6 +20,10 @@ class FrameBuffer
     private final LongSupplier clock;
     private static final int MAX_SINGLE_FRAME_BYTES = 8_000_000;
     private long readerGeneration;
+    private long cameraGeneration, currentFrames, currentBytes, currentKeyFrames, oldCallbackDrops;
+    private long currentFirstRawMs = -1, currentLastRawMs = -1, currentFirstKeyMs = -1, currentLastKeyMs = -1;
+    private int currentWidth, currentHeight;
+    private FrameCodec currentCodec;
     private long keyFrames, oversizedFrames, rejectedOversizedFrames, lastKeyFrameMs;
     private int largestFrameBytes;
 
@@ -32,7 +36,7 @@ class FrameBuffer
             result.put("delivered_frames", deliveredFrames);
             result.put("dropped_frames", droppedFrames);
             result.put("buffer_bytes", bufferSize);
-            result.put("camera_age_ms", lastReceivedMs == 0 ? -1 : now - lastReceivedMs);
+            result.put("camera_age_ms", currentLastRawMs < 0 ? -1 : now - currentLastRawMs);
             result.put("delivery_age_ms", lastDeliveredMs == 0 ? -1 : now - lastDeliveredMs);
             result.put("waiting_keyframe", nextKeyFrame);
             result.put("input_keyframes", keyFrames);
@@ -41,6 +45,19 @@ class FrameBuffer
             result.put("oversized_frames", oversizedFrames);
             result.put("rejected_oversized_frames", rejectedOversizedFrames);
             result.put("reader_generation", readerGeneration);
+            result.put("camera_generation", cameraGeneration);
+            result.put("current_camera_frames", currentFrames);
+            result.put("current_camera_bytes", currentBytes);
+            result.put("current_camera_keyframes", currentKeyFrames);
+            result.put("current_first_raw_at_ms", currentFirstRawMs);
+            result.put("current_first_keyframe_at_ms", currentFirstKeyMs);
+            result.put("current_keyframe_age_ms", currentLastKeyMs < 0 ? -1 : now - currentLastKeyMs);
+            result.put("current_width", currentWidth);
+            result.put("current_height", currentHeight);
+            result.put("current_codec", currentCodec == null ? JSONObject.NULL : currentCodec.toString());
+            result.put("old_callback_drops", oldCallbackDrops);
+            result.put("camera_counters_scope", "lifetime; current_camera_* is generation scoped");
+            result.put("keyframe_request_sent", false);
             result.put("delivery_counter_stage", "queue_dequeue_not_socket_write");
             return result;
         }
@@ -65,6 +82,11 @@ class FrameBuffer
         synchronized (lock) { return this.bufferSize; }
     }
 
+    public boolean isWaitingKeyframe() {
+        synchronized (lock) { return nextKeyFrame; }
+    }
+
+    /** Discard queued data and wait for the next I-frame; sends no request to DJI. */
     public void nextKeyFrame() {
         synchronized (lock) {
             this.nextKeyFrame = true;
@@ -77,17 +99,45 @@ class FrameBuffer
 
     public void addFrame(Frame frame)
     {
+        synchronized (lock) { addFrame(frame, cameraGeneration); }
+    }
+
+    /** Invalidate old raw callbacks independently of the current socket reader. */
+    public void beginCameraGeneration(long generation) {
         synchronized (lock) {
+            if (generation < cameraGeneration) return;
+            cameraGeneration = generation;
+            currentFrames = currentBytes = currentKeyFrames = 0;
+            currentFirstRawMs = currentLastRawMs = currentFirstKeyMs = currentLastKeyMs = -1;
+            currentWidth = currentHeight = 0;
+            currentCodec = null;
+            nextKeyFrame();
+        }
+    }
+
+    public boolean addFrame(Frame frame, long generation) {
+        synchronized (lock) {
+            if (generation != cameraGeneration) { oldCallbackDrops++; return false; }
             receivedFrames++;
             receivedBytes += frame.getSize();
             lastReceivedMs = clock.getAsLong();
+            currentFrames++;
+            currentBytes += frame.getSize();
+            if (currentFirstRawMs < 0) currentFirstRawMs = lastReceivedMs;
+            currentLastRawMs = lastReceivedMs;
+            currentWidth = frame.getWidth(); currentHeight = frame.getHeight(); currentCodec = frame.getCodec();
+            if (frame.isKeyFrame()) {
+                currentKeyFrames++;
+                if (currentFirstKeyMs < 0) currentFirstKeyMs = lastReceivedMs;
+                currentLastKeyMs = lastReceivedMs;
+            }
             largestFrameBytes = Math.max(largestFrameBytes, frame.getSize());
             if (frame.isKeyFrame()) { keyFrames++; lastKeyFrameMs = lastReceivedMs; }
             if (frame.getSize() > maxBufferSize) oversizedFrames++;
             if (frame.getSize() > MAX_SINGLE_FRAME_BYTES) {
                 rejectedOversizedFrames++; droppedFrames++;
                 nextKeyFrame();
-                return;
+                return true;
             }
             this.frames.add(frame);
             this.bufferSize += frame.getSize();
@@ -106,6 +156,7 @@ class FrameBuffer
             }
 
             lock.notifyAll();
+            return true;
         }
     }
 
@@ -195,7 +246,7 @@ class FrameBuffer
 
     public long cameraAgeMs() {
         synchronized (lock) {
-            return lastReceivedMs == 0 ? -1 : clock.getAsLong() - lastReceivedMs;
+            return currentLastRawMs < 0 ? -1 : clock.getAsLong() - currentLastRawMs;
         }
     }
 }

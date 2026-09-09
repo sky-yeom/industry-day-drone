@@ -1,5 +1,9 @@
 package com.msdkremote.livecontrol.advanced;
 
+import com.msdkremote.lifecycle.MaintenanceGate;
+import com.msdkremote.lifecycle.CommandWatchdog;
+import com.msdkremote.PcBridge;
+
 import android.os.SystemClock;
 import android.util.Log;
 
@@ -117,6 +121,9 @@ public final class StickControlManager {
     // older epoch must never re-arm.
     private long epoch = 0;
     private long lastHeartbeatMs;
+    private final CommandWatchdog watchdog=new CommandWatchdog();
+    private long stateListenerGeneration=-1;
+    private long armedConnectionGeneration=-1;
     private long lastSequence = -1;
     private StickMode stickMode = StickMode.OFFICIAL_ADVANCED;
     private volatile long modeRequestedMs = 0;
@@ -179,11 +186,15 @@ public final class StickControlManager {
                 return;
             }
         }
+        final long bindingGeneration=PcBridge.connectionGeneration();
+        stateListenerGeneration=bindingGeneration;
         VirtualStickManager.getInstance().setVirtualStickStateListener(
                 new VirtualStickStateListener() {
                     @Override
                     public void onVirtualStickStateUpdate(@NonNull VirtualStickState state) {
+                        if(bindingGeneration!=PcBridge.connectionGeneration() || stateListenerGeneration!=bindingGeneration)return;
                         vsEnabled = state.isVirtualStickEnable();
+                        updateGateState();
                         vsAdvancedEnabled = state.isVirtualStickAdvancedModeEnabled();
                         Object owner = state.getCurrentFlightControlAuthorityOwner();
                         vsAuthorityOwner = owner == null ? null : owner.toString();
@@ -195,6 +206,7 @@ public final class StickControlManager {
                     @Override
                     public void onChangeReasonUpdate(
                             @NonNull FlightControlAuthorityChangeReason reason) {
+                        if(bindingGeneration!=PcBridge.connectionGeneration() || stateListenerGeneration!=bindingGeneration)return;
                         vsChangeReason = reason.toString();
                         Log.w(TAG, "Flight control authority changed: " + reason);
                     }
@@ -205,6 +217,7 @@ public final class StickControlManager {
     public void invalidateStateListener() {
         synchronized (lock) {
             stateListenerStarted = false;
+            stateListenerGeneration=-1;
             vsEnabled = null;
             vsAdvancedEnabled = null;
             vsAuthorityOwner = null;
@@ -212,8 +225,26 @@ public final class StickControlManager {
         }
     }
 
+    private void updateGateState() {
+        boolean a,e; synchronized(lock){a=armed;e=enabling;}
+        MaintenanceGate.SHARED.controlState(a,e,
+                stateListenerGeneration==PcBridge.connectionGeneration()?vsEnabled:null);
+    }
+
     public void arm(@NonNull ResultCallback callback) {
+        final long permit=MaintenanceGate.SHARED.beginMutation("ARM",false,false);
+        if(permit==0){callback.onResult(false,"MAINTENANCE_IN_PROGRESS_OR_ACTION_PENDING");return;}
+        armInternal((success,detail)->{
+            updateGateState();
+            if(detail.contains("threw"))MaintenanceGate.SHARED.uncertainMutation(permit);
+            else MaintenanceGate.SHARED.completeMutation(permit);
+            callback.onResult(success,detail);
+        });
+    }
+
+    private void armInternal(@NonNull ResultCallback callback) {
         final long armEpoch;
+        final long productGeneration=PcBridge.connectionGeneration();
         synchronized (lock) {
             if (armed) {
                 lastHeartbeatMs = SystemClock.elapsedRealtime();
@@ -230,11 +261,15 @@ public final class StickControlManager {
         }
 
         try {
+            if(productGeneration!=PcBridge.connectionGeneration()){
+                synchronized(lock){if(epoch==armEpoch){enabling=false;armed=false;zeroLocked();}}
+                callback.onResult(false,"SOURCE_CHANGED");return;
+            }
             VirtualStickManager.getInstance().enableVirtualStick(
                     new CommonCallbacks.CompletionCallback() {
                         @Override
                         public void onSuccess() {
-                            onEnableSucceeded(armEpoch, callback);
+                            onEnableSucceeded(armEpoch, productGeneration, callback);
                         }
 
                         @Override
@@ -264,6 +299,14 @@ public final class StickControlManager {
 
     /** Select the official Advanced path or an explicitly requested diagnostic. */
     public void selectMode(@NonNull String requested, @NonNull ResultCallback callback) {
+        final long permit=MaintenanceGate.SHARED.beginMutation("SELECT_MODE",false,false);
+        if(permit==0){callback.onResult(false,"MAINTENANCE_IN_PROGRESS_OR_ACTION_PENDING");return;}
+        selectModeInternal(requested,(success,detail)->{
+            MaintenanceGate.SHARED.completeMutation(permit); callback.onResult(success,detail);
+        });
+    }
+
+    private void selectModeInternal(@NonNull String requested, @NonNull ResultCallback callback) {
         final StickMode selected;
         if ("basic".equalsIgnoreCase(requested)) {
             selected = StickMode.BASIC;
@@ -305,10 +348,11 @@ public final class StickControlManager {
         }
     }
 
-    private void onEnableSucceeded(long armEpoch, @NonNull ResultCallback callback) {
+    private void onEnableSucceeded(long armEpoch, long productGeneration, @NonNull ResultCallback callback) {
         boolean cancelled;
         synchronized (lock) {
-            cancelled = (epoch != armEpoch);
+            cancelled = (epoch != armEpoch || productGeneration!=PcBridge.connectionGeneration());
+            if(epoch==armEpoch && productGeneration!=PcBridge.connectionGeneration()){enabling=false;armed=false;epoch++;}
         }
         if (cancelled) {
             abortStaleArm(callback);
@@ -354,16 +398,19 @@ public final class StickControlManager {
 
         boolean committed = false;
         synchronized (lock) {
-            if (epoch == armEpoch) {
+            if (epoch == armEpoch && productGeneration==PcBridge.connectionGeneration()) {
                 enabling = false;
                 armed = true;
+                armedConnectionGeneration=productGeneration;
                 lastHeartbeatMs = SystemClock.elapsedRealtime();
                 lastSequence = -1;
+                watchdog.accepted(lastHeartbeatMs);
                 startSenderLocked();
                 committed = true;
             }
         }
         if (!committed) {
+            synchronized(lock){if(epoch==armEpoch && productGeneration!=PcBridge.connectionGeneration()){enabling=false;armed=false;epoch++;}}
             abortStaleArm(callback);
             return;
         }
@@ -399,6 +446,7 @@ public final class StickControlManager {
 
     public boolean setVelocity(
             long sequence, double forward, double right, double up, double yawRate) {
+        if(!MaintenanceGate.SHARED.allowsControl())return false;
         synchronized (lock) {
             if (!armed || sequence <= lastSequence
                     || stickMode == StickMode.OFFICIAL_ADVANCED_ANGLE
@@ -417,6 +465,7 @@ public final class StickControlManager {
             yawRateDps = clamp(yawRate, MAX_YAW_RATE_DPS);
             activeCommandSequence = sequence;
             activeCommandAcceptedMs = lastHeartbeatMs;
+            watchdog.accepted(activeCommandAcceptedMs);
             // BASIC updates sticky IStick state immediately. Both Advanced
             // paths are emitted only by the 20 Hz sender.
             if (stickMode == StickMode.BASIC) {
@@ -436,6 +485,7 @@ public final class StickControlManager {
     public boolean setAttitude(
             long sequence, double forwardTilt, double rightTilt,
             double up, double yawRate) {
+        if(!MaintenanceGate.SHARED.allowsControl())return false;
         synchronized (lock) {
             if (!armed || sequence <= lastSequence
                     || stickMode != StickMode.OFFICIAL_ADVANCED_ANGLE
@@ -459,16 +509,19 @@ public final class StickControlManager {
             rightMps = 0.0;
             activeCommandSequence = sequence;
             activeCommandAcceptedMs = lastHeartbeatMs;
+            watchdog.accepted(activeCommandAcceptedMs);
             return true;
         }
     }
 
     public boolean zero(long sequence) {
+        MaintenanceGate.SHARED.invalidateMaintenance();
         boolean sendFailed = false;
         synchronized (lock) {
             zeroLocked();
             activeCommandSequence = sequence;
             activeCommandAcceptedMs = SystemClock.elapsedRealtime();
+            watchdog.accepted(activeCommandAcceptedMs);
             if (armed) {
                 lastHeartbeatMs = activeCommandAcceptedMs;
                 if (usesAdvancedMode(stickMode)) {
@@ -505,6 +558,7 @@ public final class StickControlManager {
     }
 
     public void disarm(@NonNull ResultCallback callback) {
+        MaintenanceGate.SHARED.beginRelease();
         final long releaseEpoch;
         VirtualStickFlightControlParam finalZero = null;
         synchronized (lock) {
@@ -535,6 +589,8 @@ public final class StickControlManager {
                     new CommonCallbacks.CompletionCallback() {
                         @Override
                         public void onSuccess() {
+                            MaintenanceGate.SHARED.finishRelease();
+                            updateGateState();
                             callback.onResult(true, "disarmed");
                         }
 
@@ -619,10 +675,11 @@ public final class StickControlManager {
                 json.put("active_command_age_ms", SystemClock.elapsedRealtime()
                         - commandAcceptedSnapshot);
             }
-            // Time-based heartbeat zero/release is intentionally disabled for
-            // this diagnostic build. Physical RC override and an actual TCP
-            // disconnect still release Virtual Stick immediately.
-            json.put("time_watchdog_enabled", false);
+            // A finite motion lease supplements RC override and actual TCP disconnect.
+            json.put("time_watchdog_enabled", true);
+            json.put("command_zero_timeout_ms",CommandWatchdog.ZERO_MS);
+            json.put("command_release_timeout_ms",CommandWatchdog.RELEASE_MS);
+            json.put("heartbeat_extends_motion",false);
             json.put("disconnect_release_enabled", true);
             RcOverrideMonitor rc = RcOverrideMonitor.getInstance();
             json.put("rc_override_threshold", RcOverrideMonitor.OVERRIDE_THRESHOLD);
@@ -630,42 +687,8 @@ public final class StickControlManager {
             putIfNotNull(json, "rc_stick_left_horizontal", rc.leftHorizontalValue());
             putIfNotNull(json, "rc_stick_right_vertical", rc.rightVerticalValue());
             putIfNotNull(json, "rc_stick_right_horizontal", rc.rightHorizontalValue());
-            json.put("oa_sensors_working", ObstacleAvoidanceController.workingSensors());
-            json.put("oa_type", ObstacleAvoidanceController.avoidanceType());
-            json.put("oa_horizontal_switch_support",
-                    ObstacleAvoidanceController.horizontalSwitchSupport());
-            json.put("oa_upward_switch_support",
-                    ObstacleAvoidanceController.upwardSwitchSupport());
-            json.put("oa_horizontal_enabled",
-                    ObstacleAvoidanceController.horizontalAvoidanceEnabled());
-            json.put("oa_upward_enabled",
-                    ObstacleAvoidanceController.upwardAvoidanceEnabled());
-            json.put("oa_downward_enabled",
-                    ObstacleAvoidanceController.downwardAvoidanceEnabled());
-            json.put("vision_positioning_enabled",
-                    ObstacleAvoidanceController.visionPositioningEnabled());
-            int[] obstacleDistances =
-                    ObstacleAvoidanceController.horizontalObstacleDistancesMm();
-            JSONArray obstacleMatrix = new JSONArray();
-            for (int distance : obstacleDistances) {
-                obstacleMatrix.put(distance);
-            }
-            json.put("oa_horizontal_angle_interval_deg",
-                    ObstacleAvoidanceController.horizontalAngleIntervalDeg());
-            json.put("oa_horizontal_distances_mm", obstacleMatrix);
-            json.put("oa_horizontal_sample_count", obstacleDistances.length);
-            int upwardDistance = ObstacleAvoidanceController.upwardObstacleDistanceMm();
-            int downwardDistance = ObstacleAvoidanceController.downwardObstacleDistanceMm();
-            if (upwardDistance >= 0) {
-                json.put("oa_upward_distance_mm", upwardDistance);
-            }
-            if (downwardDistance >= 0) {
-                json.put("oa_downward_distance_mm", downwardDistance);
-            }
-            long obstacleAge = ObstacleAvoidanceController.obstacleDataAgeMs();
-            if (obstacleAge >= 0) {
-                json.put("oa_obstacle_data_age_ms", obstacleAge);
-            }
+            JSONObject perception=ObstacleAvoidanceController.snapshotJson();
+            for(java.util.Iterator<String> it=perception.keys();it.hasNext();){String key=it.next();json.put(key,perception.get(key));}
             json.put("direct_frames_sent", directFramesSent.get());
             json.put("direct_frames_succeeded", directFramesSucceeded.get());
             json.put("direct_frames_failed", directFramesFailed.get());
@@ -731,6 +754,7 @@ public final class StickControlManager {
     }
 
     private void releaseVirtualStick(long releaseEpoch, int attempt) {
+        MaintenanceGate.SHARED.beginRelease();
         synchronized (lock) {
             if (epoch != releaseEpoch || armed || enabling) {
                 return;
@@ -741,6 +765,8 @@ public final class StickControlManager {
                     new CommonCallbacks.CompletionCallback() {
                         @Override
                         public void onSuccess() {
+                            MaintenanceGate.SHARED.finishRelease();
+                            updateGateState();
                             Log.i(TAG, "Virtual Stick released (attempt " + attempt + ")");
                         }
 
@@ -752,6 +778,7 @@ public final class StickControlManager {
                             // release, so retrying is pointless and spins
                             // forever. Same once the aircraft is mid-takeoff.
                             if (text.contains("CONTROL_AUTH_HAS_NO_CONTROL_AUTH")) {
+                                MaintenanceGate.SHARED.finishRelease();
                                 Log.i(TAG, "Release unnecessary: control already with the RC");
                                 return;
                             }
@@ -831,8 +858,9 @@ public final class StickControlManager {
                     || vsAdvancedEnabled.booleanValue() != expectAdvanced;
             boolean graceExpired = SystemClock.elapsedRealtime() - modeRequestedMs
                     > MODE_STATE_GRACE_MS;
-            if (stateMismatch && graceExpired) {
-                Log.e(TAG, "Virtual Stick mode changed unexpectedly; expectedAdvanced="
+            CommandWatchdog.Decision freshness=watchdog.at(SystemClock.elapsedRealtime());
+            if (armedConnectionGeneration!=PcBridge.connectionGeneration() || freshness==CommandWatchdog.Decision.RELEASE || (stateMismatch && graceExpired)) {
+                Log.e(TAG, "Motion lease, source, or Virtual Stick mode invalid; expectedAdvanced="
                         + expectAdvanced + "; releasing to RC");
                 epoch++;
                 releaseEpoch = epoch;
@@ -845,10 +873,8 @@ public final class StickControlManager {
                 Thread.interrupted();
                 disable = true;
             } else {
-                // No time-based heartbeat zero or release in this diagnostic
-                // build. The latest setpoint remains active until a newer
-                // command, explicit zero/disarm, physical RC override, actual
-                // client disconnect, mode mismatch, or sender failure.
+                if(freshness==CommandWatchdog.Decision.ZERO)zeroLocked();
+                // The accepted motion lease is unchanged by STATUS/heartbeat or watchdog zero.
                 sendCurrentLocked();
             }
         }

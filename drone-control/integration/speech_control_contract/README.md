@@ -1,4 +1,11 @@
-# Speech control contract — MOCK ONLY
+# Shared tool schemas and historical mock starter
+
+The `tools.json` schemas are now also consumed by the production relay client.
+The Python starter in this directory remains a separate mock-only example.
+The current durable HTTP service is `pc/drone_nav/tool_control`; the relay uses
+`relay/drone_client.py` and `relay/live_mission.py`. See
+[current integration instructions](../../docs/CONTROL_INTEGRATION_20260910.md).
+The rest of this document describes the historical mock starter, not the live service.
 
 This stdlib-only starter exercises our drone boundary. It cannot connect to a drone,
 move hardware, or establish flight safety. Dashboard, scenarios, destination choice,

@@ -19,6 +19,8 @@ sys.path.insert(0, str(ROOT / "pc"))
 from coex_mission import Controller, MissionFault, fresh, load_profile, number, rc_override
 
 REQUIRED_BUILD = "5.18-telemetry-age.20260906.4"
+CONNECTIVITY_BUILD = "5.18-connectivity.20260910.5"
+SUPPORTED_BUILDS = {REQUIRED_BUILD, CONNECTIVITY_BUILD}
 DEFAULT_LOCAL_CONFIG = Path("C:/dev/13_DRONE/pc/config.local.json")
 
 
@@ -51,8 +53,13 @@ class Runner:
         self.io.connect()
         self.status("PREFLIGHT")
         t, now = self.last, self.clock()
-        if t.get("bridge_build_id") != REQUIRED_BUILD:
+        if t.get("bridge_build_id") not in SUPPORTED_BUILDS:
             raise MissionFault("BUILD_MISMATCH", str(t.get("bridge_build_id")))
+        if t.get("bridge_build_id") == CONNECTIVITY_BUILD:
+            if t.get("time_watchdog_enabled") is not True:
+                raise MissionFault("WATCHDOG_UNCONFIRMED")
+            if fresh(t, "are_motors_on", "are_motors_on_age_ms", .5, now) is not False:
+                raise MissionFault("GROUND_UNCONFIRMED", "new bridge motor telemetry")
         if fresh(t, "is_flying", "is_flying_age_ms", .5, now) is not False or t.get("armed") is not False:
             raise MissionFault("GROUND_UNCONFIRMED", "ACK flight/arm state")
         if t.get("vs_enabled") is not False:
@@ -74,7 +81,7 @@ class Runner:
             raise MissionFault("DISCONNECT_RELEASE_UNCONFIRMED")
         self.io.log_event("coex_ground_check", {"passed": True, "time_watchdog_enabled": t.get("time_watchdog_enabled"),
                            "warning": "RC takeover required if Wi-Fi blackhole prevents TCP close delivery"})
-        self.emit("지상·모터 정지·센서 갱신 확인 완료. PC 오류 시 RC 인계; 앱 시간 watchdog은 비활성입니다.")
+        self.emit(f"지상·모터 정지·센서 갱신 확인 완료. PC 오류 시 RC 인계; 앱 시간 watchdog={t.get('time_watchdog_enabled')}.")
 
     def _takeoff_and_arm(self):
         self.command("stick_mode", {"mode": "advanced"})

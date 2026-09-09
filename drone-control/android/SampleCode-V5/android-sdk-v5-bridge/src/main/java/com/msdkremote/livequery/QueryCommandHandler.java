@@ -24,6 +24,8 @@ public class QueryCommandHandler implements CommandHandler
 
     private final KeysManager keysManager;
     private final String armToken;
+    private final ThreadLocal<Long> commandEpoch=new ThreadLocal<>();
+    private void sendScoped(CommandServer server,String message){Long epoch=commandEpoch.get();if(epoch!=null)server.sendMessage(message,epoch);}
 
     // Initialize KeysManager
     public QueryCommandHandler(@NonNull String armToken) {
@@ -40,8 +42,16 @@ public class QueryCommandHandler implements CommandHandler
     @Override
     public void onCommand(@NonNull CommandServer commandServer, @NonNull String command)
     {
+        onCommand(commandServer,command,commandServer.getConnectionEpoch());
+    }
+    @Override public void onCommand(@NonNull CommandServer server,@NonNull String command,long epoch) {
+        if(!server.isSessionActive(epoch))return;
+        commandEpoch.set(epoch);
+        try{handle(server,command);}finally{commandEpoch.remove();}
+    }
+    private void handle(CommandServer commandServer,String command) {
         // Split command to words.
-        String[] words = command.split(" ", 4);
+        String[] words = command.trim().split("\\s+", 4);
 
         // Command sub components.
         String commandMethod = words[0];
@@ -67,6 +77,9 @@ public class QueryCommandHandler implements CommandHandler
             return;
         }
 
+        if(moduleName.isEmpty()||keyName.isEmpty()){
+            QuerySessionRegistry.local(commandServer,commandEpoch.get(),moduleName,keyName,"INVALID_PARAMETER");return;
+        }
         // Try to find the key by module name and key name.
         KeyItem<?,?> keyItem = getKeyWithMessage(commandServer, moduleName, keyName);
         if (keyItem == null) return;
@@ -76,49 +89,15 @@ public class QueryCommandHandler implements CommandHandler
         if (mutation) {
             String supplied = firstWord(param);
             if (!supplied.equals(TOKEN_PREFIX + armToken)) {
-                commandServer.sendMessage(
+                sendScoped(commandServer,
                         "AUTHORIZATION_REJECTED mutation requires valid arm token");
                 return;
             }
             param = remainingWords(param);
         }
 
-        switch (commandMethod.toUpperCase(Locale.ENGLISH))
-        {
-            // Command - GET <identifier> <module> <key>
-            case COMMAND_GET:
-                keyItem.commandGet(commandServer);
-                break;
-
-            // Command - LISTEN <identifier> <module> <key>
-            case COMMAND_LISTEN:
-                keyItem.commandListen(commandServer);
-                break;
-
-            // Command - UNLISTEN <identifier> <module> <key>
-            case COMMAND_CANCEL_LISTEN:
-                keyItem.commandUnlisten(commandServer);
-                break;
-
-            // Command - SET <identifier> <module> <key> <parameter>
-            case COMMAND_SET:
-                keyItem.commandSet(commandServer, param);
-                break;
-
-            // Command - ACTION <identifier> <module> <key>
-            // Command - ACTION <identifier> <module> <key> <parameter>
-            case COMMAND_ACTION:
-                if (param.isEmpty())
-                    keyItem.commandAction(commandServer);
-                else
-                    keyItem.commandAction(commandServer, param);
-                break;
-
-            // Unknown command
-            default:
-                commandServer.sendMessage("Unknown command: " + commandMethod);
-                break;
-        }
+        QuerySessionRegistry.SHARED.execute(commandServer,commandEpoch.get(),keyItem,
+                commandMethod.toUpperCase(Locale.ENGLISH),param);
     }
 
     @NonNull
@@ -156,11 +135,11 @@ public class QueryCommandHandler implements CommandHandler
         }
         // Module not found
         catch (UnknownModuleException ignored) {
-            commandServer.sendMessage("Unknown module name: " + moduleName);
+            sendScoped(commandServer, "Unknown module name: " + moduleName);
         }
         // Key not found.
         catch (UnknownKeyException ignored) {
-            commandServer.sendMessage("Unknown key name: " + keyName);
+            sendScoped(commandServer, "Unknown key name: " + keyName);
         }
 
         return key;
@@ -187,7 +166,7 @@ public class QueryCommandHandler implements CommandHandler
         stringBuilder.setCharAt(stringBuilder.length() - 1, '}');
 
         // Send list of available modules.
-        commandServer.sendMessage(stringBuilder.toString());
+        sendScoped(commandServer, stringBuilder.toString());
     }
 
 
@@ -208,7 +187,7 @@ public class QueryCommandHandler implements CommandHandler
             keys = this.keysManager.getAvailableKeys(moduleName);
         }
         catch (UnknownModuleException ignore) {
-            commandServer.sendMessage("Unknown module name: " + moduleName);
+            sendScoped(commandServer, "Unknown module name: " + moduleName);
             return;
         }
 
@@ -224,7 +203,7 @@ public class QueryCommandHandler implements CommandHandler
         stringBuilder.setCharAt(stringBuilder.length() - 1, '}');
 
         // Send list of available modules.
-        commandServer.sendMessage(stringBuilder.toString());
+        sendScoped(commandServer, stringBuilder.toString());
     }
 
 
@@ -331,6 +310,6 @@ public class QueryCommandHandler implements CommandHandler
             }
         }
 
-        commandServer.sendMessage(message.append('}').toString());
+        sendScoped(commandServer, message.append('}').toString());
     }
 }

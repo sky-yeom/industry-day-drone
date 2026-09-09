@@ -50,6 +50,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this._cur = null;
     this._pos = 0;
     this._playing = false;
+    this._drainIds = [];
     this.port.onmessage = (e) => {
       const msg = e.data;
       if (msg.type === 'push') {
@@ -59,6 +60,8 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         this._queue.length = 0;
         this._cur = null;
         this._pos = 0;
+      } else if (msg.type === 'drain') {
+        this._drainIds.push(msg.id);
       }
     };
   }
@@ -89,6 +92,10 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     if (busy !== this._playing) {
       this._playing = busy;
       this.port.postMessage({ type: 'state', playing: busy });
+    }
+    if (!busy && this._drainIds.length) {
+      for (const id of this._drainIds) this.port.postMessage({ type: 'drained', id });
+      this._drainIds.length = 0;
     }
     return true;
   }

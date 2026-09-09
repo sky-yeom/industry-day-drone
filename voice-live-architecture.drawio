@@ -1,18 +1,18 @@
 <mxfile host="app.diagrams.net" modified="2026-09-07T00:36:00.000Z" agent="GitHub Copilot CLI" version="24.7.17" type="device">
   <diagram id="voice-live-architecture" name="Voice Live Architecture">
-    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0">
+    <mxGraphModel dx="1600" dy="1200" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
 
-        <mxCell id="title" value="Drone Survey Dashboard - Realtime Voice Architecture" style="text;html=1;align=center;verticalAlign=middle;fontSize=26;fontStyle=1;fontColor=#091F2C;" vertex="1" parent="1">
+        <mxCell id="title" value="Emergency Triage - Realtime Voice and Image Evidence" style="text;html=1;align=center;verticalAlign=middle;fontSize=26;fontStyle=1;fontColor=#091F2C;" vertex="1" parent="1">
           <mxGeometry x="330" y="20" width="940" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="subtitle" value="Native Azure AI Voice Live speech-to-speech with relay-owned route state" style="text;html=1;align=center;verticalAlign=middle;fontSize=14;fontColor=#5F6B76;" vertex="1" parent="1">
+        <mxCell id="subtitle" value="Korean rescue experience with relay-owned countdowns, automatic capture, and evidence-based outcomes" style="text;html=1;align=center;verticalAlign=middle;fontSize=14;fontColor=#5F6B76;" vertex="1" parent="1">
           <mxGeometry x="430" y="65" width="740" height="30" as="geometry" />
         </mxCell>
 
-        <mxCell id="user" value="User&#xa;Korean voice conversation" style="shape=mxgraph.azure.user;html=1;whiteSpace=wrap;fillColor=#E8F3FC;strokeColor=#0078D4;fontColor=#091F2C;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+        <mxCell id="user" value="Participant&#xa;Korean voice; clickable tabs" style="shape=mxgraph.azure.user;html=1;whiteSpace=wrap;fillColor=#E8F3FC;strokeColor=#0078D4;fontColor=#091F2C;fontStyle=1;fontSize=14;" vertex="1" parent="1">
           <mxGeometry x="40" y="180" width="150" height="100" as="geometry" />
         </mxCell>
 
@@ -25,7 +25,7 @@
         <mxCell id="audio-worklets" value="Audio Worklets&#xa;public/audio-worklets.js&#xa;&#xa;Capture PCM frames and play native response audio" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F0FA;strokeColor=#B39DDB;fontColor=#091F2C;align=left;spacingLeft=12;fontSize=13;" vertex="1" parent="browser-zone">
           <mxGeometry x="30" y="245" width="330" height="105" as="geometry" />
         </mxCell>
-        <mxCell id="browser-ui" value="Dashboard UI&#xa;&#xa;VoiceControl - session and mic status&#xa;ChatPanel - auxiliary transcripts&#xa;FlightPathMap - rendered route" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#8DC8E8;fontColor=#091F2C;align=left;spacingLeft=12;fontSize=13;" vertex="1" parent="browser-zone">
+        <mxCell id="browser-ui" value="Korean Triage Dashboard&#xa;&#xa;Reference portrait and spoken description&#xa;Four browsable tabs; automatic progression&#xa;Route, captures and rescue outcomes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#8DC8E8;fontColor=#091F2C;align=left;spacingLeft=12;fontSize=13;" vertex="1" parent="browser-zone">
           <mxGeometry x="30" y="380" width="330" height="130" as="geometry" />
         </mxCell>
         <mxCell id="browser-note" value="No Azure credentials and no route mutation in the browser" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E6;strokeColor=#E5A000;fontColor=#7F5A1A;fontStyle=1;fontSize=12;" vertex="1" parent="browser-zone">
@@ -38,10 +38,10 @@
         <mxCell id="bridge" value="WebSocket Bridge&#xa;relay/server.py&#xa;&#xa;- Browser WS to Voice Live WSS&#xa;- Realtime event forwarding&#xa;- Tool call lifecycle&#xa;- TTFA measurement" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D9EDF8;strokeColor=#0078D4;fontColor=#091F2C;align=left;spacingLeft=12;fontSize=13;" vertex="1" parent="relay-zone">
           <mxGeometry x="30" y="70" width="340" height="145" as="geometry" />
         </mxCell>
-        <mxCell id="prompt-tools" value="Conversation Contract&#xa;relay/tools.py&#xa;&#xa;- Natural Korean prompt&#xa;- select_stop / confirm_route&#xa;- Ordinal mapping guidance&#xa;- Facts + next-question results" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF4FB;strokeColor=#49A5D8;fontColor=#091F2C;align=left;spacingLeft=12;fontSize=13;" vertex="1" parent="relay-zone">
+        <mxCell id="prompt-tools" value="Conversation Contract&#xa;relay/tools.py&#xa;&#xa;- Confirm spoken appearance predicates&#xa;- Route, explicit launch, retry, abort&#xa;- Facts only; never invent a rescue&#xa;- Voice-only participant gameplay" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EAF4FB;strokeColor=#49A5D8;fontColor=#091F2C;align=left;spacingLeft=12;fontSize=13;" vertex="1" parent="relay-zone">
           <mxGeometry x="30" y="245" width="340" height="135" as="geometry" />
         </mxCell>
-        <mxCell id="survey-state" value="Authoritative Route State&#xa;relay/survey.py&#xa;&#xa;resolve_monitor() normalizes Korean forms&#xa;SurveySession owns draft and confirmed route&#xa;Remaining third monitor is added automatically" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E7F6F2;strokeColor=#49C5B1;fontColor=#091F2C;align=left;spacingLeft=12;fontSize=13;" vertex="1" parent="relay-zone">
+        <mxCell id="survey-state" value="Authoritative Mission State&#xa;relay/survey.py&#xa;&#xa;Shared emergency-triage.json scenario&#xa;Monotonic clock, pause, deadlines, injuries&#xa;Only timely image evidence can rescue" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E7F6F2;strokeColor=#49C5B1;fontColor=#091F2C;align=left;spacingLeft=12;fontSize=13;" vertex="1" parent="relay-zone">
           <mxGeometry x="30" y="410" width="340" height="145" as="geometry" />
         </mxCell>
         <mxCell id="credential" value="DefaultAzureCredential&#xa;Entra bearer token stays in relay" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF1F2;strokeColor=#D65A67;fontColor=#73262F;fontStyle=1;fontSize=12;" vertex="1" parent="relay-zone">
@@ -60,7 +60,7 @@
         <mxCell id="transcription" value="gpt-4o-transcribe&#xa;Auxiliary transcription only&#xa;&#xa;Used for chat display and diagnostics. It is not a separate STT-to-TTS response pipeline." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E6;strokeColor=#E5A000;fontColor=#7F5A1A;align=left;spacingLeft=12;fontSize=13;" vertex="1" parent="azure-zone">
           <mxGeometry x="30" y="390" width="350" height="120" as="geometry" />
         </mxCell>
-        <mxCell id="managed-note" value="Fully managed Voice Live model&#xa;No Azure OpenAI deployment required" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#7ABFAD;fontColor=#07641D;fontStyle=1;fontSize=12;" vertex="1" parent="azure-zone">
+        <mxCell id="managed-note" value="Voice Live is managed independently&#xa;Image analysis needs its own vision deployment" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#7ABFAD;fontColor=#07641D;fontStyle=1;fontSize=12;" vertex="1" parent="azure-zone">
           <mxGeometry x="30" y="545" width="350" height="65" as="geometry" />
         </mxCell>
 
@@ -113,8 +113,26 @@
           </mxGeometry>
         </mxCell>
 
+        <mxCell id="camera-source" value="Camera adapter&#xa;relay/camera.py&#xa;&#xa;Original scenario PNG fixtures today&#xa;Physical drone adapter later&#xa;Actual bytes + capture/monitor ID" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEE8F7;strokeColor=#8661C5;fontColor=#091F2C;align=left;spacingLeft=12;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="260" y="835" width="330" height="145" as="geometry" />
+        </mxCell>
+        <mxCell id="mission-runner" value="Automatic mission runner&#xa;relay/mission_runner.py&#xa;&#xa;Travel - capture - analyze - continue&#xa;Independent deadline processing&#xa;Technical errors pause; explicit retry/abort" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D9EDF8;strokeColor=#0078D4;fontColor=#091F2C;align=left;spacingLeft=12;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="710" y="835" width="340" height="145" as="geometry" />
+        </mxCell>
+        <mxCell id="vision-adapter" value="Vision adapter&#xa;relay/vision.py&#xa;&#xa;Azure: actual image input, structured evidence&#xa;Mock: explicitly labeled fixture results&#xa;No silent fallback, no outcome authority" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E7F6F2;strokeColor=#49C5B1;fontColor=#091F2C;align=left;spacingLeft=12;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1170" y="835" width="350" height="145" as="geometry" />
+        </mxCell>
+        <mxCell id="camera-runner" value="Correlated image pixels" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;strokeColor=#8661C5;endArrow=block;" edge="1" parent="1" source="camera-source" target="mission-runner">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="runner-vision" value="Analyze / evidence" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;strokeColor=#49C5B1;endArrow=block;startArrow=block;" edge="1" parent="1" source="mission-runner" target="vision-adapter">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="runner-state" value="Validated progress and outcomes" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeWidth=2;strokeColor=#0078D4;endArrow=block;" edge="1" parent="1" source="mission-runner" target="survey-state">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
         <mxCell id="legend" value="Solid blue/green: realtime audio and control path    |    Purple: dashboard state/output    |    Dashed amber: auxiliary transcript" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D7D2CB;fontColor=#5F6B76;fontSize=12;align=center;" vertex="1" parent="1">
-          <mxGeometry x="310" y="835" width="980" height="50" as="geometry" />
+          <mxGeometry x="310" y="1050" width="980" height="50" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>

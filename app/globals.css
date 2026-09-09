@@ -50,6 +50,28 @@ input {
   scrollbar-width: thin;
 }
 
+.route-map {
+  container-type: size;
+}
+
+.monitor-preview {
+  aspect-ratio: 8 / 5;
+}
+
+.voice-body {
+  grid-template-rows: minmax(0, calc(39.25% + clamp(68.04px, 14.58dvh, 136.08px))) minmax(0, 1fr);
+}
+
+@media (max-width: 767px) {
+  .voice-body {
+    grid-template-columns: minmax(100px, 0.35fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .voice-panel-heading {
+    display: none;
+  }
+}
+
 /* Voice waveform bars (components/VoiceOrb.tsx). Idle/connecting/speaking/
    error each ripple with a staggered per-bar animation-delay; listening is
    driven inline by real mic level instead. All states share one purple

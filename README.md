@@ -1,263 +1,294 @@
-# 드론 조사 대시보드 — Voice Live
+# 긴급 구조 작전 — Emergency Triage
 
-Industry Day 데모: Azure AI Voice Live API로 음성 제어하는 Next.js 대시보드.
-드론이 둘러볼 모니터를 말로 고르면 경로가 실시간으로 그려진다.
+Industry Day 데모: 세 사람의 위급함을 판단하고 드론의 방문 순서를 정하는
+한국어 구조 체험입니다. Azure AI Voice Live의 실시간 음성 대화로 참여하며
+프롬프트 작성·확인, 경로 선택, 출발은 음성으로 조작합니다.
+네 탭은 클릭해서 자유롭게 살펴볼 수 있으며, 출발 후 드론은 자동으로 이동·촬영·분석합니다.
 
-## 경로 계획 흐름
+**가상의 훈련 시나리오입니다.** 이미지에서 대상자를 찾는 것을 구조로 간주하는
+데모 규칙이며, 실제 구조 활동이나 의료 판단을 대신하지 않습니다.
 
-1. 에이전트가 **어느 모니터부터 갈지** 묻는다
-2. 사용자가 첫 번째를 고른다 → 두 번째를 묻는다
-3. 사용자가 두 번째를 고른다 → **남은 한 곳은 시스템이 자동으로 마지막에 추가**
-4. 전체 경로를 읽어주고 **이대로 확정할지 묻는다**
-5. 사용자가 동의하면 경로 확정
+## 시나리오와 구조 조건
 
-"첫번째", "첫 번째", "첫째"처럼 순서를 말해도 각각 모니터 1, 2, 3으로
-알아듣는다. "아무거나"처럼 실제 모니터가 정해지지 않은 말에는 **도구를 부르지
-않고 다시 묻는다.** 임의로 모니터를 고르거나 경로를 초기화하지 않는다.
+프롬프트 화면에서는 세 건의 긴급 신고와 한 대의 드론이라는 전체 상황을 듣고,
+참고 인물 사진을 보고 찾을 사람의 외형을 말합니다. 세 현장의 대상자는 서로
+다른 사람이지만 모두 **초록색 티셔츠와 갈색 머리**라는 특징을 공유합니다.
+참가자의 말을 되읽어 확인한 뒤 비행 경로 화면에서 각 현장의 긴급도를 비교합니다.
+
+| 지점 | 상황 | 긴급도 |
+| --- | --- | --- |
+| 모니터 1 | 바다에 빠져 물에 떠 있으려고 힘겹게 버티는 사람 | 높음 |
+| 모니터 2 | 잔해 아래에 갇혀 가벼운 부상을 입은 사람 | 세 경우 중 상대적으로 낮음, 구조 시한은 있음 |
+| 모니터 3 | 불이 난 집에 갇힌 사람 | 가장 높음 |
+
+게임의 권장 순서는 **불길 → 바다 → 잔해 (3 → 1 → 2)**입니다.
+이는 가상 시나리오의 규칙이며 일반적인 의료 우선순위나 실제 생존 시간을 뜻하지 않습니다.
+참가자가 다른 순서를 고르더라도 시스템이
+몰래 고치지 않습니다. 첫 번째와 두 번째 지점을 정하면 남은 곳을 마지막에
+추가하고, **출발에 동의한 순간부터 실제 시간이 흐릅니다.**
+
+도착만으로는 구조되지 않습니다. 해당 지점의 **촬영 이미지에서 대상자를 확인한
+분석 결과가 구조 시한 전에 도착해야** 구조가 인정됩니다. 이동·촬영·분석·재촬영
+중에도 시간이 흐르며, 촬영이 빨라도 분석 완료가 늦으면 구조 시한을 놓칩니다.
+시한과 정확히 같은 순간에 완료된 탐지도 시한 초과입니다.
+
+확정한 외형 설명도 탐지 조건입니다. "녹색 옷"이나 "갈색 머리"처럼 일부 특징만
+말해도 맞으면 탐지할 수 있지만, 빨간 티셔츠·금발·"초록색이 아닌 옷"처럼
+명시한 특징이 다르면 대상자를 발견한 것으로 처리하지 않습니다.
+틀린 설명을 대신 고치거나 빠진 정답 특징을 덧붙이지 않습니다.
+
+| 결과 | 판정 |
+| --- | --- |
+| 구조 완료 | 시한 전에 대상자를 확인했고 부상이 없는 경우 |
+| 부상 상태로 구조 | 시한 전에 확인했지만 원래 부상이 있거나 상태가 악화된 경우 |
+| 구조 시한 초과 | 구조가 확인되지 않은 채 구조 시한이 지난 경우 |
+
+모니터 2는 처음부터 부상이 있으므로 제때 도착해도 **부상 상태로 구조**됩니다.
+두 가지 구조 성공 결과 모두 구조 인원에 포함됩니다.
+
+정상 이미지에서 사람을 찾지 못하면 한 번 더 촬영·분석하고 다음 지점으로
+이동합니다. 아직 시한이 남은 사람을 즉시 시한 초과로 처리하지는 않습니다.
+카메라·모델의 기술적 오류는 명시적으로 전체 시계를 일시 정지시키고, 참가자가
+재시도하거나 임무를 중단하도록 안내합니다.
+
+## 이미지 입력과 탐지 모드
+
+현재 비행과 카메라는 **시나리오 이미지 기반 모의 장치**입니다.
+`public/monitors/`의 직접 제작한 SVG를 PNG로 렌더링했으며, 화면과 분석기에
+동일한 PNG 픽셀을 전달합니다. 빈 장면과 다른 대상자 이미지도 회귀 테스트용으로
+포함합니다.
+
+| `TRIAGE_MODE` | 이미지 판정 | 필요한 연결 |
+| --- | --- | --- |
+| `mock` (기본) | 음성에서 추출한 외형 조건과 원본 픽셀을 비교하는 결정론적 모의 탐지 | 로컬 릴레이, 음성용 Voice Live |
+| `azure` | 촬영한 실제 이미지 바이트를 Azure 멀티모달 모델로 분석 | 별도 Azure 이미지 분석 배포 |
+
+모드 전환은 릴레이 환경 변수로 명시적으로 설정합니다. Azure 설정이 없거나
+분석이 실패해도 모의 결과로 자동 대체하지 않습니다. 음성 사용 여부는 탐지
+모드와 별개입니다. 참가자 체험은 음성 세션으로 시작하며, 모의 탐지에서도
+마이크 권한과 Voice Live 인증이 필요합니다.
+
+모의 모드는 Voice Live가 발화에서 추출한 상의 색·종류와 머리색 조건을
+사용합니다. 생략한 특징은 제한하지 않고, 부정·선택 조건도 보존합니다.
+안경 등 지원하지 않는 추가 외형 조건은 버리지 않고 모의 탐지에서 미확인으로
+처리합니다. 실제 컴퓨터 비전이나 신원 인식은 아닙니다.
+Azure 모드에서는 실제 픽셀의 같은 후보가 참가자의 원래 설명과 구조 대상의
+공통 외형을 **모두** 만족해야 탐지가 인정됩니다.
+
+실제 드론 연결은 추후 작업입니다. `relay/camera.py`의 캡처 어댑터를 실제
+장치의 이미지 수신 방식에 연결하면 됩니다. 프레임은 지점·캡처 ID와 연결되어야
+하며, 모니터 번호만 받거나 클라이언트가 보낸 성공 여부만 믿고 구조 처리하면
+안 됩니다. 실제 비행 제어, 스트림 프로토콜, 생체 신원 인식은 구현 범위에
+포함되지 않습니다.
 
 ## 구조
 
-```
-브라우저 (Next.js :3000)
-  FlightPathMap / ChatPanel                    ← 렌더링만
-  VoiceControl + lib/voiceClient.ts            ← 마이크 캡처, PCM 재생
-        │  ws://127.0.0.1:8080/ws              (평문 WS, 자격증명 없음)
+```text
+브라우저 — Next.js :3000
+  브리핑 / 경로 / 카운트다운 / 촬영 이미지 / 구조 결과
+  VoiceSession: 마이크 캡처와 네이티브 음성 재생
+        │ 로컬 WebSocket, 자격 증명 없음
         ▼
-  relay/server.py (:8080)
-        Entra 토큰 보관 · 경로 상태 소유 · 도구 실행
-        │  wss + Bearer
-        ▼
-  Voice Live  (gpt-realtime, southeastasia)
+릴레이 — FastAPI :8080
+  SurveySession: 경로·시계·구조 판정의 단일 원본
+  MissionRunner: 자동 이동·촬영·분석, 독립적인 구조 시한 처리
+        ├── 캡처 어댑터 → PNG 이미지 → 모의 탐지 또는 Azure 멀티모달 분석
+        └── 음성 사용 시 Azure AI Voice Live
 ```
 
-**릴레이가 필요한 이유.** Foundry 리소스가 `disableLocalAuth=true`라서 Voice
-Live는 Entra 베어러 토큰만 받는다. 브라우저는 WebSocket에 `Authorization`
-헤더를 붙일 수 없고, 붙일 수 있더라도 자격증명을 클라이언트에 내려보내는 건
-옳지 않다. 그래서 릴레이가 대신 자격증명을 들고 있다.
-
-**상태를 릴레이가 갖는 이유.** 경로 상태는 React가 아니라 `relay/survey.py`가
-소유한다. 도구 호출마다 릴레이가 `route.state`를 밀어주고 대시보드는 그리기만
-하므로, 에이전트와 화면이 다른 경로를 보고 있을 수 없다.
-
-## 모델 배포는 필요 없다
-
-Voice Live는 완전 관리형이라 서비스가 모델을 알아서 띄운다. **Foundry >
-배포**에서 만들 게 없고, 이 앱은 OpenAI 배포 쿼터를 전혀 쓰지 않는다. 그 화면의
-쿼터 오류는 Voice Live와 무관하다.
-
-`gpt-realtime-2.1`은 여기서 쓸 수 없다. 그건 직접 배포하는 Azure OpenAI 모델일
-뿐이고, Voice Live의 모델 목록은 별개다.
+Azure 자격 증명은 릴레이에만 보관합니다. 브라우저는 릴레이의 `route.state`
+스냅샷을 표시하며 구조 성공 여부나 시한을 별도로 판정하지 않습니다.
+재접속은 새 임무입니다. 연결이 끊기거나 초기화된 실행의 비동기 작업은 취소하며,
+이전 이미지 분석 결과를 새 임무에 적용하지 않습니다.
 
 ## 실행
 
-프로세스 두 개가 모두 떠 있어야 한다.
+대시보드와 릴레이 두 프로세스가 모두 필요합니다.
 
-**1. 릴레이**
+### 1. 릴레이
 
-```powershell
-cd relay
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-az login                      # DefaultAzureCredential이 CLI 토큰을 읽는다
-$env:PYTHONIOENCODING="utf-8" # 없으면 한국어 출력이 cp949에서 깨진다
-.\.venv\Scripts\python.exe server.py
+macOS/Linux:
+
+```bash
+python3 -m venv relay/.venv
+relay/.venv/bin/python -m pip install -r relay/requirements.txt
+TRIAGE_MODE=mock relay/.venv/bin/python relay/server.py
 ```
 
-**2. 대시보드**
+Windows PowerShell:
 
 ```powershell
+python -m venv relay/.venv
+.\relay\.venv\Scripts\python.exe -m pip install -r relay/requirements.txt
+$env:PYTHONIOENCODING="utf-8"
+$env:TRIAGE_MODE="mock"
+.\relay\.venv\Scripts\python.exe relay/server.py
+```
+
+체험 전에 Azure CLI에서 `az login`을 실행합니다.
+
+### 2. 대시보드
+
+```bash
 npm install
 npm run dev
 ```
 
-<http://localhost:3000>에서 **세션 시작**을 누르고 마이크를 허용한 뒤 말한다:
+<http://localhost:3000>에서 **시작**을 누르고 마이크를 허용한 뒤 말합니다:
 
-> "첫번째부터 보여줘." → "두 번째로 가자." → "네."
+> 참고 사진을 보고 외형 설명 → 설명 확인에 동의 → "불이 난 집부터 가자."
+> → "바다에 빠진 사람을 다음으로." → 경로를 듣고 "출발해."
 
-텍스트 입력도 같은 에이전트를 거친다.
+화면은 **프롬프트 → 비행 경로 → 드론 이미지 → 결과** 순서로 자동 전환되며,
+언제든 탭을 클릭하거나 화살표 키로 살펴볼 수 있습니다. 탭 이동은 임무를
+변경하거나 출발시키지 않습니다. 음성 전사와 답변은 오른쪽 음성 시각화 아래에
+표시됩니다. 브리핑은 한 페이지에 표시하고, 확정된 프롬프트 영역은 입력 전에도
+빈 상태로 유지합니다. 각 탭은 화면 높이에 맞춰 표시하고, 긴 프롬프트·최종 설명은
+이전/다음 페이지로 읽습니다. 경로 화면에는 현장 이미지와 상황만 표시하며
+구조 시한·남은 시간·경과 시간은 숨깁니다. 출발 전 음성 안내도 정확한 시간을
+알려주지 않습니다. 시간은 **출발한 뒤 드론 이미지 탭에서만** 확인할 수 있고,
+탭을 미리 열어도 카운트다운은 나타나지 않습니다. 촬영 기록은 이전/다음 촬영으로 확인합니다.
+음성 시각화와 마이크 버튼은 겹치지 않게 분리하고 대화 영역은 패널 하단에 둡니다.
+작전이 끝나면 결과 화면의 **처음으로** 버튼으로 시작 화면에 돌아갈 수 있습니다.
 
-### 스모크 테스트
+### Azure 멀티모달 이미지 분석
 
-마이크 없이 전체 경로(도구, 상태 전이, 자동 3번째, 확정)를 점검한다:
+이미지 입력과 구조화된 응답을 지원하는 Azure OpenAI 모델을 배포한 뒤 릴레이
+프로세스에 설정합니다. 아래 엔드포인트·배포 이름은 설명용이며 실제 리소스의
+값으로 바꿔야 합니다.
 
-```powershell
-cd relay
-$env:PYTHONIOENCODING="utf-8"
-.\.venv\Scripts\python.exe smoke_test.py
+```bash
+export TRIAGE_MODE=azure
+export AZURE_VISION_ENDPOINT="https://YOUR-RESOURCE.openai.azure.com"
+export AZURE_VISION_DEPLOYMENT="YOUR-VISION-DEPLOYMENT"
+az login
+relay/.venv/bin/python relay/server.py
 ```
 
-## TTS가 아니라 네이티브 오디오
+기본적으로 Entra 인증을 사용합니다. API 키를 쓰는 경우에는
+`AZURE_VISION_API_KEY`를 프로세스 환경에만 설정하고 소스·브라우저에 넣지
+마세요. 현재 어댑터의 `AZURE_VISION_API_VERSION`은 `v1`만 지원합니다.
+다른 API 버전은 오류로 안내하며 자동 대체하지 않습니다.
 
-기본 보이스는 **네이티브 GPT Realtime 보이스**(`shimmer`, 타입 `openai`)다.
-모델이 오디오 토큰을 직접 만들어내는 진짜 speech-to-speech라서, 텍스트를 별도
-TTS 엔진에 넘기지 않는다. 억양이 의미를 따라가고 첫 소리도 빨리 나온다.
+**Voice Live와 이미지 분석 배포는 별개입니다.** Voice Live의 관리형 음성 모델은
+직접 Azure OpenAI 배포를 만들 필요가 없지만, 이미지 분석기는 별도의 지원 모델
+배포와 해당 배포의 쿼터를 사용합니다. 기존 Voice Live 설정만으로 이미지 분석
+배포가 자동 생성되지는 않습니다.
 
-이 리소스에서 3회씩 측정한 TTFA 중앙값(`response.create` → 첫 오디오):
+정상적인 추론 지연도 게임 시간에 포함됩니다. 분석이 느린 배포에서는 최적
+순서라도 시한을 놓칠 수 있으므로, 행사 환경에서 실측한 뒤 공유 시나리오의
+시간 값을 조정하세요. 모델이나 카메라가 연결되지 않은 상태를 실제 분석 성공으로
+표시하지 않습니다.
 
-| 보이스 | 타입 | TTFA |
-| --- | --- | --- |
-| `shimmer` | `openai` (네이티브) | **485 ms** |
-| `marin` | `openai` (네이티브) | 500 ms |
-| `ko-KR-SunHiNeural` | `azure-standard` (TTS) | 641 ms |
-| `azure-realtime` + `sunhi` | 네이티브 | 656 ms |
-| `azure-realtime` + `hyunsu` | 네이티브 | 733 ms |
+## 시나리오 조정
 
-세션 노트는 `azure-realtime`이 "리스판드는 빠름"이라고 적고 있지만, 이 리소스에서
-직접 재보니 `gpt-realtime` + 네이티브 보이스가 150~250ms 더 빨랐다. 노트가 쓰인
-이후 `gpt-realtime` 쪽이 개선된 것으로 보인다.
+`data/emergency-triage.json`을 TypeScript와 Python이 함께 읽습니다.
+브리핑·대상자 묘사·초기 부상·구조 시한·모의 비행 시간·이미지가
+이 파일의 단일 정의를 사용합니다.
 
-`ko-KR-SunHi:MAI-Voice-2-Flash` 같은 한국어 MAI 보이스는 `session.update`는
-통과하지만 실제로 오디오가 나오지 않는다. 이 리전에서는 쓸 수 없다.
+`injuryWindowMs: 5000` is shared by the relay and frontend. A rescue confirmed
+with five seconds or less remaining counts as **부상 상태로 구조**, including
+exactly five seconds remaining. A confirmation at the deadline is **too late**.
+Initially injured people remain injured even when rescued earlier.
 
-한국어 커스텀 보이스나 특정 화자가 꼭 필요할 때만 Azure TTS로 바꾼다:
+기본 모의 환경은 이동 7초, 촬영 1초, 분석 2초로 설정되어 있습니다.
+게임상 구조 시한은 모니터 3이 18초, 모니터 1이 28초, 모니터 2가 45초입니다.
+바다의 대상자는 23초부터 상태가 악화되어 제때 탐지해도 부상 상태로 집계됩니다.
+따라서 정상 모의 탐지에서 3 → 1 → 2는 세 사람을 모두 살릴 수 있고,
+긴급한 사람을 늦게 방문하면 실제 시한을 넘깁니다. 판정 자체를 정답 경로와
+문자열 비교하는 방식은 아닙니다.
 
-```powershell
-$env:VOICE_LIVE_VOICE="ko-KR-SunHiNeural"
-$env:VOICE_LIVE_VOICE_TYPE="azure-standard"
+이미지를 바꿀 때는 PNG와 SVG 원본이 일치하도록 함께 갱신하세요. 실제 Azure
+분석은 PNG 픽셀을 사용하며, 모의 모드의 박스 좌표는 `mockBox`로 별도 표시합니다.
+
+설치된 Next.js 이미지 처리 의존성으로 PNG를 다시 만들 수 있습니다:
+
+```bash
+node --input-type=module -e 'import sharp from "sharp"; for (const name of ["monitor-1", "monitor-2", "monitor-3", "empty-scene", "wrong-target", "wrong-hair", "reference-person"]) { await sharp(`public/monitors/${name}.svg`).png().toFile(`public/monitors/${name}.png`); }'
 ```
 
-### 잡음에서 없는 말이 전사되는 문제
+## 음성 동작
 
-`whisper-1`은 무음이나 잡음 구간에서 없는 말을 지어내는 것으로 악명 높다.
-실제로 "쭈쭈쭈쭈!", "You suck." 같은 환청이 대화창에 찍힌다. 세 겹으로 막는다.
+기본 음성은 `gpt-realtime` + `shimmer`의 네이티브 speech-to-speech입니다.
+음성 응답을 생성할 때 별도 전사가 끝나기를 기다리지 않습니다.
+`gpt-4o-transcribe`의 전사는 대화 로그용 보조 경로입니다.
 
-1. **전사 모델을 `gpt-4o-transcribe`로.** 같은 상황에서 훨씬 안정적이다.
-   `prompt`에 도메인 어휘("모니터 1, 경로, 확정…")를 넣어 잡음을 엉뚱한 단어로
-   채우는 것도 억제한다.
-2. **VAD를 덜 예민하게.** `threshold` 0.5 → **0.6**,
-   `speech_duration_ms` 80 → **100**. 짧은 잡음을 줄이면서 "네" 같은 한 음절
-   대답도 안정적으로 받는다.
-   행사장처럼 시끄러운 곳이면 `VOICE_LIVE_VAD_THRESHOLD=0.7`까지 올린다.
-3. **화면단 필터.** 그래도 새어나오는 "한 음절 4회 이상 반복" 형태는
-   `looksHallucinated()`가 걸러낸다. ("네네네" 같은 자연스러운 반복은 통과)
+Korean turn detection uses `azure_semantic_vad_multilingual`, with server echo
+cancellation and noise suppression. Automatic interruption is disabled so
+assistant chat replies are spoken completely. The microphone stays muted
+through each reply, including tool continuations, and reopens only after its
+audio playback queue drains—not when generation finishes. Replies still stream
+natively without waiting for transcription. The X button can explicitly stop
+the session. Tune these settings for the venue:
 
-## 지연(latency) 튜닝
-
-체감 지연은 대부분 보이스가 아니라 **턴 감지**에서 나온다. 사용자가 말을 멈춘 뒤:
-
-```
-350ms (문장이 끝났다고 판단)  +  300ms (silence_duration)  →  speech_stopped
-                                                          →  ~485ms (첫 오디오)
+```bash
+export VOICE_LIVE_VAD_THRESHOLD="0.5"
+export VOICE_LIVE_SILENCE_MS="300"
+export VOICE_LIVE_SPEECH_DURATION_MS="100"
 ```
 
-- **`azure_semantic_vad_multilingual` + `languages: ["ko"]`** 를 쓴다.
-  기본 `azure_semantic_vad`는 문서상 영어 위주라, 한국어 종결어미에서 종료 시점을
-  잘못 잡는다. 지원 언어는 en, es, fr, it, de, ja, pt, zh, **ko**, hi.
-- **`silence_duration_ms`는 300ms** 가 하한선이다. 더 줄이면 "~할까요"가 잘린다.
-- **`prefix_padding_ms`는 420** (semantic VAD 기본값). 낮추면 첫 음절이 잘려서
-  인식률이 떨어진다.
-- **`remove_filler_words: true`** 로 "음", "어" 때문에 잘못 끼어들기 판정되는 걸
-  줄인다.
+도구는 `facts`와 `ask`를 반환하고 음성 모델은 사실을 자연스러운 한국어로
+요약합니다. 모호한 발화 때문에 경로를 임의 선택하거나 초기화하지 않습니다.
+자동 임무는 음성 모델이 매번 도구를 호출해 주지 않아도 계속 진행됩니다.
+첫 인사는 아래 고정 문장을 그대로 읽고 참가자의 답을 기다립니다:
 
-환경 변수로 현장에서 바로 조정할 수 있다:
+> 안녕하세요. 지금 긴급 구조 요청이 세 건 들어와 있고, 드론 한 대로 모두 찾아내야 합니다. 화면의 참고 사진을 보고, 드론이 어떤 사람을 찾아야 하는지 직접 설명해 주시겠어요?
 
-```powershell
-$env:VOICE_LIVE_VAD_THRESHOLD="0.7"       # 더 시끄러운 곳
-$env:VOICE_LIVE_SILENCE_MS="250"          # 더 빠른 응답 (잘림 위험)
-$env:VOICE_LIVE_SPEECH_DURATION_MS="140"  # 시끄러운 현장에서 짧은 잡음을 더 걸러냄
+첫 인사의 요약·의역이나 추가 안내는 허용하지 않습니다. 응답별 안내를
+추가할 때에도 세션의 대화 규칙을 유지하며, 에이전트가 참가자의 프롬프트를
+대신 만들거나 다른 외형을 지어내지 않도록 합니다.
+
+출발이 확정되면 **“지금 출발했습니다. 경로 따라 탐색과 구조를 시작합니다.”**를
+말합니다.
+
+After that announcement finishes playing, the microphone stops and the image
+workspace opens. The original upstream voice connection closes, while the
+mission WebSocket and authorized audio playback context remain available
+silently. Flight, analysis, and countdowns continue.
+
+When results arrive, the browser automatically requests a new output-only
+Voice Live connection. The agent summarizes the final rescue counts once,
+without another welcome, question, or microphone request. After the final
+audio finishes playing, playback and the mission connection close.
+If results arrive before departure audio finishes, narration waits for it.
+A narration failure displays an error without discarding the visible results.
+
+The image workspace shows the captured image and target box without the
+**탐지 근거 / 내 프롬프트** sidebar. The participant's prompt and analysis evidence
+remain part of the authoritative rescue decision.
+
+For technical pauses after departure, use **다시 시도 / 작전 중단**.
+Starting a replacement voice session is disabled during an active mission.
+
+## 테스트
+
+결정론적 상태·캡처·분석 테스트는 외부 Azure 호출 없이 실행합니다:
+
+```bash
+relay/.venv/bin/python -m unittest discover -s relay -p 'test_*.py'
+relay/.venv/bin/python -m relay.smoke_test
+relay/.venv/bin/python -m relay.smoke_test --wrong-description
+npm run lint
+npm run build
 ```
 
-`speech_duration_ms`는 **응답 속도와 무관하다.** "이 정도 길이는 되어야 발화로
-친다"는 문턱일 뿐이라, 올려도 답변이 느려지지 않는다. 조용한 방이면 낮춰서
-반응을 예민하게, 시끄러운 곳이면 올려서 잡음 전사를 막는 쪽으로 쓴다.
+스모크 테스트는 릴레이가 먼저 실행 중이어야 합니다. 실제 Azure 분석 및 음성
+경로는 설정된 리소스가 있는 환경에서 별도로 확인해야 합니다. 자동 회귀 확인용
+`/ws?voice=0` 연결은 내부 테스트 전용이며 참가자 화면에서는 제공하지 않습니다.
 
-| 값 | 성격 |
-| --- | --- |
-| 80 (기본값) | 기침, 문 닫는 소리도 발화로 잡힘 |
-| **100 (현재)** | 짧은 잡음은 줄이고 "네", "1"을 더 안정적으로 통과 |
-| 140 | 시끄러운 행사장용. 아주 짧은 대답이 가끔 씹힐 수 있음 |
-| 200+ | 아주 시끄러운 현장용. 짧은 대답이 씹힐 수 있음 |
-
-### 보이스별 TTFA (도구 없이 순수 발화, 각 3회 중앙값)
-
-| 모델 + 보이스 | TTFA |
-| --- | --- |
-| **`gpt-realtime` + `shimmer`** | **515 ms** |
-| `azure-realtime` + `sunhi` | 1000 ms |
-| `azure-realtime` + `hyunsu` | 1235 ms |
-
-세션 노트는 `azure-realtime`(선희/현수)이 "리스판드는 빠름"이라고 적고 있지만,
-이 리소스에서 직접 재보니 정반대로 2배 느렸다. `sunhi`도 도구 호출 자체는 정상
-동작하므로 목소리 취향으로 바꿀 수는 있다. 다만 TTFA 1초 목표를 아슬아슬하게
-걸치므로 데모에서는 `shimmer`를 유지하는 편이 안전하다.
-
-### 리전
-
-GPT Realtime은 한국에 없다. 서울에서 잰 왕복 시간:
-
-| 리전 | RTT | Voice Live gpt-realtime |
-| --- | --- | --- |
-| `southeastasia` (싱가포르) | **~105 ms** | 지원 |
-| `koreacentral` | 더 가까움 | **미지원** |
-| `japaneast` | 더 가까움 | **미지원** |
-
-한국에서 가장 가까우면서 `gpt-realtime` 계열을 지원하는 곳은 싱가포르뿐이다.
-릴레이를 싱가포르로 옮겨도 브라우저가 한국에 있는 한 한국↔싱가포르 구간은
-그대로라서 이득이 없다. 로컬 릴레이로 충분하다.
-
-## 말투가 기계처럼 들리지 않게 하는 법
-
-가장 큰 원인은 **도구가 완성된 문장을 돌려주고 모델이 그걸 그대로 읽는 것**이다.
-그래서 이 프로젝트의 도구는 문장이 아니라 `facts`(사실)와 `ask`(다음에 물을 것)만
-돌려주고, 프롬프트가 "그대로 읽지 말고 네 말로 바꿔 말하라"고 못박는다.
-
-```python
-# 나쁨 - 모델이 이 문장을 그대로 낭독한다
-return {"speech": "첫 번째 경유지는 모니터 2입니다. 두 번째로 갈 곳을 말씀해 주세요."}
-
-# 좋음 - 모델이 "네, 모니터 2부터 갈게요. 다음은 어디로 갈까요?"처럼 바꿔 말한다
-return {"facts": "첫 번째 경유지는 모니터 2",
-        "ask": "두 번째로 갈 곳을 물어볼 것. 선택지는 모니터 1, 모니터 3"}
-```
-
-## 어디를 고치면 되나
+## 주요 파일
 
 | 무엇 | 파일 |
 | --- | --- |
-| 시스템 프롬프트, 인사말, 도구 정의 | `relay/tools.py` |
-| 경로 로직, 자동 3번째 경유지 | `relay/survey.py` |
-| 모델, 보이스, 리전, VAD 튜닝 | `relay/config.py` |
-| Voice Live에 보내는 세션 설정 | `relay/server.py` → `build_session()` |
-| 마이크 캡처 / 재생 / 끼어들기 | `lib/voiceClient.ts`, `public/audio-worklets.js` |
+| 공유 시나리오·구조 시한·이미지 | `data/emergency-triage.json` |
+| 경로·시계·구조 판정 | `relay/survey.py` |
+| 자동 임무와 일시 정지·재시도 | `relay/mission_runner.py` |
+| 이미지 캡처와 추후 카메라 연결 | `relay/camera.py` |
+| Azure 멀티모달 분석과 모의 탐지 | `relay/vision.py` |
+| 한국어 인사말·도구·대화 규칙 | `relay/tools.py` |
+| 음성·탐지 모델 설정 | `relay/config.py` |
+| WebSocket·상태·음성 이벤트 | `relay/server.py`, `lib/voiceClient.ts` |
+| UI 상태와 패널 | `app/page.tsx`, `components/` |
+| 마이크 캡처·재생 | `public/audio-worklets.js` |
 
-프롬프트는 접속할 때 `session.update`로 한 번만 전송되므로, 고친 뒤에는
-**릴레이를 재시작**해야 한다.
-
-## 도구 추가하기
-
-1. `relay/tools.py`의 `TOOLS`에 스키마를 추가
-2. `dispatch()`에 분기를 추가
-3. `relay/survey.py`의 `SurveySession`에 구현
-
-`{"ok": bool, "facts": str, "ask": str}`를 돌려준다. `facts`에는 실제로 일어난
-일만 적는다. 상태 코드만 돌려주면 모델이 결과를 지어낸다.
-
-## 알아둘 함정
-
-- **인사말이 끝날 때까지 마이크는 음소거된다.** 오디오 그래프가 연결되는 즉시
-  마이크가 흐르는데, 인사말 도중 VAD가 발동하면
-  `conversation_already_has_active_response`로 인사말이 죽는다.
-- **`getUserMedia` 뒤에 `AudioContext`를 resume 해야 한다.** 권한 팝업이 클릭
-  제스처를 먹어서 Chrome이 suspended 상태로 돌려주고, 인사말이 허공에 재생된다.
-- **말풍선 순서.** Whisper 전사는 약 1초 뒤에 오는데 에이전트는 485ms 만에 답한다.
-  그대로 두면 질문보다 답이 위에 그려지므로, `speech_started` 시점에 사용자
-  말풍선 자리를 미리 잡아둔다.
-- **자연스러운 표현과 모호한 표현을 구분해야 한다.** "첫번째/두번째/세번째"는
-  이 대시보드에서 각각 모니터 1/2/3으로 처리한다. 반면 "아무거나"나 서로 다른
-  모니터가 섞인 말은 프롬프트와 `resolve_monitor()`가 모두 거절한다.
-- **응답은 한 번에 하나.** 생성 중에 `response.create`를 또 보내면 거부되므로 그
-  동안 입력창을 잠근다.
-- **음성 응답은 전사를 기다리지 않는다.** Voice Live가 스트리밍 오디오에서 바로
-  응답을 시작해 자연스러운 speech-to-speech 지연을 유지한다. 시작 질문에서
-  첫 번째/두 번째/세 번째 모니터를 명시하고, 프롬프트와 `resolve_monitor()`가
-  같은 번호 표현을 사용한다.
-- **`az login`이 유효해야 한다.** 공용 데모 장비라면 CLI 자격증명 대신 관리 ID나
-  서비스 주체를 쓴다.
-- **한국어 콘솔 출력.** `PYTHONIOENCODING=utf-8` 없이 실행하면 Windows cp949에서
-  `UnicodeEncodeError`가 난다.
-
-## 이전 목업 에이전트
-
-`lib/mockAgent.ts`는 음성 도입 전의 결정론적 에이전트다. 참고용으로 남겨뒀고
-아무 데서도 import하지 않는다. 음성 도입 전 `app/page.tsx`는 커밋 `5fe12d4`에
-그대로 있다.
+릴레이 프롬프트나 설정을 바꾼 뒤에는 릴레이를 재시작하고 새 임무를 시작하세요.

@@ -55,7 +55,7 @@ export default function VoiceOrb({ status, level }: VoiceOrbProps) {
   const isError = status === "error";
 
   return (
-    <div className="flex h-28 w-28 shrink-0 items-center justify-center gap-1.5 sm:h-40 sm:w-40 sm:gap-2">
+    <div className="flex h-full min-h-0 w-full items-center justify-center gap-1.5 sm:gap-2">
       {RESTING_HEIGHTS.map((rest, i) => {
         const reactiveFrac = isListening
           ? Math.min(1, rest * 0.5 + level * 2.2 * BAR_WEIGHTS[i])

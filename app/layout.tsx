@@ -11,8 +11,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "드론 조사 대시보드",
-  description: "Industry Day 실시간 드론 비행 계획 대시보드.",
+  title: "긴급 구조 작전 | Microsoft Foundry",
+  description: "세 사람의 구조 순서를 정하고 자동 드론 탐지를 체험하는 가상 긴급 구조 훈련.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

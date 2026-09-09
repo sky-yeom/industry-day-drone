@@ -1,11 +1,13 @@
-"""Voice Live configuration for the drone survey dashboard.
+"""Voice Live and image analysis configuration for the rescue dashboard.
 
-Every value was verified live against the industry-day-drone Foundry resource.
-Override any of them with environment variables.
+Voice Live defaults were verified against the industry-day-drone Foundry
+resource. Image analysis requires a separately configured deployment.
+Override service settings with environment variables.
 
-Note there is no model *deployment* involved. Voice Live is fully managed:
+Voice Live itself is fully managed:
 the model is provisioned by the service, so nothing here consumes OpenAI
-deployment quota and nothing needs to exist under Foundry > Deployments.
+deployment quota. Azure image analysis separately requires a vision-capable
+model deployment that supports structured outputs.
 """
 
 from __future__ import annotations
@@ -41,6 +43,20 @@ WS_URL = (
 )
 
 TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
+
+# --- Emergency triage image analysis (server only) -----------------------------
+
+TRIAGE_MODE = os.getenv("TRIAGE_MODE", "mock").strip().lower()
+AZURE_VISION_ENDPOINT = os.getenv("AZURE_VISION_ENDPOINT", "").strip()
+AZURE_VISION_DEPLOYMENT = os.getenv("AZURE_VISION_DEPLOYMENT", "").strip()
+AZURE_VISION_API_VERSION = os.getenv("AZURE_VISION_API_VERSION", "v1").strip()
+AZURE_VISION_API_KEY = os.getenv("AZURE_VISION_API_KEY", "").strip()
+
+# The documented v1 Chat Completions contract supports image input and strict
+# JSON schema output on compatible deployments, independently of Voice Live.
+VISION_TOKEN_SCOPE = "https://ai.azure.com/.default"
+VISION_TIMEOUT_SECONDS = 30
+VISION_MAX_IMAGE_BYTES = 4 * 1024 * 1024
 
 # --- Turn detection -----------------------------------------------------------
 
@@ -94,11 +110,12 @@ TRANSCRIPTION_MODEL = os.getenv("VOICE_LIVE_TRANSCRIPTION_MODEL", "gpt-4o-transc
 # 명시적으로 나열해 우선순위를 높인다.
 TRANSCRIPTION_PROMPT = os.getenv(
     "VOICE_LIVE_TRANSCRIPTION_PROMPT",
-    "드론 조사 관제 대화입니다. 자주 나오는 말: 모니터 1, 모니터 2, 모니터 3, "
+    "드론 긴급 구조 관제 대화입니다. 자주 나오는 말: 모니터 1, 모니터 2, 모니터 3, "
     "첫번째, 첫 번째, 첫째, 두번째, 두 번째, 둘째, 세번째, 세 번째, 셋째, "
     "일번, 한 번, 이번, 두 번, 삼번, 세 번, 1번, 2번, 3번, "
     "네, 예, 응, 맞아요, 아니요, "
-    "경로, 확정, 다시, 취소.",
+    "구조, 바다에 빠진 사람, 물에 빠진 사람, 익수자, 잔해 아래의 사람, 불길 속의 사람, 불이 난 집, "
+    "우선순위, 경로, 확정, 출발, 상태, 다시 시도, 중단, 다시, 취소.",
 )
 
 # --- Audio --------------------------------------------------------------------

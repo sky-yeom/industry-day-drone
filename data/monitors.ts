@@ -1,31 +1,20 @@
 import type { MonitorDestination, MonitorId, RoutePlanningState } from "@/lib/types";
+import scenario from "@/data/emergency-triage.json";
+import { isMonitorId } from "@/data/scenario";
 
-export const MONITORS: MonitorDestination[] = [
-  {
-    id: "monitor-1",
-    label: "모니터 1",
-    shortLabel: "1",
-    image: "/monitors/monitor-1.svg",
-    x: 20,
-    y: 38,
-  },
-  {
-    id: "monitor-2",
-    label: "모니터 2",
-    shortLabel: "2",
-    image: "/monitors/monitor-2.svg",
-    x: 78,
-    y: 28,
-  },
-  {
-    id: "monitor-3",
-    label: "모니터 3",
-    shortLabel: "3",
-    image: "/monitors/monitor-3.svg",
-    x: 50,
-    y: 76,
-  },
-];
+export const MONITORS: MonitorDestination[] = scenario.people.map((person, index) => {
+  if (!isMonitorId(person.monitorId)) {
+    throw new Error(`Invalid scenario monitor: ${person.monitorId}`);
+  }
+  return {
+    id: person.monitorId,
+    label: `모니터 ${index + 1}`,
+    shortLabel: String(index + 1),
+    image: person.image,
+    x: person.x,
+    y: person.y,
+  };
+});
 
 export const MONITOR_MAP = Object.fromEntries(
   MONITORS.map((monitor) => [monitor.id, monitor])

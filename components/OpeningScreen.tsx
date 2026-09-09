@@ -5,12 +5,9 @@ import { SCENARIO_BRIEFING, SCENARIO_TITLE } from "@/data/scenario";
 export default function OpeningScreen({ onStart }: { onStart: () => void }) {
   return (
     <main className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-[#f4f3f5] p-5">
-      <div aria-hidden className="pointer-events-none absolute -left-24 -top-24 h-96 w-96 rounded-full bg-[#8661c5]/25 blur-3xl" />
-      <div aria-hidden className="pointer-events-none absolute -bottom-32 -right-16 h-[28rem] w-[28rem] rounded-full bg-[#c5b4e3]/40 blur-3xl" />
+      <div aria-hidden className="dot-field pointer-events-none absolute inset-0 opacity-60 [mask-image:radial-gradient(circle_at_center,black,transparent_70%)]" />
       <section className="opening-card-in relative w-full max-w-2xl rounded-3xl border border-white bg-white/90 p-8 shadow-xl sm:p-12">
-        <span className="inline-block rounded-full bg-[#8661c5]/10 px-3 py-1 text-xs font-bold tracking-widest text-[#8661c5]">
-          Microsoft Foundry · Industry Day
-        </span>
+        <p className="text-xs font-bold tracking-widest text-[#8661c5]">Microsoft Foundry · Industry Day</p>
         <h1 className="mt-5 text-4xl font-bold tracking-[-0.03em] text-[#091f2c]">{SCENARIO_TITLE}</h1>
         <ul className="mt-6 space-y-3 text-sm leading-7 text-gray-500">
           {SCENARIO_BRIEFING.map((bullet, index) => (

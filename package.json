@@ -1,0 +1,33 @@
+{
+  "name": "industry-day-drone",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "setup": "bash scripts/setup.sh",
+    "dev": "next dev",
+    "dev:relay": "TRIAGE_MODE=${TRIAGE_MODE:-mock} relay/.venv/bin/python relay/server.py",
+    "dev:all": "concurrently -n relay,web -c yellow,cyan \"npm:dev:relay\" \"npm:dev\"",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "next": "16.4.0-canary.3",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/turbopack": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "concurrently": "^10.0.5",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.0-canary.3",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

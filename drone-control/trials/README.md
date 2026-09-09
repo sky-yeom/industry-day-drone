@@ -1,5 +1,7 @@
 # 마지막 시험의 참고 실행 코드
 
+별도 COEX 무태그 왕복의 PC 실행기를 구현했습니다. [내일 실행 방법](../docs/COEX_QUICKSTART_20260910.md), [상세 설계](../docs/COEX_TAGLESS_PLAN_20260910.md), [설정](profiles/coex_tagless_left_return_1m_1p8m.json)을 참고하세요. 기본 실행은 기체에 연결하지 않고 계획만 출력합니다. 실기는 명시적 실행 옵션이 필요하며 현장 비행 정확도는 아직 검증하지 않았습니다.
+
 `counted_trial_23132_skip1_repeat_check.py`는 기존 supervised trial의 소스를 저장소 상대 경로로 옮긴 것입니다. `bounded_sonar_climb.py`에는 그 시험에서 실제 사용한 소나 함수2개만 AST를 바꾸지 않고 추출했습니다. 별도 과거 왼쪽70cm 검사/CLI는 추출하지 않았습니다.
 
 - 정지 방문2→3→1→3→2, 처음과 마지막2↔3 이동에서는 ID1 통과.

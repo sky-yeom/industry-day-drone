@@ -101,9 +101,26 @@ Azure 자격 증명은 릴레이에만 보관합니다. 브라우저는 릴레�
 재접속은 새 임무입니다. 연결이 끊기거나 초기화된 실행의 비동기 작업은 취소하며,
 이전 이미지 분석 결과를 새 임무에 적용하지 않습니다.
 
+## 빠른 시작
+
+다른 컴퓨터에서 다시 세팅할 때는 아래 명령으로 시작합니다. 자세한 수동 절차와
+Azure 연동은 이어지는 "실행" 절을 참고하세요.
+
+```bash
+npm run setup    # relay/.venv 생성, relay/requirements.lock.txt 설치, npm install
+npm run dev:all  # 릴레이(mock)와 Next.js 대시보드를 한 번에 실행
+```
+
+`.env.example` → `.env.local`, `relay/.env.example` → `relay/.env`로 복사해 기본값을
+바꿀 수 있습니다. Node 버전은 `.nvmrc`(>=20.9.0), 릴레이 파이썬 의존성은
+`relay/requirements.lock.txt`(고정 버전)로 관리합니다. Windows에서는
+`scripts/setup.sh` 대신 README의 수동 절차(아래 "1. 릴레이" PowerShell 예시)를 따르세요.
+
 ## 실행
 
-대시보드와 릴레이 두 프로세스가 모두 필요합니다.
+대시보드와 릴레이 두 프로세스가 모두 필요합니다. `npm run setup && npm run dev:all`로
+한 번에 실행할 수도 있습니다(위 "빠른 시작" 참고). 아래는 각 단계를 수동으로 실행하는
+방법입니다.
 
 ### 1. 릴레이
 

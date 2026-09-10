@@ -10,7 +10,7 @@ def climb_command(height, age, target=1.5):
     """Sonar-display target, not a claim of centimetre physical accuracy."""
     if height is None or age is None or not math.isfinite(height) or not math.isfinite(age) or not 0 <= age <= .5:
         raise RuntimeError("no fresh height for climb")
-    if not .5 <= height <= 1.8 or not .5 <= target <= 1.5:
+    if not .5 <= height <= 1.8 or not .5 <= target <= 1.6:
         raise RuntimeError("height/target outside bounded ascent")
     error = target - height
     if error < -.051:

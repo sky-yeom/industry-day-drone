@@ -255,8 +255,11 @@ public final class TelemetryProvider {
                 flightMode = value;
                 flightModeMs = when;
             });
+            // Motors can stay false without listener callbacks. Their GET must
+            // stay within the same fresh ground-proof window as IsFlying.
+            pollValue(motorsKey, motorsPollInFlight, "AreMotorsOn", 200,
+                    (value, when) -> { areMotorsOn=value; motorsMs=when; });
             if (++pollTicks % 5 == 0) {
-                pollValue(motorsKey, motorsPollInFlight, "AreMotorsOn", 1000, (value, when) -> { areMotorsOn=value; motorsMs=when; });
                 pollValue(batteryKey, batteryPollInFlight, "BatteryPowerPercent", 1000,
                         (value, when) -> batteryPercent = value);
             }
@@ -361,7 +364,7 @@ public final class TelemetryProvider {
         long now;
         JSONObject json = new JSONObject();
         try {
-            json.put("bridge_build_id", "5.18-connectivity.20260910.5");
+            json.put("bridge_build_id", "5.18-connectivity.20260910.6");
             json.put("bridge_health", com.msdkremote.PcBridge.diagnostics());
             json.put("max_tilt_angle_deg", StickControlManager.MAX_TILT_ANGLE_DEG);
             JSONObject video = com.msdkremote.livevideo.VideoServerManager.getInstance().diagnostics();

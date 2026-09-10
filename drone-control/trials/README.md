@@ -1,8 +1,10 @@
 # 마지막 시험의 참고 실행 코드
 
-**카메라 인식·좌우 이동 단독 시험:** [새 배치 6→3→2→1→2→3→6 실행 안내](../docs/STANDALONE_TAG_SHUTTLE.md).
+**카메라 인식·좌우 이동 단독 시험:** [새 배치 6→1→2→3→2→1→6 실행 안내](../docs/STANDALONE_TAG_SHUTTLE.md).
 `START_TAG_SHUTTLE.ps1`에서 계획/카메라/비행을 구분합니다. Speech·Azure 없이 실행하며
 바닥 0과 벽 출발 태그 6을 별도로 취급합니다. 기존 counted trial은 아래 기록대로 유지합니다.
+현재 ID1 모크 촬영 포함 전체 순찰은 `START_TAG_SHUTTLE.ps1 -Mode Patrol -PhoneIp <현재IP>`이며,
+하방 높이 1.5m에서 6→1→2→3→2→1→6을 방문합니다. 첫 ID1에서 종료하지 않습니다.
 
 별도 COEX 무태그 왕복의 PC 실행기를 구현했습니다. [내일 실행 방법](../docs/COEX_QUICKSTART_20260910.md), [상세 설계](../docs/COEX_TAGLESS_PLAN_20260910.md), [설정](profiles/coex_tagless_left_return_1m_1p8m.json)을 참고하세요. 기본 실행은 기체에 연결하지 않고 계획만 출력합니다. 실기는 명시적 실행 옵션이 필요하며 현장 비행 정확도는 아직 검증하지 않았습니다.
 

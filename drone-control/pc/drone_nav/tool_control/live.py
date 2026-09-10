@@ -21,7 +21,7 @@ from ..protocol import NDJSONClient, RateLimiter
 from ..vision import TcpVideoStream
 from .service import ToolError
 
-BUILD_ID = "5.18-connectivity.20260910.5"
+BUILD_ID = "5.18-connectivity.20260910.6"
 
 
 def fresh(raw, key, max_ms=500):

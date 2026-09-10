@@ -140,7 +140,12 @@ public final class PcBridge {
             controlServer.ensure(() -> ControlServerManager.getInstance().startServer(CONTROL_PORT, token));
             // Opening a socket must not count as a successful SDK binding.
             step("video-server", () -> VideoServerManager.getInstance().startServer(VIDEO_PORT));
-            if (Boolean.FALSE.equals(productConnected)) return;
+            // Registration can finish before the first product callback. Binding
+            // while connection is unknown captures generation 0; the first
+            // PRODUCT_CONNECTED then advances it and all those callbacks are
+            // discarded. Keep TCP diagnostics available, but wait for a known
+            // connected product before installing generation-scoped listeners.
+            if (!Boolean.TRUE.equals(productConnected)) return;
             vs.ensure(() -> StickControlManager.getInstance().startStateListener());
             telemetry.ensure(() -> TelemetryProvider.getInstance().start());
             rc.ensure(() -> RcOverrideMonitor.getInstance().start());

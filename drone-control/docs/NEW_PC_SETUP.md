@@ -55,7 +55,7 @@ Ctrl+C로 종료한 뒤 빌드·재실행합니다.
 
 Git에 없는 항목:
 
-- 휴대폰 APK: `com.ms.voice`, `5.18-connectivity.20260910.5`.
+- 휴대폰 APK: `com.ms.voice`, `5.18-connectivity.20260910.6` (첫 연결·모터 상태 갱신 수정).
 - PC의 실제 `config.local.json`: 휴대폰 IP, 앱 arm token, 카메라·태그 실측/보정값.
 - 실제 site 설정과 공유 PC API token, Azure 로그인 또는 개인 자격 증명.
 - 실제 이미지 분석용 Azure endpoint/deployment 설정.

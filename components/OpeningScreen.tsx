@@ -5,8 +5,8 @@ import { SCENARIO_BRIEFING, SCENARIO_TITLE } from "@/data/scenario";
 import Typewriter from "@/components/Typewriter";
 
 const CALLSIGN = "RAVEN-1";
-const TOP_BOTTOM_LIGHTS = 6;
-const SIDE_LIGHTS = 3;
+const TOP_BOTTOM_LIGHTS = 9;
+const SIDE_LIGHTS = 5;
 
 /** Renders `count` small alternating red/blue glowing dots (a strip of
  * discrete lights, marquee-sign style) - alternates color by index within

@@ -108,6 +108,13 @@ resource "azurerm_container_app" "relay" {
       }
     }
   }
+
+  lifecycle {
+    # CI (.github/workflows/deploy.yml) deploys new images imperatively via
+    # `az containerapp update` on every push to main; ignore drift here so
+    # a later `terraform apply` doesn't revert to the tfvars image tag.
+    ignore_changes = [template[0].container[0].image]
+  }
 }
 
 resource "azurerm_role_assignment" "relay_voice_live" {
@@ -191,5 +198,9 @@ resource "azurerm_container_app" "web" {
         }
       }
     }
+  }
+
+  lifecycle {
+    ignore_changes = [template[0].container[0].image]
   }
 }

@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -18,6 +19,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class MainCompatibilityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_disconnected_remote_pc_is_not_misreported_as_disabled_tools(self):
+        with patch.object(config, "TRIAGE_MODE", "mock"), \
+             patch.object(config, "DRONE_CONTROL_MODE", "mock"), \
+             patch.object(config, "DRONE_CONTROL_TRANSPORT", "remote"), \
+             patch.object(config, "DRONE_CONTROL_USE_TOOLS", True), \
+             patch.object(server, "get_device_hub", return_value=SimpleNamespace(connected=False, mode="mock")):
+            result = await server.api_config()
+        self.assertFalse(result["remoteConnected"])
+        self.assertFalse(result["droneReady"])
+        self.assertNotIn("DRONE_CONTROL_USE_TOOLS=1", result["droneError"])
+
     async def test_existing_public_config_fields_remain_available_with_mock_default(self):
         with patch.object(config, "TRIAGE_MODE", "mock"), patch.object(config, "DRONE_CONTROL_MODE", "mock"):
             result = await server.api_config()

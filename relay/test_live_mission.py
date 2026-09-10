@@ -105,6 +105,13 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
     def commands(self, name):
         return [call for call in self.backend.calls if call[0] == name]
 
+    async def test_safe_vision_error_is_reported_without_dispatching_flight(self):
+        from relay.vision import VisionError
+        await self.runner._fail(VisionError("Azure image request failed (HTTP 401)."))
+        self.assertEqual(self.session.data["droneErrorCode"], "VISION_FAILED")
+        self.assertIn("HTTP 401", self.session.data["error"])
+        self.assertEqual(self.commands("drone_execute_route"), [])
+
     async def test_whole_route_once_waits_for_actual_arrival_and_matching_frames(self):
         first, second = await asyncio.gather(self.runner.launch(), self.runner.launch())
         self.assertTrue(first["ok"] and second["ok"])

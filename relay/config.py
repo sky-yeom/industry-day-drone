@@ -65,6 +65,8 @@ AZURE_VISION_ENDPOINT = os.getenv("AZURE_VISION_ENDPOINT", "").strip()
 AZURE_VISION_DEPLOYMENT = os.getenv("AZURE_VISION_DEPLOYMENT", "").strip()
 AZURE_VISION_API_VERSION = os.getenv("AZURE_VISION_API_VERSION", "v1").strip()
 AZURE_VISION_API_KEY = os.getenv("AZURE_VISION_API_KEY", "").strip()
+AZURE_VISION_MAX_COMPLETION_TOKENS = int(os.getenv("AZURE_VISION_MAX_COMPLETION_TOKENS", "1000"))
+AZURE_VISION_REASONING_EFFORT = os.getenv("AZURE_VISION_REASONING_EFFORT", "").strip().lower()
 
 # The documented v1 Chat Completions contract supports image input and strict
 # JSON schema output on compatible deployments, independently of Voice Live.

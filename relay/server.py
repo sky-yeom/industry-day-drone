@@ -152,7 +152,8 @@ async def api_config():
             drone_error = DroneClient("relay-readiness").readiness()
         except DroneError as exc:
             drone_error = str(exc)
-    elif config.DRONE_CONTROL_TRANSPORT == "remote" and config.DRONE_CONTROL_MODE == "mock":
+    elif (not config.DRONE_CONTROL_USE_TOOLS and config.DRONE_CONTROL_TRANSPORT == "remote"
+          and config.DRONE_CONTROL_MODE == "mock"):
         drone_error = "원격 MOCK 도구 실행은 DRONE_CONTROL_USE_TOOLS=1로 명시적으로 활성화해야 합니다."
     return {
         "resource": config.RESOURCE, "model": config.MODEL, "voice": config.VOICE_NAME,

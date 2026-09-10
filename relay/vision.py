@@ -220,6 +220,8 @@ class AzureVision:
         self.api_version = config.AZURE_VISION_API_VERSION
         self.api_key = config.AZURE_VISION_API_KEY
         self.timeout = config.VISION_TIMEOUT_SECONDS
+        self.max_completion_tokens = config.AZURE_VISION_MAX_COMPLETION_TOKENS
+        self.reasoning_effort = config.AZURE_VISION_REASONING_EFFORT
 
     def readiness(self) -> str | None:
         if not self.endpoint:
@@ -242,6 +244,10 @@ class AzureVision:
             return "이미지와 구조화 출력을 지원하는 모델의 AZURE_VISION_DEPLOYMENT를 설정해 주세요."
         if self.api_version != "v1":
             return "AZURE_VISION_API_VERSION은 지원되는 이미지 분석 계약인 v1이어야 합니다."
+        if type(self.max_completion_tokens) is not int or not 256 <= self.max_completion_tokens <= 8192:
+            return "AZURE_VISION_MAX_COMPLETION_TOKENS는 256~8192 정수로 설정해 주세요."
+        if self.reasoning_effort not in ("", "minimal", "low", "medium", "high"):
+            return "AZURE_VISION_REASONING_EFFORT는 모델이 지원하는 minimal/low/medium/high 값이어야 합니다."
         return None
 
     async def analyze(self, capture: Capture, target_description: str, *, search_prompt: str = "",
@@ -273,8 +279,10 @@ class AzureVision:
                 "type": "json_schema",
                 "json_schema": {"name": "rescue_observation", "strict": True, "schema": EVIDENCE_SCHEMA},
             },
-            "max_completion_tokens": 1000,
+            "max_completion_tokens": self.max_completion_tokens,
         }
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
         try:
             # This includes token acquisition, upload and response reading.
             return await asyncio.wait_for(self._authenticated_request(payload), timeout=self.timeout)

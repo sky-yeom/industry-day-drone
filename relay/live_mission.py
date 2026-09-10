@@ -2,22 +2,26 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from uuid import uuid4
 
 try:
-    from .camera import LiveCaptureCamera
+    from .camera import CaptureError, LiveCaptureCamera
     from .drone_client import DroneError
     from .mission_runner import MissionRunner
     from .survey import ACTIVE, TERMINAL, result
+    from .vision import VisionError
 except ImportError:
-    from camera import LiveCaptureCamera
+    from camera import CaptureError, LiveCaptureCamera
     from drone_client import DroneError
     from mission_runner import MissionRunner
     from survey import ACTIVE, TERMINAL, result
+    from vision import VisionError
 
 STATES = {"accepted", "preflight", "taking_off", "running", "returning",
     "awaiting_rc_landing", "completed", "stop_requested", "stopped", "failed", "outcome_unknown"}
 TERMINAL_FLIGHT = {"completed", "stopped", "failed", "outcome_unknown"}
+log = logging.getLogger("relay.tool_mission")
 
 
 class LiveMissionRunner(MissionRunner):
@@ -188,12 +192,19 @@ class LiveMissionRunner(MissionRunner):
 
     async def _fail(self, exc):
         code = getattr(exc, "code", "MOCK_TOOL_FAILED" if self.expected_mode == "mock" else "LIVE_OPERATION_FAILED")
+        detail = ""
+        if isinstance(exc, (VisionError, CaptureError)):
+            code = "VISION_FAILED" if isinstance(exc, VisionError) else "CAPTURE_FAILED"
+            detail = str(exc)
+        log.error("Tool mission failed (%s, %s)%s", code, type(exc).__name__, ": " + detail if detail else "")
         if self._attempted:
             self.session.abort_mission()
         self.session.data.update(droneErrorCode=code, error=(
             f"MOCK 도구 실행을 중단했습니다 ({code}). 실제 비행은 없으며 자동 재개하지 않습니다."
             if self.expected_mode == "mock" else
             f"실제 드론 작업을 중단했습니다 ({code}). 자동 재개하지 않습니다. 정지 상태를 확인하고 필요하면 RC로 제어·착륙하세요."))
+        if detail:
+            self.session.data["error"] += " " + detail
         self.session.touch()
         await self._stop_hardware()
         await self._notify()

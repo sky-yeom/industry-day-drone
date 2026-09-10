@@ -115,3 +115,115 @@ input {
 .opening-card-in {
   animation: opening-card-in 0.5s ease-out both;
 }
+
+/* Opening screen: alternating red/blue "siren" glows behind the card,
+   blended with the dot-field background instead of flattening it. */
+.siren-light {
+  position: absolute;
+  width: 70vmax;
+  height: 70vmax;
+  border-radius: 9999px;
+  filter: blur(90px);
+  mix-blend-mode: screen;
+}
+
+.siren-light--red {
+  left: -20%;
+  top: -15%;
+  background: radial-gradient(circle, rgba(239, 68, 68, 0.55), transparent 60%);
+  animation: siren-pulse 2.6s ease-in-out infinite;
+}
+
+.siren-light--blue {
+  right: -20%;
+  bottom: -15%;
+  background: radial-gradient(circle, rgba(59, 130, 246, 0.55), transparent 60%);
+  animation: siren-pulse 2.6s ease-in-out infinite;
+  animation-delay: 1.3s;
+}
+
+@keyframes siren-pulse {
+  0%, 100% { opacity: 0.18; transform: scale(0.92); }
+  50% { opacity: 0.5; transform: scale(1.05); }
+}
+
+/* Opening screen: HUD-style viewfinder corner brackets on the card. */
+.hud-corner {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border: 2px solid rgba(134, 97, 197, 0.45);
+  pointer-events: none;
+}
+
+.hud-corner--tl { top: 10px; left: 10px; border-right: none; border-bottom: none; border-top-left-radius: 10px; }
+.hud-corner--tr { top: 10px; right: 10px; border-left: none; border-bottom: none; border-top-right-radius: 10px; }
+.hud-corner--bl { bottom: 10px; left: 10px; border-right: none; border-top: none; border-bottom-left-radius: 10px; }
+.hud-corner--br { bottom: 10px; right: 10px; border-left: none; border-top: none; border-bottom-right-radius: 10px; }
+
+/* Opening screen: faint horizontal scanlines over the card, like a live
+   monitor feed. */
+.scanline-overlay {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(9, 31, 44, 0.035) 0px,
+    rgba(9, 31, 44, 0.035) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+
+/* Opening screen: full-viewport film grain + vignette for a "briefing
+   room" feel. Grain is an inline SVG turbulence filter (no image asset). */
+.grain-overlay {
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.vignette-overlay {
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(9, 31, 44, 0.18) 100%);
+}
+
+/* Opening screen: blinking "LIVE" indicator dot. */
+.live-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: #ef4444;
+  animation: live-blink 1.6s ease-in-out infinite;
+}
+
+@keyframes live-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+/* Opening screen: blinking cursor for the typewriter briefing reveal
+   (components/Typewriter.tsx). */
+.typewriter-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 1px;
+  vertical-align: -0.15em;
+  background: currentColor;
+  animation: cursor-blink 0.9s steps(1) infinite;
+}
+
+@keyframes cursor-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .siren-light,
+  .live-dot,
+  .typewriter-cursor {
+    animation: none !important;
+  }
+  .siren-light {
+    opacity: 0.22;
+  }
+}

@@ -87,10 +87,10 @@ class FixtureCamera:
             None,
         )
         if person is None or monitor_id not in ("monitor-1", "monitor-2", "monitor-3"):
-            raise CaptureError("등록되지 않은 모니터입니다. 구조 경로를 확인해 주세요.")
+            raise CaptureError("등록되지 않은 현장입니다. 구조 경로를 확인해 주세요.")
         expected = f"/monitors/{monitor_id}.png"
         if person["image"] != expected:
-            raise CaptureError("촬영 파일 설정이 허용된 모니터 PNG 경로와 다릅니다.")
+            raise CaptureError("촬영 파일 설정이 허용된 현장 PNG 경로와 다릅니다.")
         path = PUBLIC_ROOT / "monitors" / f"{monitor_id}.png"
         try:
             resolved = path.resolve()
@@ -98,7 +98,7 @@ class FixtureCamera:
         except (OSError, RuntimeError) as exc:
             raise CaptureError("촬영 파일의 로컬 경로를 확인할 수 없습니다.") from exc
         if resolved != allowed:
-            raise CaptureError("촬영 파일은 지정된 로컬 모니터 폴더 안에 있어야 합니다.")
+            raise CaptureError("촬영 파일은 지정된 로컬 현장 폴더 안에 있어야 합니다.")
         return path
 
     def _read(self, monitor_id: str) -> bytes:
@@ -107,7 +107,7 @@ class FixtureCamera:
             with path.open("rb") as source:
                 image = source.read(config.VISION_MAX_IMAGE_BYTES + 1)
         except OSError as exc:
-            raise CaptureError("모니터 촬영 파일을 읽을 수 없습니다. 로컬 PNG 파일을 확인해 주세요.") from exc
+            raise CaptureError("현장 촬영 파일을 읽을 수 없습니다. 로컬 PNG 파일을 확인해 주세요.") from exc
         validate_image(image, "image/png")
         return image
 

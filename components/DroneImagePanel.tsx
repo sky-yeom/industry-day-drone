@@ -30,7 +30,7 @@ export default function DroneImagePanel({ captures }: { captures: CapturedImage[
     </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[#ded8ea] bg-[linear-gradient(145deg,#ffffff_0%,#f3effb_56%,#e7f4fc_100%)]">
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-1 bg-[#463668] px-3 py-2 text-[10px] text-white/80">
-          <span>{current ? `모니터 ${current.monitorId.slice(-1)} · ${index + 1}차 촬영` : "촬영 이미지 수신 대기"}</span>
+          <span>{current ? `현장 ${current.monitorId.slice(-1)} · ${index + 1}차 촬영` : "촬영 이미지 수신 대기"}</span>
           <span className="tabular-nums">{current ? `촬영 ${(current.capturedAtMs / 1000).toFixed(1)}초` : "출발 전"}</span>
         </div>
         {!current ? <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-center text-sm leading-6 text-[#8c8279]">
@@ -38,7 +38,7 @@ export default function DroneImagePanel({ captures }: { captures: CapturedImage[
         </div> : <div className="relative min-h-0 flex-1" style={{ containerType: "size" }}>
           <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
             style={{ width: `min(100cqw, ${ratio * 100}cqh)`, aspectRatio: ratio }}>
-            <Image src={current.imageUrl} alt={`모니터 ${current.monitorId.slice(-1)}에서 실제 분석에 사용한 촬영 이미지`}
+            <Image src={current.imageUrl} alt={`현장 ${current.monitorId.slice(-1)}에서 실제 분석에 사용한 촬영 이미지`}
               fill unoptimized className="object-contain"
               onLoad={(event) => {
                 const image = event.currentTarget;

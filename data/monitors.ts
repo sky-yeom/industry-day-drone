@@ -8,7 +8,7 @@ export const MONITORS: MonitorDestination[] = scenario.people.map((person, index
   }
   return {
     id: person.monitorId,
-    label: `모니터 ${index + 1}`,
+    label: `현장 ${index + 1}`,
     shortLabel: String(index + 1),
     image: person.image,
     x: person.x,

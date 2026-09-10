@@ -24,7 +24,7 @@ export default function ResultsPanel({ state, debrief, onReset }: {
       </div>
       <div className="grid shrink-0 grid-cols-3 gap-2">
         {state.people.map((person) => <article key={person.id} className={`rounded-xl border p-2 ${person.outcome === "too_late" ? "border-[#e1d3c7]/70 bg-[#fff8f3]/70" : "border-[#c5b4e3]/50 bg-[#eee8f7]/50"}`}>
-          <h3 className="text-xs font-semibold text-[#463668]">모니터 {person.monitorId.slice(-1)}</h3>
+          <h3 className="text-xs font-semibold text-[#463668]">현장 {person.monitorId.slice(-1)}</h3>
           <p className="mt-1 text-[11px] text-[#6e6575]">{person.label}</p>
           <p className="mt-1 text-xs font-semibold text-[#091f2c]">{person.outcome ? OUTCOME_LABELS[person.outcome] : "미해결 · 작전 중단"}</p>
         </article>)}
@@ -43,7 +43,7 @@ export default function ResultsPanel({ state, debrief, onReset }: {
           </div>
         </div>}
       </div>
-      <p className="shrink-0 text-[10px] leading-4 text-[#6e6575]">마지막 5초 안에 구조하면 부상 상태로 집계됩니다. 모니터 2는 처음부터 부상이 있습니다. 부상 상태도 구조 성공이며 실제 의학적 판단은 아닙니다.</p>
+      <p className="shrink-0 text-[10px] leading-4 text-[#6e6575]">마지막 5초 안에 구조하면 부상 상태로 집계됩니다. 현장 2는 처음부터 부상이 있습니다. 부상 상태도 구조 성공이며 실제 의학적 판단은 아닙니다.</p>
     </>}
   </section>;
 }

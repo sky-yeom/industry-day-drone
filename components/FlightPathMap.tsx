@@ -16,7 +16,7 @@ export function MissionCountdownSummary({ state, elapsedMs, connected }: {
 }) {
   return <section aria-label="세 사람의 구조 시한과 현재 작전 상태" className="space-y-1">
     <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-      <strong>{MISSION_LABELS[state.missionPhase]}{state.activeMonitorId ? ` · 모니터 ${state.activeMonitorId.slice(-1)}` : ""}</strong>
+      <strong>{MISSION_LABELS[state.missionPhase]}{state.activeMonitorId ? ` · 현장 ${state.activeMonitorId.slice(-1)}` : ""}</strong>
       <span className="tabular-nums">
         경과 {(elapsedMs / 1000).toFixed(1)}초 · {state.clockRunning ? connected ? "진행 중" : "연결 끊김 · 마지막 수신 상태" : "정지"}
       </span>
@@ -25,7 +25,7 @@ export function MissionCountdownSummary({ state, elapsedMs, connected }: {
       {state.people.map((person) => {
         const remaining = Math.max(0, person.deadlineMs - (person.resolvedAtMs ?? elapsedMs));
         return <div key={person.id} className={`rounded-xl border px-2 py-1 ${state.activeMonitorId === person.monitorId ? "border-[#8661c5] bg-[#f0ebf7]" : "border-[#e2dce9] bg-white"}`}>
-          <p className="text-xs font-semibold">모니터 {person.monitorId.slice(-1)}{person.attempts >= 2 ? " · 2회 시도" : ""}</p>
+          <p className="text-xs font-semibold">현장 {person.monitorId.slice(-1)}{person.attempts >= 2 ? " · 2회 시도" : ""}</p>
           <p className="text-xs font-semibold tabular-nums">{person.outcome ? OUTCOME_LABELS[person.outcome] : `남은 ${(remaining / 1000).toFixed(1)}초`}</p>
           {!person.outcome && remaining === 0 && <p className="mt-1 text-xs">서버 판정 대기 중</p>}
         </div>;

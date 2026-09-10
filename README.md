@@ -116,6 +116,36 @@ npm run dev:all  # 릴레이(mock)와 Next.js 대시보드를 한 번에 실행
 `relay/requirements.lock.txt`(고정 버전)로 관리합니다. Windows에서는
 `scripts/setup.sh` 대신 README의 수동 절차(아래 "1. 릴레이" PowerShell 예시)를 따르세요.
 
+## 배포 (Azure Container Apps)
+
+브라우저만으로 접속 가능한 공개 데모로 배포하려면:
+
+```bash
+./scripts/deploy.sh
+```
+
+이 스크립트는 Azure Container Registry에 두 이미지(릴레이 + 웹)를 클라우드에서
+빌드(`az acr build`, 로컬 Docker 불필요)하고, Azure Container Apps에 배포하며,
+릴레이 컨테이너의 시스템 할당 관리 ID(Managed Identity)에 기존 Voice Live /
+Vision 리소스에 대한 "Cognitive Services User" 역할을 부여합니다(API 키를 코드나
+환경변수에 저장할 필요 없음). 기본적으로 방문자가 세션 시작 전 공유 PIN을
+입력하도록 게이트를 켭니다 — 세션마다 과금되는 Voice Live/Vision 호출이 발생하기
+때문입니다. `SITE_PIN=""`으로 게이트를 끌 수 있습니다.
+
+인프라 정의(Container Apps 환경, 두 컨테이너 앱, 역할 할당)는 `infra/*.tf`
+(Terraform)에 있습니다. 이미지를 이미 빌드/푸시했다면 직접 조정할 수도 있습니다:
+
+```bash
+cd infra
+cp terraform.tfvars.example terraform.tfvars   # 이미지 태그, site_pin 채우기
+terraform init
+terraform plan
+terraform apply
+```
+
+`infra/*.tfvars`와 `*.tfstate`는 비밀 값(ACR 관리자 암호, PIN)을 담고 있어
+gitignore 처리되어 있습니다.
+
 ## 실행
 
 대시보드와 릴레이 두 프로세스가 모두 필요합니다. `npm run setup && npm run dev:all`로

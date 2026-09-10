@@ -50,3 +50,9 @@ __pycache__/
 # local audio scratch
 *.wav
 *.pcm
+
+# terraform
+infra/.terraform/
+infra/terraform.tfstate*
+infra/terraform.tfvars
+infra/*.tfplan

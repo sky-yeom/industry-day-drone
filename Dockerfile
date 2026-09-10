@@ -4,6 +4,14 @@
 FROM node:20.9.0-slim AS builder
 WORKDIR /app
 
+# NEXT_PUBLIC_* vars are inlined into the client bundle at build time, so
+# they must be supplied as build args (not just runtime env) pointing at
+# the relay's real public URL.
+ARG NEXT_PUBLIC_RELAY_HTTP
+ARG NEXT_PUBLIC_RELAY_WS
+ENV NEXT_PUBLIC_RELAY_HTTP=${NEXT_PUBLIC_RELAY_HTTP}
+ENV NEXT_PUBLIC_RELAY_WS=${NEXT_PUBLIC_RELAY_WS}
+
 COPY package.json package-lock.json ./
 RUN npm ci
 

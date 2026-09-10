@@ -11,8 +11,10 @@ from fastapi import WebSocketDisconnect
 
 try:
     from .drone_client import DroneClient, DroneError
+    from . import operator_access
 except ImportError:
     from drone_client import DroneClient, DroneError
+    import operator_access
 
 
 log = logging.getLogger("relay.camera")
@@ -61,7 +63,11 @@ def camera_event(response):
 
 
 async def serve_camera(browser):
-    await browser.accept()
+    protocol = operator_access.selected_protocol(browser)
+    if protocol:
+        await browser.accept(subprotocol=protocol)
+    else:
+        await browser.accept()
     client = None
     mode = None
     tasks = []

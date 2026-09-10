@@ -2,9 +2,8 @@
 
 ## Backend-only integration with current main
 
-Integration baseline: **main `cc84076`**, with drone sources from
-**feat/drone `2cd49d1`** plus the local Home6, shared-camera and horizontal-only
-TV-framing changes. The integration does not replace the main team's frontend,
+Integration baseline: **main `e129277`**, prior backend `958cd49`, and field source
+`6a4e233`, with an explicit field HTTP adapter. The integration does not replace the main team's frontend,
 scenario assets, sign-in gate, infrastructure, web container or deployment script.
 Only `relay/`, `drone-control/` and the owned Windows backend launcher are included.
 
@@ -18,8 +17,7 @@ panels or the detailed physical stop/landing states automatically.
 Main now bakes the **cloud relay URL** into its web build. That relay cannot reach
 the operator PC's `127.0.0.1:8766`: loopback in Azure means the Azure container, not
 the PC. This merge preserves that deployment and keeps flight **mock by default**.
-It does not implement or enable a cloud-to-PC control channel. A separately reviewed,
-authenticated, device-bound outbound PC channel is required before using that cloud
+An explicitly configured, authenticated, device-bound outbound PC channel is required before using that cloud
 relay for real flight; do not expose the raw local API or phone ports as a shortcut.
 Command identity, ordering, lease expiry, uncertain-write handling, stop verification
 and single-video ownership must survive such a channel, not just JSON field names.
@@ -36,11 +34,12 @@ Before enabling live missions with the current frontend, agree the UI contract f
 RC takeover, unknown stop outcomes and manual landing; scenario completion is not
 aircraft landing.
 
-The newly fetched standalone checker/shuttle remains a **separate entry point**:
-its default left-to-right `[1,2,3,6]` differs from the dashboard profile
-`[3,1,2,6]`. Neither profile is interchangeable, and a sample's flags do not certify
-the current physical venue. Do not run the standalone controller concurrently with
-the dashboard's mission owner.
+The standalone CLI remains a separate entry point, with fixed route
+`[6,1,2,3,2,1,6]`. The **field HTTP adapter reuses those actual helpers**, including
+settled takeoff, bounded climb, `MixedDetector`, and the latest `PairFramingGate`.
+It has a separately validated external route extension, not a rewritten motion
+loop or the old PULSE controller. Do not run the standalone controller concurrently
+with the HTTP mission owner. A sample's flags do not certify the current PC/site.
 
 Baseline: `sky/feat/dashboard` at `f416ae545f703542f30e4b69c2dbcd896635a5f7`.
 Branch: `feat/drone`, commit identity `WhoAmI125`.
@@ -53,24 +52,38 @@ Voice Live calls the existing `launch_mission` tool only after route confirmatio
 image analysis and scoring. This integration does not choose a different route.
 
 `DRONE_CONTROL_MODE=mock` preserves the dashboard's existing timed fixture flow.
+Only explicit `DRONE_CONTROL_MOCK_CAPTURES=1` enables capture-capable mock tools:
+capabilities then include `mock_capture_ready=true`. Each selected monitor returns
+the canonical `public/monitors/monitor-N.png` bytes and a second, visibly marked
+synthetic fixture variant with different pixels. Both are `simulated=true`,
+`capture_source=synthetic_fixture`; neither asserts camera freshness or physical
+arrival. `fixture_sha256` preserves the canonical asset identity for both variants;
+the actual capture `sha256` still describes its own transmitted bytes. The fixture
+variant encoder uses only Python's standard library, without PC vision dependencies.
+Default mock continues returning no tool captures. See relay settings for
+its explicit tools-transport mock mode; enabling mock captures alone does not change
+the relay's default scenario runner.
 `DRONE_CONTROL_MODE=live` creates a `LiveMissionRunner`: it reads capabilities,
 maps each `monitor-N` to the registered `tag-N`, submits the whole selected route
 once, then waits for actual arrival and attributed PNG frames. It never falls back
 to simulated travel or fixture images. `TRIAGE_MODE=azure` is required for live
 captures; the two mode flags have different responsibilities.
 
-The current dashboard profile separates forward-facing **Home ID6** from the three
+The field profile separates forward-facing **Home ID6** from the three
 scenario destinations: ID1 = sea, ID2 = rubble, ID3 = fire. **Floor ID0** remains the
 takeoff/manual-landing reference. The displayed downward target height remains
-**1.4m**, BODY ANGLE at most **1.5 degrees**, and vertical correction at most **0.18m/s**.
+**1.5m**, lateral BODY ANGLE at most **0.6 degrees**, and ascent at most **0.18m/s**.
 These are flight settings, not a surveyed mounting height for Home ID6.
 
-The planned displayed left-to-right order is **3, 1, 2, 6**, with floor ID0 under
-the aircraft facing Home ID6. Accordingly the example's aircraft-left traversal
-order is **[6, 2, 1, 3]**. This is a planned layout, not a measured calibration:
-`layout_confirmed` remains **false**. Verify the complete physical layout, current
-camera/body calibration and actual measurements before issuing a new private site
-revision. Home must occur exactly once, preserving destination-left order **2, 1, 3**.
+Field left-to-right order is **[3,2,1,6]**, with floor ID0 under the aircraft
+facing Home6. Direction for every selected leg, including non-adjacent legs and
+rightward visits, comes from this exact order. Only the expected ID confirms a
+visit. Target centre must be at **85–95%** of image width, with the entire black
+tag inside the image. Continuous proportional lateral correction/reacquisition
+uses the latest pair gate (correction **0.25–0.6 degrees**); reversals settle first.
+No vertical/depth/yaw corrections are permitted during lateral travel. The
+reference-plane footprint is diagnostic-only, and `tv_visibility_verified=false`.
+After the selected visits, Home6 uses the broad, non-pair return gate.
 
 The adapter accepts all six permutations visiting registered tags 1/2/3 exactly
 once. ID6 is not a fourth destination and does not count as a scenario visit or
@@ -79,6 +92,9 @@ route, deriving both outbound and return directions from the measured order. It
 releases Virtual Stick and waits for **manual RC landing at floor ID0**; this change
 does not add automatic floor alignment or landing.
 
+The explicit/default `DRONE_CONTROL_ADAPTER=legacy` preserves the older HTTP
+adapter, including 1.4m and the example's `[6,2,1,3]` aircraft-left ordering.
+`integration/site.example.json` is **legacy only**, not a field setup certificate.
 Existing measured Home-ID2 profiles remain supported. The legacy `drone-nav` patrol
 and historical trial scripts still use their original ID2 anchor; the HTTP adapter
 is the dashboard integration path. The tagless COEX 1.8m/1m-left-return runner remains
@@ -93,6 +109,15 @@ such as 60000 are retained as unresolved range codes rather than measured 60m.
 All calls use `POST http://127.0.0.1:8766/tools/{name}`, bearer authentication, and
 `{arguments, caller_id, request_id}`. The browser and language model never receive
 the phone arm token or this bearer token. Arguments are validated again by the service.
+Connectors additionally send `X-Drone-Expected-Mode: mock` or `live` on every
+request. The service compares this with its actual mode **before** dispatching
+tools, camera operations or admission lookups; mismatch returns HTTP 409
+`MODE_MISMATCH` without execution. Invalid/duplicate mode headers are rejected.
+This prevents a mock connector from controlling a replacement live service
+between its capability preflight and execute POST. Existing local clients may
+omit the header; authenticated connectors must always set their fixed expected mode.
+Capabilities advertise `expected_mode_guard=true`; connectors require this before
+opening their cloud channel so an older unguarded PC service fails closed.
 
 | Tool | Result |
 |---|---|
@@ -108,6 +133,22 @@ Responses contain `schema_version`, `ok`, `execution_mode`, `physical_execution`
 and tool-specific fields. Execute/get/stop return a `mission` object. Captures are
 at most two fresh PC-decoded camera frames per confirmed visit, 4MiB each; their
 timestamps describe PC decode/capture time, not an aircraft exposure timestamp.
+Field capabilities add `adapter=field`. Its full-frame PNG pixels are exactly
+the undistorted pixels used by `MixedDetector` for the same framing decision
+(`capture_source=pc_undistorted_camera_frame`), without crops or annotations.
+Frame identity, generation, finite stationary N/E/down velocity, current RC/MSDK
+ownership, and freshness <=500ms are rechecked after PNG/base64 encoding.
+Both decoded frame ID and PNG contents must differ for the second capture.
+Mission/visit/destination bindings, `capture_evidence`, `framing_diagnostic`,
+`arrival_band_fraction=[0.85,0.95]` and `simulated=false` accompany the bytes.
+Each ordered visit emits moving, visually confirmed arrival, then two captures;
+preflight/taking_off/running/returning remain mission states. Home6 is not a visit.
+If either capture is unavailable the mission stops/releases, without replaying
+movement or passing a stale JPEG off as fresh camera evidence.
+Local confirmation JPEGs, first-detection diagnostics, and the background frame
+recorder use `cv2.imencode` plus Python binary file writes, not OpenCV pathname
+writes. This supports Korean/Unicode checkout and capture directories; encoding,
+filesystem and incomplete-write failures remain failures, never saved-photo claims.
 
 SQLite stores admissions, request fingerprints, visits and captures before replying.
 The same caller/request returns the original admission; changed arguments conflict.
@@ -205,18 +246,48 @@ Run each component in its own terminal:
 ./scripts/start-drone.ps1 -Component dashboard
 ```
 
-Starting these processes does not start a mission. Default mode is mock. To
-configure the physical adapter, set `DRONE_CONTROL_MODE=live`,
-`DRONE_CONTROL_ENABLE_LIVE=1`, `DRONE_CONTROL_SITE_CONFIG` and
-`DRONE_CONTROL_CONFIG_PATH`, plus `TRIAGE_MODE=azure` and the relay's image/voice
-credentials. A copy of `integration/site.example.json` requires an actual measured
-site revision and `layout_confirmed=true`; the shipped example deliberately does
-not assert that a new venue has the old tag layout. The private nav config must
-contain actual calibration, tags, current phone IP and phone arm token.
-`pc/config.sample.json` includes a 150mm ID6 with `world_pose=null` for visual
-recognition; it does not invent surveyed coordinates. Its legacy ID0/ID2 poses and
-patrol defaults are unchanged, and its readiness flags must not be treated as proof
-of the new site. The HTTP adapter overrides the patrol cruise target to 1.4m.
+Starting these processes does not start a mission. Default mode is mock, and the
+adapter selector defaults to legacy. Field execution requires all of:
+
+```text
+DRONE_CONTROL_MODE=live
+DRONE_CONTROL_ENABLE_LIVE=1
+DRONE_CONTROL_ADAPTER=field
+DRONE_CONTROL_SITE_CONFIG=C:\private\field-site.local.json
+DRONE_CONTROL_CONFIG_PATH=C:\private\config.local.json
+DRONE_CONTROL_FIELD_PROFILE=C:\checkout\drone-control\trials\profiles\standalone_tag_6321236.json
+DRONE_CONTROL_FIELD_REFERENCE=C:\checkout\drone-control\trials\profiles\id1_tv_pair_reference.json
+```
+
+Use the relay's real-image analysis configuration separately. All paths must
+identify the intended local files; missing/invalid field settings fail, never fall
+back to legacy or mock. The private field site accepts exactly this schema:
+
+```json
+{
+  "schema_version": 1,
+  "profile_id": "field-ordered-v1",
+  "site_revision": "replace-with-independent-private-site-revision",
+  "wall_ids_left_to_right": [3, 2, 1, 6],
+  "floor_tag_id": 0,
+  "home_tag_id": 6,
+  "target_height_m": 1.5,
+  "expected_bridge_build_id": "5.18-connectivity.20260910.6",
+  "layout_confirmed": false,
+  "field_setup_confirmed": false
+}
+```
+
+Both confirmation booleans must independently be true for a prepared PC/site.
+Upstream profile `layout_confirmed=true` is not this confirmation. Private nav
+JSON must have calibrated camera intrinsics, `actual_measurements_confirmed=true`,
+the actual positive floor0 black-square size, current private non-loopback phone
+IP, and private non-placeholder confirmation token. Field's explicitly selected
+image-only-wall loader accepts only floor0 in `tags`, with `world_pose=null`;
+wall sizes/poses are neither required nor invented. Existing extra tag facts are
+preserved but never used for metric wall navigation. Legacy config validation
+and standalone CLI defaults are unchanged. Profile target must be 1.5m; reference
+band must be `[0.85,0.95]`. Do not treat sample dimensions/calibration as measurements.
 
 The service is loopback-only, rejects browser Origin requests and keeps tokens out
 of tools, browser bundles and logs. Raw flight JSONL, SQLite/captures, configs and
@@ -225,7 +296,7 @@ against the same phone while this service owns a mission.
 
 ## Android connectivity changes
 
-New source build: **5.18-connectivity.20260910.5**, versionCode **20260910**.
+Required field source build: **5.18-connectivity.20260910.6**, versionCode **20260910**.
 The overlay implements bounded shared physical SDK reads, FC key health and
 actual motor telemetry, process/connection generations, transactional perception
 listeners, connection-owned query callbacks, camera-binding generations and
@@ -244,7 +315,10 @@ motor telemetry for .5. New-build execution still needs ground/hardware validati
 
 ## Verification and practical limits
 
-### TV-left / tag-right capture framing
+### Legacy-only TV-left / tag-right capture framing
+
+This section describes `DRONE_CONTROL_ADAPTER=legacy`, **not field**. Field uses
+the continuous 85–95% pair gate above and never invokes this older PULSE path.
 
 The sample navigation config now opts into `patrol.tv_framing` for **scenario
 IDs 1/2/3 only**. Floor ID0 and forward Home ID6 retain their separate acquisition

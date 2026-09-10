@@ -55,7 +55,7 @@ class MainCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(
             "COPY drone-control/integration/speech_control_contract/tools.json "
             "./drone-control/integration/speech_control_contract/tools.json", dockerfile)
-        with TemporaryDirectory() as temporary:
+        with TemporaryDirectory(dir=ROOT) as temporary:
             root = Path(temporary)
             shutil.copytree(ROOT / "relay", root / "relay",
                             ignore=shutil.ignore_patterns(".venv", "__pycache__", ".env", "*.local.*"))
@@ -67,6 +67,7 @@ class MainCompatibilityTests(unittest.IsolatedAsyncioTestCase):
             script = """
 import asyncio, sys
 from relay import server, config
+from relay import pc_connector
 config.TRIAGE_MODE = config.DRONE_CONTROL_MODE = 'mock'
 assert asyncio.run(server.api_config())['visionReady']
 assert not any(name == 'drone_nav' or name.startswith('drone_nav.') for name in sys.modules)

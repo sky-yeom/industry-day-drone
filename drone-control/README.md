@@ -3,9 +3,15 @@
 이 폴더는 드론 제어 담당 코드와 구현 계획입니다. Speech 대화·방문 순서 결정·대시보드·시나리오 채점은 상대 팀 담당입니다. 우리는 전달받은 목적지 순서를 검증하고 실행 상태·센서·사진·오류를 반환합니다.
 
 **카메라 인식과 좌우 이동만 시험하려면:** [단독 AprilTag 왕복 안내](docs/STANDALONE_TAG_SHUTTLE.md)를 사용합니다.
-배치는 벽 1·2·3·6, 바닥 0이며 경로는 6→3→2→1→2→3→6입니다. Speech/Azure 없이 실행합니다.
+배치는 벽 3·2·1·6, 바닥 0이며 경로는 6→1→2→3→2→1→6입니다. Speech/Azure 없이 실행합니다.
 
 **2026-09-10: 최신 대시보드와 연결하는 HTTP 도구 서비스·실제 태그 비행 adapter·앱 연결 수정 코드를 추가했습니다.** 기본 실행은 mock입니다. 실제 모드는 새 APK, 현장 설정과 Azure 분석 설정을 명시해야 하며, 코드 검증과 실기 검증은 구분합니다. 설치·실행·검증 범위는 [현재 통합 안내](docs/CONTROL_INTEGRATION_20260910.md)를 따릅니다.
+
+`DRONE_CONTROL_ADAPTER=field`는 최신 단독 시험 helper를 HTTP에 연결합니다.
+1.5m, 벽 `[3,2,1,6]`, 85–95% 프레이밍으로 선택된 1·2·3 순서를 그대로 한 번씩 방문하고
+각 방문에 서로 다른 신선한 PNG 두 장을 반환합니다. Home6 복귀 후 RC 수동 착륙입니다.
+기존 `legacy` adapter와 기본 mock은 유지하며, `DRONE_CONTROL_MOCK_CAPTURES=1`만
+명시적으로 시뮬레이션 fixture PNG를 제공하며 실기 촬영으로 표시하지 않습니다.
 
 | 위치 | 내용 |
 |---|---|
@@ -16,7 +22,7 @@
 | [앱 수정 적용 순서](docs/fix_ready_20260907/APPLY_ORDER.md) | FC·query·영상·PC 상세 계획 |
 | [pc/drone_nav](pc/drone_nav) | 현재 PC 제어·태그·영상·프로토콜 source snapshot |
 | [Android source](android/README.md) | 현재 사용한 MSDK5.18 bridge 및 sample/UX overlay |
-| [trials](trials/README.md) | 마지막 supervised trial의 재현 참고 소스; Speech Tool에 연결되지 않음 |
+| [trials](trials/README.md) | 단독 시험 기본 경로 유지; 최신 shuttle helper는 명시적 field HTTP adapter도 사용 |
 
 ## 기체 없이 연동 검사
 

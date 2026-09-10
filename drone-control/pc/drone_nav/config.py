@@ -264,7 +264,7 @@ class AppConfig:
     def goal_tag(self) -> TagConfig:
         return self.tag_map[2]
 
-    def validate(self) -> None:
+    def validate(self, *, image_only_walls=False) -> None:
         for name, value in (
             ("room.length_m", self.room.length_m),
             ("room.width_m", self.room.width_m),
@@ -273,12 +273,16 @@ class AppConfig:
             ("camera.fy", self.camera.fy),
         ):
             _positive(name, value)
-        if len(self.tags) < 2 or len({tag.id for tag in self.tags}) != len(self.tags):
-            raise ValueError("at least two distinct AprilTag IDs are required")
+        minimum_tags = 1 if image_only_walls else 2
+        if len(self.tags) < minimum_tags or len({tag.id for tag in self.tags}) != len(self.tags):
+            raise ValueError("at least one distinct AprilTag ID is required" if image_only_walls
+                             else "at least two distinct AprilTag IDs are required")
         if any(isinstance(tag.id, bool) or not isinstance(tag.id, int) for tag in self.tags):
             raise ValueError("tag IDs must be integers")
-        if not {0, 2} <= {tag.id for tag in self.tags}:
-            raise ValueError("tag IDs must include start=0 and home/goal=2")
+        required_ids = {0} if image_only_walls else {0, 2}
+        if not required_ids <= {tag.id for tag in self.tags}:
+            raise ValueError("tag IDs must include floor=0" if image_only_walls
+                             else "tag IDs must include start=0 and home/goal=2")
         for tag in self.tags:
             _positive("tag.size_m", tag.size_m)
             pose = tag.world_pose
@@ -374,7 +378,7 @@ class AppConfig:
             or not n.confirmation_token
         ):
             raise ValueError("protocol version must be 1 and token non-empty")
-        if self.start_tag.world_pose is None or self.goal_tag.world_pose is None:
+        if not image_only_walls and (self.start_tag.world_pose is None or self.goal_tag.world_pose is None):
             raise ValueError("legacy start=0 and goal=2 tags require world_pose")
         if self.patrol is not None:
             p = self.patrol
@@ -385,10 +389,10 @@ class AppConfig:
                 for tag_id in p.route_ids
             ):
                 raise ValueError("patrol.route_ids must contain integer IDs")
-            if p.route_ids[0] != 2:
+            if not image_only_walls and p.route_ids[0] != 2:
                 raise ValueError("patrol.route_ids must start at wall-home ID 2")
             missing = set(p.route_ids) - set(self.tag_map)
-            if missing:
+            if missing and not image_only_walls:
                 raise ValueError(f"patrol route references unknown tag IDs {sorted(missing)}")
             if p.outbound_direction not in {"left", "right"}:
                 raise ValueError("patrol.outbound_direction must be left or right")
@@ -499,7 +503,8 @@ class AppConfig:
             )
 
 
-def load_config(path: str | Path) -> AppConfig:
+def load_config(path: str | Path, *, image_only_walls=False) -> AppConfig:
+    """Load legacy config, or explicitly opt into floor-only metric field tags."""
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError("configuration root must be an object")
@@ -519,8 +524,10 @@ def load_config(path: str | Path) -> AppConfig:
     if not set(raw) <= expected | optional or not expected <= set(raw):
         raise ValueError("configuration root fields mismatch")
     tags_raw = raw["tags"]
-    if not isinstance(tags_raw, list) or len(tags_raw) < 2:
-        raise ValueError("tags must be a list of at least two objects")
+    minimum_tags = 1 if image_only_walls else 2
+    if not isinstance(tags_raw, list) or len(tags_raw) < minimum_tags:
+        raise ValueError("tags must be a list of at least one object" if image_only_walls
+                         else "tags must be a list of at least two objects")
     tags: list[TagConfig] = []
     for item in tags_raw:
         if not isinstance(item, dict) or set(item) != {"id", "size_m", "world_pose"}:
@@ -567,5 +574,5 @@ def load_config(path: str | Path) -> AppConfig:
     )
     if not isinstance(config.actual_measurements_confirmed, bool):
         raise ValueError("actual_measurements_confirmed must be boolean")
-    config.validate()
+    config.validate(image_only_walls=image_only_walls)
     return config

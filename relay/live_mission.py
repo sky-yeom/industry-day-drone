@@ -22,8 +22,13 @@ TERMINAL_FLIGHT = {"completed", "stopped", "failed", "outcome_unknown"}
 
 class LiveMissionRunner(MissionRunner):
     def __init__(self, session, camera, vision, publish, *, drone_client, stop_verify_seconds=2.0,
-                 lease_seconds=2.0, **kwargs):
+                 lease_seconds=2.0, expected_mode="live", allow_mock_tools=False, **kwargs):
         super().__init__(session, camera, vision, publish, **kwargs)
+        if expected_mode not in {"mock", "live"}:
+            raise DroneError("MODE_MISMATCH")
+        self.expected_mode, self.allow_mock_tools = expected_mode, allow_mock_tools
+        self.label = "MOCK 도구" if expected_mode == "mock" else "실제 드론"
+        self.session.data["droneToolExecution"] = expected_mode
         self.drone = drone_client
         self._launch_lock = asyncio.Lock()
         self._execute_id, self._stop_id = str(uuid4()), str(uuid4())
@@ -40,8 +45,9 @@ class LiveMissionRunner(MissionRunner):
         self._lease = None
 
     def _live_response(self, response):
-        if response.get("execution_mode") != "live":
-            raise DroneError("MODE_MISMATCH", "실제 비행 요청에 모의 응답이 반환되어 중단합니다.")
+        if (response.get("execution_mode") != self.expected_mode
+                or (self.expected_mode == "mock" and response.get("physical_execution") is not False)):
+            raise DroneError("MODE_MISMATCH", f"{self.label} 실행 모드가 일치하지 않아 중단합니다.")
         return response
 
     def _mission(self, response):
@@ -50,7 +56,8 @@ class LiveMissionRunner(MissionRunner):
                 or not mission["mission_id"] or mission.get("state") not in STATES
                 or mission.get("destination_ids") != self._route
                 or type(mission.get("stop_requested")) is not bool
-                or type(mission.get("physical_stop_confirmed")) is not bool):
+                or type(mission.get("physical_stop_confirmed")) is not bool
+                or (self.expected_mode == "mock" and mission["physical_stop_confirmed"])):
             raise DroneError("INVALID_MISSION_EVIDENCE")
         if self._mission_id is not None and mission["mission_id"] != self._mission_id:
             raise DroneError("MISSION_MISMATCH")
@@ -85,18 +92,25 @@ class LiveMissionRunner(MissionRunner):
         async with self._launch_lock:
             if self._attempted:
                 return result(self._work is not None and self.session.phase not in {"aborted"},
-                    "같은 실제 비행 요청은 다시 전송하지 않습니다. 화면의 비행 상태를 확인하세요.")
+                    f"같은 {self.label} 요청은 다시 전송하지 않습니다. 화면의 상태를 확인하세요.")
             if self.session.phase != "ready":
                 return result(False, "경로와 탐색 프롬프트를 먼저 확인해야 합니다.")
-            if self.session.data["mode"] != "azure":
+            if self.session.data["droneControlMode"] != self.expected_mode:
+                return result(False, f"{self.label} 세션의 실행 모드가 일치하지 않습니다.")
+            if self.expected_mode == "mock" and not self.allow_mock_tools:
+                return result(False, "MOCK 도구 실행은 DRONE_CONTROL_USE_TOOLS=1로 명시적으로 활성화해야 합니다.")
+            if self.expected_mode == "live" and self.session.data["mode"] != "azure":
                 return result(False, "실제 드론 촬영 분석은 TRIAGE_MODE=azure가 필요합니다. 모의 분석으로 대체하지 않습니다.")
             readiness = self.drone.readiness() or self.vision.readiness()
             if readiness:
                 return result(False, readiness)
             try:
                 caps = self._live_response(await self.drone.call("drone_get_capabilities", {}))
-                if caps.get("live_ready") is not True:
+                if self.expected_mode == "live" and caps.get("live_ready") is not True:
                     raise DroneError("PROFILE_UNAVAILABLE", "현장 프로파일과 실제 비행 준비 상태를 먼저 확인해야 합니다.")
+                if self.expected_mode == "mock" and (caps.get("mock_capture_ready") is not True
+                        or caps.get("physical_execution") is not False):
+                    raise DroneError("MOCK_CAPTURE_UNAVAILABLE", "MOCK 도구용 PC 캡처를 명시적으로 활성화하세요.")
                 mapping = {}
                 destinations = caps.get("destinations")
                 if type(destinations) is not list:
@@ -136,7 +150,9 @@ class LiveMissionRunner(MissionRunner):
                 self._work = asyncio.create_task(self._run_live(self.session.run_id))
                 self._deadlines = asyncio.create_task(self._watch_deadlines(self.session.run_id))
                 self._lease = asyncio.create_task(self._renew_lease())
-                return result(True, "확정한 전체 경로를 드론에 요청했습니다. 실제 도착과 촬영 근거를 기다립니다.")
+                return result(True, "MOCK 도구 실행: 확정 경로와 PC 모의 캡처를 요청했습니다. 실제 비행은 없습니다."
+                    if self.expected_mode == "mock" else
+                    "확정한 전체 경로를 드론에 요청했습니다. 실제 도착과 촬영 근거를 기다립니다.")
             except asyncio.CancelledError:
                 await self._stop_hardware()
                 raise
@@ -145,13 +161,16 @@ class LiveMissionRunner(MissionRunner):
                 return result(False, self.session.data["error"])
 
     async def retry(self):
+        if self.expected_mode == "mock":
+            return result(False, "MOCK 도구 오류 후 자동 재개하지 않습니다. 새 모의 작전을 명시적으로 시작하세요.")
         return result(False, "실제 비행 오류 후에는 자동 재개하지 않습니다. 정지·착륙 확인 후 새 작전을 명시적으로 시작하세요.")
 
     async def abort(self):
         self.session.abort_mission()
         await self.close()
         await self._notify()
-        return result(True, "드론 중지 요청을 처리했습니다. 화면의 실제 정지 확인 여부를 확인하세요.")
+        return result(True, "MOCK 도구 중지를 요청했습니다. 실제 비행은 없습니다." if self.expected_mode == "mock"
+            else "드론 중지 요청을 처리했습니다. 화면의 실제 정지 확인 여부를 확인하세요.")
 
     async def _push(self):
         if self._last_pushed_revision == self.session.data["revision"]:
@@ -168,11 +187,13 @@ class LiveMissionRunner(MissionRunner):
                 await self.publish({"type": "mission.progress", "text": text})
 
     async def _fail(self, exc):
-        code = getattr(exc, "code", "LIVE_OPERATION_FAILED")
+        code = getattr(exc, "code", "MOCK_TOOL_FAILED" if self.expected_mode == "mock" else "LIVE_OPERATION_FAILED")
         if self._attempted:
             self.session.abort_mission()
-        self.session.data.update(droneErrorCode=code, error=
-            f"실제 드론 작업을 중단했습니다 ({code}). 자동 재개하지 않습니다. 정지 상태를 확인하고 필요하면 RC로 제어·착륙하세요.")
+        self.session.data.update(droneErrorCode=code, error=(
+            f"MOCK 도구 실행을 중단했습니다 ({code}). 실제 비행은 없으며 자동 재개하지 않습니다."
+            if self.expected_mode == "mock" else
+            f"실제 드론 작업을 중단했습니다 ({code}). 자동 재개하지 않습니다. 정지 상태를 확인하고 필요하면 RC로 제어·착륙하세요."))
         self.session.touch()
         await self._stop_hardware()
         await self._notify()
@@ -234,7 +255,7 @@ class LiveMissionRunner(MissionRunner):
                 person = self.session.person(monitor)
                 self.session.data["activeVisitIndex"] = index
                 self.session.set_operation("flying", monitor, run_id)
-                await self._notify(f"모니터 {monitor[-1]}의 실제 도착 근거를 기다립니다.")
+                await self._notify(f"모니터 {monitor[-1]}의 {self.label} 도착 근거를 기다립니다.")
                 while True:
                     mission = await self._read_mission()
                     visit = mission["visits"][index]
@@ -339,6 +360,7 @@ class LiveMissionRunner(MissionRunner):
             mission = self._mission(response)
             deadline = asyncio.get_running_loop().time() + self.stop_verify_seconds
             while (not mission["physical_stop_confirmed"] and mission["state"] != "awaiting_rc_landing"
+                    and not (self.expected_mode == "mock" and mission["state"] in TERMINAL_FLIGHT)
                     and asyncio.get_running_loop().time() < deadline):
                 await asyncio.sleep(0.2)
                 mission = self._mission(await self.drone.call("drone_get_mission", {"mission_id": self._mission_id}))
@@ -360,3 +382,7 @@ class LiveMissionRunner(MissionRunner):
             self._lease.cancel()
             await asyncio.gather(self._lease, return_exceptions=True)
         await super().close()
+
+
+# Same evidence-driven implementation, explicitly opted in for nonphysical tool E2E.
+ToolMissionRunner = LiveMissionRunner

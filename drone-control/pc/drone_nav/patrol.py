@@ -31,7 +31,7 @@ from .runtime import (
 )
 from .transforms import translation
 from .vision import AprilTagDetector, TcpVideoStream
-from .observation import FrameRecorder
+from .observation import FrameRecorder, write_image
 from .wall_framing import (
     WallViewAction, tag_view_action, tag_view_bounds, uses_tv_framing,
     tv_frame_window, tv_frame_correction,
@@ -453,21 +453,19 @@ class _DetectionLogger:
             ok = snapshot is not None
             if not ok or frame is None or frame_age_s > FRESH_FRAME_S:
                 raise RuntimeError(f"camera frame is stale ({frame_age_s:.3f}s)")
-            import cv2
-
             self._photo_index += 1
             captured_at = datetime.now().strftime("%Y%m%dT%H%M%S_%f")[:-3]
             path = self.photo_root / (
                 f"{self._photo_index:02d}_{phase.value}_ID{detection.tag_id}_"
                 f"{captured_at}.jpg"
             )
-            if not cv2.imwrite(str(path), frame):
-                raise RuntimeError("cv2.imwrite returned false")
+            write_image(path, frame)
             payload = {
                 "tag_id": detection.tag_id,
                 "phase": phase.value,
                 "path": str(path),
                 "frame_age_s": frame_age_s,
+                "frame_key": snapshot.key,
                 "center_px": (
                     list(detection.center_px) if detection.center_px else None
                 ),

@@ -9,7 +9,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 
-from .service import MissionService, MockAdapter, ToolError
+from .service import MissionService, MockAdapter, CaptureMockAdapter, ToolError
 
 
 def unique_fields(pairs):
@@ -48,6 +48,13 @@ class Handler(BaseHTTPRequestHandler):
         expected = "Bearer " + self.server.api_token
         if not hmac.compare_digest(self.headers.get("Authorization", "").encode(), expected.encode()):
             raise ToolError("UNAUTHORIZED", "A backend API token is required")
+        expected_modes = self.headers.get_all("X-Drone-Expected-Mode", [])
+        if expected_modes:
+            if len(expected_modes) != 1 or expected_modes[0] not in {"mock", "live"}:
+                raise ToolError("INVALID_ARGUMENT", "Expected mode must be one mock or live header")
+            if (expected_modes[0] != self.server.service.mode
+                    or expected_modes[0] != self.server.service.adapter.mode):
+                raise ToolError("MODE_MISMATCH", "Service execution mode changed; request was not dispatched")
 
     def _handle(self):
         try:
@@ -77,7 +84,8 @@ class Handler(BaseHTTPRequestHandler):
             self._write(200, response)
         except ToolError as exc:
             code = {"UNAUTHORIZED": 401, "FORBIDDEN": 403, "NOT_FOUND": 404,
-                    "MISSION_BUSY": 409, "IDEMPOTENCY_CONFLICT": 409}.get(exc.code, 400)
+                    "MISSION_BUSY": 409, "IDEMPOTENCY_CONFLICT": 409,
+                    "MODE_MISMATCH": 409}.get(exc.code, 400)
             self._write(code, {"schema_version": 1, "ok": False,
                                "execution_mode": self.server.service.mode,
                                "physical_execution": self.server.service.mode == "live",
@@ -114,20 +122,39 @@ class SingleInstance:
         self.file.close()
 
 
+def adapter_from_environment(environ=None):
+    """Resolve a mode explicitly, without opening a server or hardware socket."""
+    environ = os.environ if environ is None else environ
+    mode = environ.get("DRONE_CONTROL_MODE", "mock")
+    if mode not in {"mock", "live"}:
+        raise SystemExit("DRONE_CONTROL_MODE must be mock or live")
+    selected = environ.get("DRONE_CONTROL_ADAPTER", "legacy")
+    if selected not in {"legacy", "field"}:
+        raise SystemExit("DRONE_CONTROL_ADAPTER must be legacy or field; no fallback")
+    mock_captures = environ.get("DRONE_CONTROL_MOCK_CAPTURES", "0")
+    if mock_captures not in {"0", "1"}:
+        raise SystemExit("DRONE_CONTROL_MOCK_CAPTURES must be 0 or 1")
+    if mode == "mock":
+        return CaptureMockAdapter() if mock_captures == "1" else MockAdapter()
+    if mock_captures == "1":
+        raise SystemExit("Mock captures cannot be mixed with physical execution")
+    if environ.get("DRONE_CONTROL_ENABLE_LIVE") != "1":
+        raise SystemExit("Live mode requires explicit DRONE_CONTROL_ENABLE_LIVE=1")
+    site, config = (Path(environ[key]) for key in ("DRONE_CONTROL_SITE_CONFIG", "DRONE_CONTROL_CONFIG_PATH"))
+    if selected == "field":
+        from .field import FieldAdapter
+        return FieldAdapter(site, config, Path(environ["DRONE_CONTROL_FIELD_PROFILE"]),
+                            Path(environ["DRONE_CONTROL_FIELD_REFERENCE"]))
+    from .live import LiveAdapter
+    return LiveAdapter(site, config)
+
+
 def main():
     token = os.environ.get("DRONE_CONTROL_API_TOKEN", "")
     if len(token) < 24 or token == "REPLACE_ME":
         raise SystemExit("Set a private DRONE_CONTROL_API_TOKEN of at least 24 characters in both backends")
-    mode = os.environ.get("DRONE_CONTROL_MODE", "mock")
-    if mode not in {"mock", "live"}:
-        raise SystemExit("DRONE_CONTROL_MODE must be mock or live")
-    adapter = MockAdapter()
-    if mode == "live":
-        if os.environ.get("DRONE_CONTROL_ENABLE_LIVE") != "1":
-            raise SystemExit("Live mode requires explicit DRONE_CONTROL_ENABLE_LIVE=1")
-        from .live import LiveAdapter
-        adapter = LiveAdapter(Path(os.environ["DRONE_CONTROL_SITE_CONFIG"]),
-                              Path(os.environ["DRONE_CONTROL_CONFIG_PATH"]))
+    adapter = adapter_from_environment()
+    mode = adapter.mode
     db = Path(os.environ.get("DRONE_CONTROL_DB", str(Path(__file__).resolve().parents[2] / "logs" / "tools.sqlite3")))
     db.parent.mkdir(parents=True, exist_ok=True)
     guard = SingleInstance(db)

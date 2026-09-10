@@ -118,6 +118,19 @@ def observe_sector(telemetry, direction, half_width_deg=5):
         geometry, coverage, selected, legacy_callback_age_s=legacy_age, callback_age_consistent=consistent)
 
 
+def write_image(path, frame):
+    """Encode unmodified pixels, then use Unicode-safe Python filesystem I/O."""
+    import cv2
+    path = Path(path)
+    ok, encoded = cv2.imencode(path.suffix.lower(), frame)
+    if not ok or encoded is None or not encoded.size:
+        raise OSError("image encoder rejected frame")
+    data = encoded.tobytes()
+    if path.write_bytes(data) != len(data):
+        raise OSError("image file write was incomplete")
+    return True
+
+
 class FrameRecorder:
     def __init__(self, directory: Path, capture, *, interval_s=1.0,
                  max_frames=1200, writer=None):
@@ -163,8 +176,7 @@ class FrameRecorder:
                     path = self.directory / f"g{snapshot.generation:04d}_f{snapshot.frame_id:08d}.jpg"
                     writer = self._writer
                     if writer is None:
-                        import cv2
-                        writer = cv2.imwrite
+                        writer = write_image
                     if not writer(str(path), snapshot.frame):
                         raise OSError("image writer rejected frame")
                     self._last_key = snapshot.key

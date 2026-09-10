@@ -22,7 +22,7 @@ from ..vision import TcpVideoStream
 from .camera import VideoBroker
 from .service import ToolError
 
-BUILD_ID = "5.18-connectivity.20260910.5"
+BUILD_ID = "5.18-connectivity.20260910.6"
 
 
 def fresh(raw, key, max_ms=500):
@@ -43,8 +43,9 @@ def process_identity(raw):
 
 
 class FreshVideoStream(TcpVideoStream):
-    def __init__(self, host, port, codec="h264"):
-        super().__init__(host, port, codec, reconnect=False)
+    def __init__(self, host, port, codec="h264", *, initial_keyframe_timeout_s=5.0):
+        super().__init__(host, port, codec, reconnect=False,
+                         initial_keyframe_timeout_s=initial_keyframe_timeout_s)
 
     def detect_latest(self, detector, max_age_s):
         detections, _ = super().detect_latest(detector, max_age_s)
@@ -94,6 +95,8 @@ class DeadlineTransport:
 
 
 class MissionClient(NDJSONClient):
+    flight_state_max_ms = 500
+
     def __init__(self, config, cancel, on_snapshot):
         super().__init__(config.network.host, config.network.port, timeout_s=.4)
         self._secrets = {config.network.confirmation_token} if config.network.confirmation_token else set()
@@ -216,7 +219,7 @@ class MissionClient(NDJSONClient):
     def attitude(self, forward_tilt_deg, right_tilt_deg, up_mps=0., yaw_rate_rps=0.):
         self.status("tool_mission_before_motion")
         raw, t = self.raw, self.last_telemetry
-        if raw.get("is_flying") is not True or not fresh(raw, "is_flying"):
+        if raw.get("is_flying") is not True or not fresh(raw, "is_flying", self.flight_state_max_ms):
             raise InterruptedError("Fresh airborne state is required")
         if raw.get("armed") is not True or raw.get("vs_enabled") is not True or raw.get("vs_advanced_enabled") is not True or raw.get("vs_authority") != "MSDK":
             raise InterruptedError("Virtual Stick authority lost")
@@ -255,6 +258,7 @@ class VisitGate:
 
 
 class LiveAdapter:
+    adapter_name = "legacy"
     mode = "live"
     destination_ids = ["tag-1", "tag-2", "tag-3"]
 

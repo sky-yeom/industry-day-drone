@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('control', 'relay', 'dashboard')][string]$Component,
+    [ValidateSet('control', 'relay', 'connector', 'dashboard')][string]$Component,
     [string[]]$EnvFile = @(),
     [string]$PythonPath = ''
 )
@@ -22,20 +22,28 @@ Push-Location $repoRoot
 try {
     if ($Component -eq 'dashboard') {
         $nodePath = (Get-Command node -ErrorAction Stop).Source
+        $ErrorActionPreference = 'Continue'
         & $nodePath (Join-Path $repoRoot 'node_modules/next/dist/bin/next') dev
     } else {
         if (-not $PythonPath) {
-            $venvDir = if ($Component -eq 'relay') { 'relay' } else { 'drone-control' }
+            $venvDir = if ($Component -in @('relay', 'connector')) { 'relay' } else { 'drone-control' }
             $PythonPath = Join-Path $repoRoot "$venvDir/.venv/Scripts/python.exe"
         }
         if (-not (Test-Path -LiteralPath $PythonPath)) { throw 'Python environment missing. Follow drone-control/docs/CONTROL_INTEGRATION_20260910.md.' }
+        # Windows PowerShell must not terminate Python for ordinary stderr logging.
+        $ErrorActionPreference = 'Continue'
         if ($Component -eq 'relay') {
             & $PythonPath (Join-Path $repoRoot 'relay/server.py')
+        } elseif ($Component -eq 'connector') {
+            & $PythonPath -m relay.pc_connector
         } else {
             $env:PYTHONPATH = Join-Path $repoRoot 'drone-control/pc'
             & $PythonPath -m drone_nav.tool_control.server
         }
     }
     $componentExit = $LASTEXITCODE
-} finally { Pop-Location }
+} finally {
+    $ErrorActionPreference = 'Stop'
+    Pop-Location
+}
 exit $componentExit

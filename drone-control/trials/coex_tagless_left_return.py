@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT / "pc"))
 from coex_mission import Controller, MissionFault, fresh, load_profile, number, rc_override
 
 REQUIRED_BUILD = "5.18-telemetry-age.20260906.4"
-CONNECTIVITY_BUILD = "5.18-connectivity.20260910.5"
+CONNECTIVITY_BUILD = "5.18-connectivity.20260910.6"
 SUPPORTED_BUILDS = {REQUIRED_BUILD, CONNECTIVITY_BUILD}
 DEFAULT_LOCAL_CONFIG = Path("C:/dev/13_DRONE/pc/config.local.json")
 

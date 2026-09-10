@@ -69,6 +69,47 @@ class MockAdapter:
                 "ground_verified": True, "simulated": True}
 
 
+class CaptureMockAdapter(MockAdapter):
+    """Explicit software E2E fixtures, never aircraft camera evidence."""
+    mock_capture_ready = True
+    adapter_name = "mock-captures"
+
+    def run(self, mission, cancel, emit):
+        from .fixtures import fixture_frames
+        emit(state="preflight")
+        emit(state="taking_off")
+        emit(state="running")
+        for visit in mission["visits"]:
+            index = visit["visit_index"]
+            if cancel.wait(.05):
+                return self.stop()
+            emit(visit_index=index, visit_state="moving")
+            name = "monitor-" + visit["destination_id"].split("-")[-1] + ".png"
+            path = Path(__file__).resolve().parents[4] / "public" / "monitors" / name
+            raw, second = fixture_frames(path)
+            fixture_hash = hashlib.sha256(raw).hexdigest()
+            emit(visit_index=index, visit_state="arrived", arrival_confirmed=True)
+            for ordinal, data in enumerate((raw, second), 1):
+                if cancel.is_set():
+                    return self.stop()
+                emit(visit_index=index, visit_state="captured", capture={
+                    "capture_id": uuid.uuid4().hex, "arrival_confirmed": True,
+                    "mission_id": mission["mission_id"], "visit_index": index,
+                    "destination_id": visit["destination_id"], "monitor_id": name[:-4],
+                    "image_base64": base64.b64encode(data).decode("ascii"),
+                    "captured_at_unix_ms": int(time.time() * 1000), "simulated": True,
+                    "capture_source": "synthetic_fixture", "fixture_path": "public/monitors/" + name,
+                    "fixture_sha256": fixture_hash,
+                    "fixture_variant": "canonical" if ordinal == 1 else "simulated_overlay",
+                    "frame_generation": 1, "frame_id": index * 2 + ordinal,
+                    "aircraft_exposure_timestamp_available": False, "tv_visibility_verified": False,
+                    "framing_mode": "simulated_fixture", "physical_stop_confirmed": False,
+                })
+        emit(state="returning")
+        return {"state": "completed", "physical_stop_confirmed": False,
+                "ground_verified": True, "simulated": True, "route_completed": True}
+
+
 class MissionService:
     def __init__(self, db_path, adapter=None, lease_seconds=10.):
         self.adapter = adapter or MockAdapter()
@@ -140,14 +181,17 @@ class MissionService:
 
     def capabilities(self):
         ids = list(self.adapter.destination_ids)
-        return self._response(live_ready=self.adapter.live_ready,
+        return self._response(live_ready=self.adapter.live_ready, expected_mode_guard=True,
             profile_id=self.adapter.profile_id, site_revision=self.adapter.site_revision,
             home_tag_id=self.adapter.home_tag_id, floor_tag_id=self.adapter.floor_tag_id,
             target_height_m=self.adapter.target_height_m,
             tools=list(TOOLS), destinations=[{"destination_id": d,
                 "monitor_id": "monitor-" + d.split("-")[-1],
                 "physical_definition": {"type": "apriltag", "marker_id": int(d.split("-")[-1])}}
-                for d in ids], supported_ordered_sequences=[list(p) for p in itertools.permutations(ids)])
+                for d in ids], supported_ordered_sequences=getattr(self.adapter, "supported_ordered_sequences",
+                    [list(p) for p in itertools.permutations(ids)]),
+            **({"adapter": self.adapter.adapter_name} if hasattr(self.adapter, "adapter_name") else {}),
+            **({"mock_capture_ready": True} if getattr(self.adapter, "mock_capture_ready", False) else {}))
 
     def lookup_request(self, caller, request):
         identifier(caller)
@@ -293,8 +337,15 @@ class MissionService:
                         raise ToolError("INVALID_CAPTURE", "Camera capture is not a bounded PNG")
                     if not visit["arrival_confirmed"] or capture.get("arrival_confirmed") is not True:
                         raise ToolError("INVALID_CAPTURE", "A confirmed arrival is required")
+                    for key, expected in (("mission_id", mid), ("visit_index", i),
+                                          ("destination_id", visit["destination_id"])):
+                        if key in capture and capture[key] != expected:
+                            raise ToolError("INVALID_CAPTURE", "Capture identity does not match its ordered visit")
+                    digest = hashlib.sha256(raw).hexdigest()
+                    if any(old["sha256"] == digest for old in mission["captures"] if old["visit_index"] == i):
+                        raise ToolError("INVALID_CAPTURE", "A duplicate PNG is not a distinct recapture")
                     capture.update(mission_id=mid, visit_index=i, destination_id=visit["destination_id"],
-                                   content_type="image/png", sha256=hashlib.sha256(raw).hexdigest())
+                                   content_type="image/png", sha256=digest)
                     mission["captures"].append(capture)
                     visit["capture_ids"].append(capture["capture_id"])
                 if "visit_state" in event:

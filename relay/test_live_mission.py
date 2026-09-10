@@ -16,11 +16,11 @@ from relay.test_mission_runner import FakeVision, settle
 from relay.test_survey import Clock, NEGATIVE, ready
 
 
-def png():
+def png(rgb=b"\0\xff\0"):
     def chunk(kind, value):
         return struct.pack(">I", len(value)) + kind + value + struct.pack(">I", zlib.crc32(kind + value) & 0xFFFFFFFF)
     return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
-        + chunk(b"IDAT", zlib.compress(b"\0\0\xff\0")) + chunk(b"IEND", b""))
+        + chunk(b"IDAT", zlib.compress(b"\0" + rgb)) + chunk(b"IEND", b""))
 
 
 class Backend:
@@ -223,6 +223,33 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(changes=changes), self.assertRaises(CaptureError):
                 LiveCaptureCamera.from_record(record | changes, mission_id="live-1", visit_index=0,
                     destination_id="tag-3", monitor_id="monitor-3")
+
+
+class MockToolGateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_mock_tool_run_requires_opt_in_capture_capability_and_nonphysical_results(self):
+        for opt_in, capture_ready, physical in ((False, True, False), (True, False, False), (True, True, True)):
+            session = SurveySession(mode="mock", drone_control_mode="mock")
+            ready(session)
+            calls = []
+
+            async def transport(name, envelope):
+                calls.append(name)
+                return dict(schema_version=1, ok=True, execution_mode="mock", physical_execution=physical,
+                            mock_capture_ready=capture_ready)
+
+            async def publish(_event):
+                pass
+
+            runner = LiveMissionRunner(session, LiveCaptureCamera(), FakeVision(), publish,
+                drone_client=DroneClient("mock-tool-test", token="test-only", transport=transport),
+                expected_mode="mock", allow_mock_tools=opt_in)
+            try:
+                outcome = await runner.launch()
+                self.assertFalse(outcome["ok"])
+                self.assertIn("MOCK", outcome["facts"])
+                self.assertNotIn("drone_execute_route", calls)
+            finally:
+                await runner.close()
 
 
 if __name__ == "__main__":

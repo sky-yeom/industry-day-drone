@@ -52,7 +52,7 @@ class FakeAircraft(MockAdapter):
             for frame in range(2):
                 emit(visit_index=visit["visit_index"], visit_state="captured", capture={
                     "capture_id": f"test-{visit['visit_index']}-{frame}", "arrival_confirmed": True,
-                    "image_base64": base64.b64encode(png()).decode(),
+                    "image_base64": base64.b64encode(png() if frame == 0 else png(b"\0\xfe\0")).decode(),
                     "captured_at_unix_ms": int(time.time() * 1000)})
         while not self.finish.wait(.005):
             if cancel.is_set():
@@ -78,9 +78,9 @@ class RecordingService(MissionService):
 
 class HttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.directory = TemporaryDirectory()
+        self.directory = TemporaryDirectory(dir=Path(__file__).resolve().parent)
         self.adapter = FakeAircraft()
-        self.service = RecordingService(Path(self.directory.name) / "test.sqlite3", self.adapter, lease_seconds=.3)
+        self.service = RecordingService(Path(self.directory.name) / "test.sqlite3", self.adapter, lease_seconds=1.5)
         self.http = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.http.service, self.http.api_token = self.service, "test-only-token-not-a-secret"
         self.server_thread = threading.Thread(target=lambda: self.http.serve_forever(poll_interval=.01), daemon=True)
@@ -93,7 +93,7 @@ class HttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
             return real_connect(sock, address)
         self.blocker = patch("socket.socket.connect", loopback_only)
         self.blocker.start()
-        self.client = DroneClient("relay-http-test", token=self.http.api_token)
+        self.client = DroneClient("relay-http-test", token=self.http.api_token, expected_mode="live")
         # Production remains fixed to :8766. Only this local test owns a random port.
         self.client.base_url = f"http://127.0.0.1:{self.http.server_port}"
         self.session = SurveySession(clock=Clock(), mode="azure", drone_control_mode="live")
@@ -150,7 +150,7 @@ class HttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((await self.runner.launch())["ok"])
         await self.wait_for(lambda: bool(self.vision.calls))
         before = self.count("drone_get_mission")
-        await asyncio.sleep(.7)  # Exceeds the service lease while vision remains blocked.
+        await asyncio.sleep(2.2)  # Exceeds the service lease while vision remains blocked.
         self.assertGreater(self.count("drone_get_mission"), before + 2)
         self.assertFalse(self.service.cancel.is_set())
         await self.runner.abort()

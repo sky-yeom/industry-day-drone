@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import socket
 import threading
 import time
@@ -35,7 +36,13 @@ class TcpVideoStream:
     reconnect, arming, flight command or sensor mutation occurs here.
     """
 
-    def __init__(self, host: str, port: int, codec: str = "h264", *, reconnect: bool = True) -> None:
+    def __init__(self, host: str, port: int, codec: str = "h264", *,
+                 reconnect: bool = True, initial_keyframe_timeout_s: float = 5.0) -> None:
+        if (isinstance(initial_keyframe_timeout_s, bool)
+                or not isinstance(initial_keyframe_timeout_s, (int, float))
+                or not math.isfinite(initial_keyframe_timeout_s)
+                or initial_keyframe_timeout_s <= 0):
+            raise ValueError("initial_keyframe_timeout_s must be finite and positive")
         try:
             import av
         except ImportError as exc:
@@ -47,6 +54,7 @@ class TcpVideoStream:
         self._address = (host, port)
         self._codec_name = codec
         self._reconnect = reconnect
+        self._initial_keyframe_timeout_s = float(initial_keyframe_timeout_s)
         self._lock = threading.Lock()
         self._socket = None
         self._snapshot = None
@@ -80,9 +88,15 @@ class TcpVideoStream:
                     self._snapshot = None
                     self._state = "WAIT_KEYFRAME"
                 last_frame_s = time.monotonic()
+                awaiting_first_frame = True
                 while not self._closed.is_set():
-                    if time.monotonic() - last_frame_s > 5.0:
-                        raise TimeoutError("no decoded video frame for 5 seconds")
+                    # Joining an existing H.264 stream can precede its next
+                    # decodable keyframe. Extend only that initial wait; once
+                    # decoding starts, retain the existing five-second reset.
+                    timeout_s = self._initial_keyframe_timeout_s if awaiting_first_frame else 5.0
+                    if time.monotonic() - last_frame_s > timeout_s:
+                        reason = "initial decoded video frame" if awaiting_first_frame else "decoded video frame"
+                        raise TimeoutError(f"no {reason} for {timeout_s:g} seconds")
                     try:
                         data = connection.recv(1 << 20)
                     except TimeoutError:
@@ -96,6 +110,7 @@ class TcpVideoStream:
                             pixels = frame.to_ndarray(format="bgr24")
                             pixels.flags.writeable = False
                             last_frame_s = time.monotonic()
+                            awaiting_first_frame = False
                             with self._lock:
                                 self._frame_id += 1
                                 self._decoded += 1

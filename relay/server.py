@@ -13,7 +13,7 @@ import uvicorn
 import websockets
 from azure.identity.aio import DefaultAzureCredential
 from azure.core.exceptions import AzureError
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 from websockets.exceptions import WebSocketException
@@ -28,6 +28,9 @@ try:
     from .browser_access import BrowserAccessMiddleware
     from .camera_preview import serve_camera
     from .drone_status import read_drone_status
+    from .device_hub import get_device_hub
+    from . import operator_access
+    from . import operator_sessions
 except ImportError:
     import config
     import tools
@@ -39,24 +42,77 @@ except ImportError:
     from browser_access import BrowserAccessMiddleware
     from camera_preview import serve_camera
     from drone_status import read_drone_status
+    from device_hub import get_device_hub
+    import operator_access
+    import operator_sessions
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("relay")
 app = FastAPI(title="긴급 구조 훈련 관제")
-app.add_middleware(CORSMiddleware, allow_origins=list(config.WEB_ORIGINS), allow_origin_regex=config.WEB_ORIGIN_REGEX,
+_browser_origins = (*config.WEB_ORIGINS, *((config.RELAY_PUBLIC_ORIGIN,) if config.RELAY_PUBLIC_ORIGIN else ()))
+app.add_middleware(CORSMiddleware, allow_origins=list(_browser_origins), allow_origin_regex=config.WEB_ORIGIN_REGEX,
                    allow_methods=["*"], allow_headers=["*"], allow_private_network=True)
-app.add_middleware(BrowserAccessMiddleware, origins=config.WEB_ORIGINS, origin_regex=config.WEB_ORIGIN_REGEX)
+app.add_middleware(BrowserAccessMiddleware, origins=_browser_origins, origin_regex=config.WEB_ORIGIN_REGEX)
 _credential = None
 
 
+@app.get("/operator")
+async def operator_page(request: Request):
+    return await operator_sessions.login_page(request)
+
+
+@app.get("/api/operator/session")
+async def operator_session_info(request: Request):
+    return await operator_sessions.session_info(request)
+
+
+@app.post("/api/operator/session")
+async def operator_session_create(request: Request):
+    return await operator_sessions.create_session(request)
+
+
+@app.delete("/api/operator/session")
+async def operator_session_delete(request: Request):
+    return await operator_sessions.delete_session(request)
+
+
 @app.get("/api/drone/status")
-async def api_drone_status():
+async def api_drone_status(request: Request):
+    if config.DRONE_CONTROL_MODE == "live" and not operator_access.authorized_http(request):
+        return JSONResponse({"error": "OPERATOR_AUTH_REQUIRED", "message": operator_access.MESSAGE},
+                            status_code=401, headers={"Cache-Control": "no-store"})
     return JSONResponse(await read_drone_status(), headers={"Cache-Control": "no-store"})
 
 
 @app.websocket("/ws/camera")
 async def camera_endpoint(browser: WebSocket):
-    await serve_camera(browser)
+    if not await operator_access.authorize_websocket(browser):
+        return
+    watchdog = operator_access.session_watchdog(browser)
+    try:
+        await serve_camera(browser)
+    finally:
+        if watchdog:
+            watchdog.cancel()
+            await asyncio.gather(watchdog, return_exceptions=True)
+
+
+@app.websocket("/ws/device")
+async def device_endpoint(device: WebSocket):
+    try:
+        hub = get_device_hub()
+    except DroneError:
+        await device.close(code=1008)
+        return
+    await hub.serve(device)
+
+
+@app.on_event("startup")
+async def validate_transport_configuration():
+    if config.DRONE_CONTROL_TRANSPORT == "remote":
+        get_device_hub()  # Fail closed: memory routing cannot run with autoscaled replicas.
+    elif config.DRONE_CONTROL_TRANSPORT != "local":
+        raise DroneError("INVALID_CONFIGURATION")
 
 
 def credential():
@@ -71,6 +127,16 @@ async def api_config():
     _, vision = create_providers(config.TRIAGE_MODE)
     error = vision.readiness()
     drone_error = None
+    remote_connected = False
+    remote_mode = None
+    if config.DRONE_CONTROL_TRANSPORT == "remote":
+        try:
+            hub = get_device_hub()
+            remote_connected, remote_mode = hub.connected, hub.mode
+            if not hub.connected:
+                drone_error = "원격 PC가 연결되어 있지 않습니다. PC 커넥터를 확인하세요."
+        except DroneError as exc:
+            drone_error = str(exc)
     if config.DRONE_CONTROL_MODE == "live":
         if config.TRIAGE_MODE != "azure":
             drone_error = "실제 드론은 TRIAGE_MODE=azure로 실제 촬영 이미지를 분석해야 합니다."
@@ -81,6 +147,13 @@ async def api_config():
                 drone_error = str(exc)
     elif config.DRONE_CONTROL_MODE != "mock":
         drone_error = "DRONE_CONTROL_MODE는 mock 또는 live여야 합니다."
+    elif config.DRONE_CONTROL_USE_TOOLS and drone_error is None:
+        try:
+            drone_error = DroneClient("relay-readiness").readiness()
+        except DroneError as exc:
+            drone_error = str(exc)
+    elif config.DRONE_CONTROL_TRANSPORT == "remote" and config.DRONE_CONTROL_MODE == "mock":
+        drone_error = "원격 MOCK 도구 실행은 DRONE_CONTROL_USE_TOOLS=1로 명시적으로 활성화해야 합니다."
     return {
         "resource": config.RESOURCE, "model": config.MODEL, "voice": config.VOICE_NAME,
         "voiceType": config.VOICE_TYPE, "apiVersion": config.API_VERSION,
@@ -88,6 +161,11 @@ async def api_config():
         "mode": config.TRIAGE_MODE, "visionReady": error is None, "visionError": error,
         "droneControlMode": config.DRONE_CONTROL_MODE,
         "droneReady": drone_error is None, "droneError": drone_error,
+        "droneControlTransport": config.DRONE_CONTROL_TRANSPORT,
+        "droneControlUseTools": config.DRONE_CONTROL_USE_TOOLS,
+        "remoteConnected": remote_connected, "remoteExecutionMode": remote_mode,
+        "operatorAuthorizationRequired": operator_access.required(),
+        "operatorCookieLoginAvailable": operator_sessions.configured(),
     }
 
 
@@ -149,10 +227,14 @@ class Bridge:
         self._debrief_attempts = 0
         self._completed_commands = {}
         self._closing = False
+        if (config.DRONE_CONTROL_TRANSPORT == "remote" and session.data["droneControlMode"] == "mock"
+                and not config.DRONE_CONTROL_USE_TOOLS):
+            raise DroneError("MOCK_TOOLS_OPT_IN_REQUIRED")
         camera, vision = providers or create_providers(session.data["mode"])
-        if session.data["droneControlMode"] == "live":
+        if session.data["droneControlMode"] == "live" or config.DRONE_CONTROL_USE_TOOLS:
             self.runner = LiveMissionRunner(session, camera, vision, self.publish_mission,
-                drone_client=DroneClient("relay-" + session.run_id))
+                drone_client=DroneClient("relay-" + session.run_id),
+                expected_mode=session.data["droneControlMode"], allow_mock_tools=config.DRONE_CONTROL_USE_TOOLS)
         else:
             self.runner = MissionRunner(session, camera, vision, self.publish_mission)
 
@@ -499,10 +581,23 @@ class Bridge:
 
 @app.websocket("/ws")
 async def ws_endpoint(browser: WebSocket):
-    await browser.accept()
+    if not await operator_access.authorize_websocket(browser):
+        return
+    protocol = operator_access.selected_protocol(browser)
+    if protocol:
+        await browser.accept(subprotocol=protocol)
+    else:
+        await browser.accept()
     session = SurveySession(mode=config.TRIAGE_MODE, drone_control_mode=config.DRONE_CONTROL_MODE)
-    bridge = Bridge(browser, session)
+    try:
+        bridge = Bridge(browser, session)
+    except DroneError as exc:
+        await browser.send_json({"type": "relay.error", "code": exc.code,
+                                 "message": "드론 도구 연결 설정을 확인하세요. 모의 성공으로 대체하지 않습니다."})
+        await browser.close(code=1008)
+        return
     pumps = []
+    watchdog = operator_access.session_watchdog(browser)
     try:
         if browser.query_params.get("voice", "1") == "0":
             await bridge.send_browser({
@@ -552,6 +647,9 @@ async def ws_endpoint(browser: WebSocket):
         await bridge.send_browser({
             "type": "relay.error", "message": "관제 연결 중 오류가 발생했습니다. 연결과 설정을 확인하세요."})
     finally:
+        if watchdog:
+            watchdog.cancel()
+            await asyncio.gather(watchdog, return_exceptions=True)
         for task in pumps:
             task.cancel()
         if pumps:
@@ -563,4 +661,5 @@ async def ws_endpoint(browser: WebSocket):
 
 if __name__ == "__main__":
     log.info("긴급 구조 관제: ws://%s:%s/ws (mode=%s)", config.HOST, config.PORT, config.TRIAGE_MODE)
-    uvicorn.run(app, host=config.HOST, port=config.PORT, log_level="warning")
+    uvicorn.run(app, host=config.HOST, port=config.PORT, log_level="warning",
+                ws_max_size=40 * 1024 * 1024, ws_max_queue=2)

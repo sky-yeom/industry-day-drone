@@ -116,25 +116,32 @@ input {
   animation: opening-card-in 0.5s ease-out both;
 }
 
-/* Opening screen: a soft rotating red/blue glow that wraps around the
-   card - continuously moving so red and blue mix/blend into each other
-   at the edges (like a real light bar), not a hard-edged ring/border and
-   not a flat alternating flash. */
+/* Opening screen: a thin glowing border that traces the exact edge of the
+   card (not a filled blob/rectangle) - alternating red/blue arcs rotating
+   around the perimeter like an actual siren light bar. Uses the
+   "gradient border" mask trick: the conic-gradient fills the whole box,
+   but mask-composite: exclude subtracts the inner content-box, leaving
+   only a thin ring visible right at the card's rounded edge. */
 .siren-ring {
   position: absolute;
-  inset: -50px;
-  border-radius: 3rem;
+  inset: -6px;
+  padding: 4px;
+  border-radius: 2rem;
   pointer-events: none;
-  filter: blur(45px);
   background: conic-gradient(
     from 0deg,
-    rgba(239, 68, 68, 0.9) 0deg,
-    rgba(59, 130, 246, 0.9) 90deg,
-    rgba(239, 68, 68, 0.9) 180deg,
-    rgba(59, 130, 246, 0.9) 270deg,
-    rgba(239, 68, 68, 0.9) 360deg
+    #ef4444 0deg, #ef4444 80deg,
+    #3b82f6 100deg, #3b82f6 170deg,
+    #ef4444 190deg, #ef4444 260deg,
+    #3b82f6 280deg, #3b82f6 350deg,
+    #ef4444 360deg
   );
-  mix-blend-mode: multiply;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  filter: blur(3px) drop-shadow(0 0 14px rgba(99, 102, 241, 0.55));
   animation: siren-ring-spin 3s linear infinite;
 }
 
@@ -219,6 +226,11 @@ input {
     animation: none !important;
   }
   .siren-ring {
-    background: radial-gradient(circle, rgba(134, 97, 197, 0.6), transparent 70%);
+    background: conic-gradient(
+      from 0deg,
+      #ef4444 0deg, #ef4444 90deg,
+      #3b82f6 180deg, #3b82f6 270deg,
+      #ef4444 360deg
+    );
   }
 }

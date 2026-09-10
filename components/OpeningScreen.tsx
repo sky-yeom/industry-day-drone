@@ -65,12 +65,21 @@ export default function OpeningScreen({ onStart }: { onStart: () => void }) {
               <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#8661c5]/15 text-[11px] font-bold text-[#8661c5]">
                 {index + 1}
               </span>
-              <span>
-                <Typewriter
-                  text={bullet.text}
-                  active={index <= revealedCount}
-                  onDone={() => setRevealedCount((count) => Math.max(count, index + 1))}
-                />
+              <span className="relative block">
+                {/* Invisible full-text copy reserves the final height/width
+                    up front so the card doesn't resize as the typewriter
+                    reveals characters; the animated text is layered on
+                    top via absolute positioning. */}
+                <span aria-hidden className="invisible">
+                  {bullet.text}
+                </span>
+                <span className="absolute inset-0">
+                  <Typewriter
+                    text={bullet.text}
+                    active={index <= revealedCount}
+                    onDone={() => setRevealedCount((count) => Math.max(count, index + 1))}
+                  />
+                </span>
               </span>
             </li>
           ))}

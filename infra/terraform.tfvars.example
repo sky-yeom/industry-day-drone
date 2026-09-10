@@ -1,0 +1,8 @@
+# Copy to terraform.tfvars (gitignored) and fill in the image tags produced
+# by `az acr build` (see scripts/deploy.sh), plus your own site PIN.
+# Everything else has a sensible default matching the existing Azure
+# resources for this project.
+
+relay_image = "industrydaydrone.azurecr.io/idd-relay:CHANGEME"
+web_image   = "industrydaydrone.azurecr.io/idd-web:CHANGEME"
+site_pin    = "CHANGEME"

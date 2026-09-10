@@ -116,35 +116,30 @@ input {
   animation: opening-card-in 0.5s ease-out both;
 }
 
-/* Opening screen: alternating red/blue "siren" glows behind the card,
-   blended with the dot-field background instead of flattening it. */
-.siren-light {
+/* Opening screen: a soft rotating red/blue glow that wraps around the
+   card - continuously moving so red and blue mix/blend into each other
+   at the edges (like a real light bar), not a hard-edged ring/border and
+   not a flat alternating flash. */
+.siren-ring {
   position: absolute;
-  width: 70vmax;
-  height: 70vmax;
-  border-radius: 9999px;
-  filter: blur(90px);
+  inset: -50px;
+  border-radius: 3rem;
+  pointer-events: none;
+  filter: blur(45px);
+  background: conic-gradient(
+    from 0deg,
+    rgba(239, 68, 68, 0.9) 0deg,
+    rgba(59, 130, 246, 0.9) 90deg,
+    rgba(239, 68, 68, 0.9) 180deg,
+    rgba(59, 130, 246, 0.9) 270deg,
+    rgba(239, 68, 68, 0.9) 360deg
+  );
   mix-blend-mode: multiply;
+  animation: siren-ring-spin 3s linear infinite;
 }
 
-.siren-light--red {
-  left: -20%;
-  top: -15%;
-  background: radial-gradient(circle, rgba(239, 68, 68, 0.75), transparent 65%);
-  animation: siren-pulse 2.6s ease-in-out infinite;
-}
-
-.siren-light--blue {
-  right: -20%;
-  bottom: -15%;
-  background: radial-gradient(circle, rgba(59, 130, 246, 0.75), transparent 65%);
-  animation: siren-pulse 2.6s ease-in-out infinite;
-  animation-delay: 1.3s;
-}
-
-@keyframes siren-pulse {
-  0%, 100% { opacity: 0.35; transform: scale(0.92); }
-  50% { opacity: 0.85; transform: scale(1.05); }
+@keyframes siren-ring-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* Opening screen: HUD-style viewfinder corner brackets on the card. */
@@ -218,12 +213,12 @@ input {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .siren-light,
+  .siren-ring,
   .live-dot,
   .typewriter-cursor {
     animation: none !important;
   }
-  .siren-light {
-    opacity: 0.22;
+  .siren-ring {
+    background: radial-gradient(circle, rgba(134, 97, 197, 0.6), transparent 70%);
   }
 }

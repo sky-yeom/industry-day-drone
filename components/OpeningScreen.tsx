@@ -30,15 +30,14 @@ export default function OpeningScreen({ onStart }: { onStart: () => void }) {
 
   return (
     <main className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-[#f4f3f5] p-5">
-      <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="siren-light siren-light--red" />
-        <div className="siren-light siren-light--blue" />
-      </div>
       <div aria-hidden className="dot-field pointer-events-none absolute inset-0 opacity-60 [mask-image:radial-gradient(circle_at_center,black,transparent_70%)]" />
       <div aria-hidden className="grain-overlay pointer-events-none absolute inset-0" />
       <div aria-hidden className="vignette-overlay pointer-events-none absolute inset-0" />
 
-      <section className="opening-card-in relative w-full max-w-2xl rounded-3xl border border-white bg-white/90 p-8 shadow-xl sm:p-12">
+      <div className="relative w-full max-w-2xl">
+        <div aria-hidden className="siren-ring" />
+
+        <section className="opening-card-in relative rounded-3xl border border-white bg-white/90 p-8 shadow-xl sm:p-12">
         <span aria-hidden className="hud-corner hud-corner--tl" />
         <span aria-hidden className="hud-corner hud-corner--tr" />
         <span aria-hidden className="hud-corner hud-corner--bl" />
@@ -96,7 +95,8 @@ export default function OpeningScreen({ onStart }: { onStart: () => void }) {
         <p className="mt-4 text-center text-xs leading-6 text-[#6e6575]">
           시작하면 마이크 사용 권한을 요청하고 음성 관제 세션에 연결합니다.
         </p>
-      </section>
+        </section>
+      </div>
     </main>
   );
 }

@@ -116,66 +116,32 @@ input {
   animation: opening-card-in 0.5s ease-out both;
 }
 
-/* Opening screen: a soft, translucent red/blue glow that forms a
-   continuous border around the card (one blurred gradient strip per
-   edge, not discrete circles) - the color flows/shifts along each edge
-   so it reads as a single glowing border, not a row of separate lights. */
+/* Opening screen: a soft, blurred glow surrounding the card, split
+   diagonally into two clean color halves (red / blue, no thin
+   line/border stroke) - the card's own opaque background covers the
+   center of this shape, so only the soft glow bleeding out around the
+   edges is visible. Rotating 180deg swaps which corner is which color,
+   on a hard interval, so it alternates like a real siren rather than
+   smoothly rotating or blending into a muddy mix. */
 .siren-frame {
   position: absolute;
-  inset: -34px;
+  inset: -40px;
+  border-radius: 3rem;
   pointer-events: none;
-  opacity: 0.55;
-  mix-blend-mode: multiply;
-}
-
-.siren-strip {
-  position: absolute;
-  filter: blur(22px);
-  background-size: 200% 200%;
-  animation: siren-flow 4s linear infinite;
-}
-
-.siren-strip--top,
-.siren-strip--bottom {
-  left: -10px;
-  right: -10px;
-  height: 64px;
-  background-image: linear-gradient(
-    to right,
-    #ef4444, #3b82f6, #ef4444, #3b82f6, #ef4444
+  filter: blur(34px);
+  background: linear-gradient(
+    135deg,
+    rgba(239, 68, 68, 0.75) 0%,
+    rgba(239, 68, 68, 0.75) 47%,
+    rgba(59, 130, 246, 0.75) 53%,
+    rgba(59, 130, 246, 0.75) 100%
   );
+  animation: siren-diagonal-swap 1s steps(1, end) infinite alternate;
 }
 
-.siren-strip--top {
-  top: -6px;
-}
-
-.siren-strip--bottom {
-  bottom: -6px;
-}
-
-.siren-strip--left,
-.siren-strip--right {
-  top: -10px;
-  bottom: -10px;
-  width: 64px;
-  background-image: linear-gradient(
-    to bottom,
-    #3b82f6, #ef4444, #3b82f6, #ef4444, #3b82f6
-  );
-}
-
-.siren-strip--left {
-  left: -6px;
-}
-
-.siren-strip--right {
-  right: -6px;
-}
-
-@keyframes siren-flow {
-  0% { background-position: 0% 0%; }
-  100% { background-position: 200% 0%; }
+@keyframes siren-diagonal-swap {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(180deg); }
 }
 
 /* Opening screen: HUD-style viewfinder corner brackets on the card. */
@@ -249,7 +215,7 @@ input {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .siren-strip,
+  .siren-frame,
   .live-dot,
   .typewriter-cursor {
     animation: none !important;

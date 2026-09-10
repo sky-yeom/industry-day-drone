@@ -35,12 +35,7 @@ export default function OpeningScreen({ onStart }: { onStart: () => void }) {
       <div aria-hidden className="vignette-overlay pointer-events-none absolute inset-0" />
 
       <div className="relative w-full max-w-2xl">
-        <div aria-hidden className="siren-frame">
-          <div className="siren-strip siren-strip--top" />
-          <div className="siren-strip siren-strip--bottom" />
-          <div className="siren-strip siren-strip--left" />
-          <div className="siren-strip siren-strip--right" />
-        </div>
+        <div aria-hidden className="siren-frame" />
 
         <section className="opening-card-in relative rounded-3xl border border-white bg-white p-8 shadow-xl sm:p-12">
         <span aria-hidden className="hud-corner hud-corner--tl" />

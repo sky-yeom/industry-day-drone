@@ -1,0 +1,541 @@
+{
+  "source_pc_base": "437f9cb",
+  "dji_reference_commit": "a48aa4e7811d824c27abfa973f5655579bfb8a77",
+  "note": "Working snapshots, not claims of new fixes or Android build reproduction. Export paths and Markdown links made portable. Export text line endings normalized to LF. Removed final blank line in sdk_api.py.",
+  "files": [
+    {
+      "path": "integration/speech_control_contract/contract.py",
+      "origin": "local prepared contract",
+      "source_sha256": "518fe395411715859ae9b3faebf90155850ccd9590d94b91ad287bbdb299945b",
+      "export_sha256": "518fe395411715859ae9b3faebf90155850ccd9590d94b91ad287bbdb299945b"
+    },
+    {
+      "path": "integration/speech_control_contract/mock_service.py",
+      "origin": "local prepared contract",
+      "source_sha256": "1c19749d50d8cffd6217c674453c302f7dc58a3689b7331ffc238a8c03e5b26b",
+      "export_sha256": "1c19749d50d8cffd6217c674453c302f7dc58a3689b7331ffc238a8c03e5b26b"
+    },
+    {
+      "path": "integration/speech_control_contract/tools.json",
+      "origin": "local prepared contract",
+      "source_sha256": "d0ad28b862eadaaa6df993bc69d2d1c8974c3f819c2887220b0f57e320515244",
+      "export_sha256": "d0ad28b862eadaaa6df993bc69d2d1c8974c3f819c2887220b0f57e320515244"
+    },
+    {
+      "path": "integration/speech_control_contract/example.py",
+      "origin": "local prepared contract",
+      "source_sha256": "a2caf50c1436c2107f867965e2293a587fed0560cc9f23ef3d4b7590c9f77b61",
+      "export_sha256": "a2caf50c1436c2107f867965e2293a587fed0560cc9f23ef3d4b7590c9f77b61"
+    },
+    {
+      "path": "integration/speech_control_contract/README.md",
+      "origin": "local prepared contract",
+      "source_sha256": "f547672ffc5de4714deabb836fa9b5c4386df80d8c914711dc89ce4a9a31253b",
+      "export_sha256": "b2a40a88acac8af6bef490af58f380adbb1573f8f4749aebb22af16412df134f"
+    },
+    {
+      "path": "integration/speech_control_contract/.gitignore",
+      "origin": "local prepared contract",
+      "source_sha256": "862263fa1f46c20f0d1e4dac5ffcc75abd55c08211b2c3864c5f8764b9d87793",
+      "export_sha256": "862263fa1f46c20f0d1e4dac5ffcc75abd55c08211b2c3864c5f8764b9d87793"
+    },
+    {
+      "path": "integration/speech_control_contract/tests/test_contract.py",
+      "origin": "local prepared contract",
+      "source_sha256": "480f92684f93366c3d010a41a26a3ad255d577a5d369cbe0628d963dd011cb99",
+      "export_sha256": "480f92684f93366c3d010a41a26a3ad255d577a5d369cbe0628d963dd011cb99"
+    },
+    {
+      "path": "docs/fix_ready_20260907/APPLY_ORDER.md",
+      "origin": "local implementation plan",
+      "source_sha256": "4ec280dca422fd7cfec5d374698abc75ebb3ba6010398089fd41b08b1706d1bc",
+      "export_sha256": "b9e148dcc3b9888d9e9dda730f841c73592fadfe82cfc0887f95c1b4b274342e"
+    },
+    {
+      "path": "docs/fix_ready_20260907/DRONE_TOOL_CONTROL_IMPLEMENTATION_PLAN_20260908.md",
+      "origin": "local implementation plan",
+      "source_sha256": "29c45005dfb9925853a63b207a9a7930ab83dadce660560ddadfb69c5a8d1ee0",
+      "export_sha256": "10f34d654cd51aae570d5b26edf3cbe9b424322c74ac37ecfa497abd1ec1c076"
+    },
+    {
+      "path": "docs/fix_ready_20260907/FC_PERCEPTION_IMPLEMENTATION.md",
+      "origin": "local implementation plan",
+      "source_sha256": "0aea55f5953c8056d3a707801ce733d8163ae56c43d22753cd3d3268ffe741fb",
+      "export_sha256": "e5983038fb1c58321313ba03d188cf5d8b4b1ab36c96ca769388e524e74491f2"
+    },
+    {
+      "path": "docs/fix_ready_20260907/QUERY_TRANSPORT_IMPLEMENTATION.md",
+      "origin": "local implementation plan",
+      "source_sha256": "98d3816897c7e65869acf96cacf257fcffef2a9540f9e59b63068fab18722adb",
+      "export_sha256": "253875365bc3bad7f0006c917631342219ed01cb6426185decedc4085f75c581"
+    },
+    {
+      "path": "docs/fix_ready_20260907/VIDEO_IMPLEMENTATION.md",
+      "origin": "local implementation plan",
+      "source_sha256": "8e2cda0c2d8681e88f9cc99cf314071167ff82d0694a0132dd61b9795b25cc07",
+      "export_sha256": "f9829332b71f09d324eb5bd7487f5ba26229b058d628891fdd9666e536948a69"
+    },
+    {
+      "path": "docs/fix_ready_20260907/PC_TELEMETRY_IMPLEMENTATION.md",
+      "origin": "local implementation plan",
+      "source_sha256": "9430e217743d02c00d8e8fa27bb6adaf0ccdbe4ef268cc8c52e9c36a00b497cf",
+      "export_sha256": "31ce3f0581505a5e442d56f45f24faffe78b8963dd95c1220f9b129644d2f481"
+    },
+    {
+      "path": "docs/CONTROL_API_SCHEMA.md",
+      "origin": "existing PC/Android protocol",
+      "source_sha256": "de90c119e6e00a9ba18f3e7c1a0e3d158f63417b33eff8218b157f92956e2f6d",
+      "export_sha256": "de90c119e6e00a9ba18f3e7c1a0e3d158f63417b33eff8218b157f92956e2f6d"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/AndroidManifest.xml",
+      "origin": "current Android bridge source",
+      "source_sha256": "2f0a35a5bf15fb0f9ca945c48a38f3b6460589ced68c98c2355cea49a9c244aa",
+      "export_sha256": "2f0a35a5bf15fb0f9ca945c48a38f3b6460589ced68c98c2355cea49a9c244aa"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/commandserver/CommandHandler.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "d24d22bb8d98b7703e517014790043332bc833e6c511496bf475683e9da28707",
+      "export_sha256": "713bb444bd825db66f8412ef443ff30d233d643c5188060814f7af478d5b027a"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/commandserver/CommandServer.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "597a8ddd6f7580eea094555034a89df54c5842cbe363ce7d9eeea1171d886360",
+      "export_sha256": "f9f9f83283169220f4a2e1d1e631947381cbca4c3653a70aa76b345d6276f28e"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/commandserver/CommandServerReader.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "c3a4a909047afd2c2fe25c0a887b13c401d611a38e13e63448b7320ba14f275f",
+      "export_sha256": "bc45ca36a75831f808a1e3e5ef61dbffa4f3842853656184413caec894fd6d17"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/commandserver/CommandServerReaderHandler.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "83d42c04a2c373c6ac4a9faab144fd804c5dd7d55de9325146a1d6ab553721fe",
+      "export_sha256": "22bf6eb4f9b55dd134de690984720a40845b6b20ee6d3192bee17ef48a1d0779"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/commandserver/CommandServerStateListener.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "8576919a04bd9d7386d30c621e02da4d9fedf2b688515a37d1d5f4cb003b2df8",
+      "export_sha256": "26a84103d58e51988c5023cc10c695e83da83bad0112de8c8d626dcb37a94098"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/commandserver/CommandServerWriter.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "307d5a1ac6bf15a44c45c794f20c3b73934222dae3361c8b523ea4e93ebbce54",
+      "export_sha256": "33cfd8213756d1e62d789318c8223655f7bdfebf1bc4c4308b0dadff4305b934"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/commandserver/MessageQueue.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "20adfb5e7cdcbdb69990853b2b5f37d65fef0e1c274bdca8962ccba36ca52877",
+      "export_sha256": "d4e337876e5d121f89792bb2193cc0531cdae959d475710ed1baa9ef0d39b62b"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/lifecycle/PollLease.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "06bb923f6da0f59f9ddb762db8e30bd625bdf7ce8083bb13801cc73bd0e1aefe",
+      "export_sha256": "06bb923f6da0f59f9ddb762db8e30bd625bdf7ce8083bb13801cc73bd0e1aefe"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/lifecycle/RetryableInit.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "a9c1e4f22fc29285641518ee6003b52e45ade7821d825c03e98d1a548d561daa",
+      "export_sha256": "a9c1e4f22fc29285641518ee6003b52e45ade7821d825c03e98d1a548d561daa"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livecontrol/advanced/AdvancedControlCommandHandler.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "b451f2637f9b408c959b5ce617a200c103a312f963a66a79e190dae464b60eb7",
+      "export_sha256": "a507336c302eeada1f53fb4cd4e6ea881bc379c8a2459c9b5bdf85cac8c46826"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livecontrol/advanced/FlightCommands.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "bce80ef2efec5e02103d32b746052590834b395028cae6c7b1a26f33274ed4b5",
+      "export_sha256": "bce80ef2efec5e02103d32b746052590834b395028cae6c7b1a26f33274ed4b5"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livecontrol/advanced/GimbalController.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "12f54d6e5de9933557090ebdf41d1dfa051cf41a2b420e05d33290cf23aea3a7",
+      "export_sha256": "3ddd39cc621759e0d713d349f66a8f9c362e3591c7fa82dc6db45f4b4418909b"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livecontrol/advanced/ObstacleAvoidanceController.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "ab224332caa6f5cb9d999e91712062ffe9702c8c5e1888a12c39848c74a385af",
+      "export_sha256": "eefe9356db8cf4a2b46ee934499cd8d926f7363d0084ef1fb5ad6435aab9fe33"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livecontrol/advanced/RcOverrideMonitor.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "0cb4c8124d7d69295357d7b161e7d1be8e9a4635f934491a6172b4889a025eb1",
+      "export_sha256": "0cb4c8124d7d69295357d7b161e7d1be8e9a4635f934491a6172b4889a025eb1"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livecontrol/advanced/StickControlManager.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "11a9e97ce49923ed2df1b40974b0e3f48136701c522006169e31872a922bac6f",
+      "export_sha256": "bc5fdbfa29c83f09551ee1e6d0b781263d20719d3df725817ebda165d6e89c42"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livecontrol/advanced/TelemetryProvider.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "909e6c1cd2a9a9d940a42dcbefeed9d3918e04a349939d002bdb5aa7a2b21e05",
+      "export_sha256": "909e6c1cd2a9a9d940a42dcbefeed9d3918e04a349939d002bdb5aa7a2b21e05"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livecontrol/ControlServerManager.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "31e5517bbaf450221c19cf7ab7e41053b2cb2a1172d7b6b34f378cff73bb8c93",
+      "export_sha256": "7abe0bc177e10796869b376a4c31e81b11f6986c340b2dd160e0367d8986d9b2"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livequery/KeyCommandHandler.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "9b53c1967375051ae55f310117410f79adbe4efd261a4dc1916313743ca3fa06",
+      "export_sha256": "c70e0f52f020e9e42ff5da8c7a9cf52d85181e058c6b1a348ebfc47561cc2d05"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livequery/KeyItem.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "f442449b4621605572c1ccb9611bedd3e8adca2202d6682a4d5d0032fe9a6eed",
+      "export_sha256": "398a8889ab18bffa0ba0b9430cec57e0227c214ea4a7fa4e559c5d721efcd46d"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livequery/KeysManager.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "12d79cb603220f94a54fe37aa51e24bc2a7a9f2fc448f04cd81418b61a375d3e",
+      "export_sha256": "75175a7158a427c9b73e821b498b3136c25c7a43f2fad50a06d4f4657b4b38b8"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livequery/QueryCommandHandler.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "44c8a806625d696f86b0842a427be42d031bcdbfa6eaeeda21e341ec34d38829",
+      "export_sha256": "4c43ff61d4fc1beac9ca4d237277a293234ba4da23573763911c0635d4407b88"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livequery/QueryServerManager.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "b5ccec0bd2df2f1f8f3e9e549fa8135ec99d61884d2215249ca902251082884a",
+      "export_sha256": "89f6db9ef5de895ec9a0af1bc786ef0941017f85433ecdaa5c74f31ba88505e0"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livequery/UnknownKeyException.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "d2dc5c6dad6aeab4c17df1f64c862153658113a174f5bb49a49a9b80ff486f69",
+      "export_sha256": "20dd986d65a439fcfaebb53e1d6a2bcb984c0bf1e7ab6c9ba9288ddce5c47d7b"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livequery/UnknownModuleException.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "62de9911db66213986cef0ff6986031f18f300555f14a4eb6df6fc992717cd36",
+      "export_sha256": "341d91fa8f66b2f5fe9b468cd0ba21acf0945d491305cb9d2665bbfbdeabb42e"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livevideo/AvailableCameraListener.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "70f417af6f12e9df343a13bc906bdd2bbbeb0f1ec23545cc3986aa507ed4b5ac",
+      "export_sha256": "70f417af6f12e9df343a13bc906bdd2bbbeb0f1ec23545cc3986aa507ed4b5ac"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livevideo/CameraListener.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "ac3f6fc12712d35d10d896c4138d6cabaa9310fb487dcf3ba6d5cd482897840c",
+      "export_sha256": "56b10f35b1d75b79747a8bc2128b3c48e1bdd124ff46d31e3c1a19b9e9773e38"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livevideo/DeliveryHealth.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "2bfeaec8621bf4ab146f149c4c855dedc9d7efe7762c1540e7cfde7e4309a423",
+      "export_sha256": "2bfeaec8621bf4ab146f149c4c855dedc9d7efe7762c1540e7cfde7e4309a423"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livevideo/Frame.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "62d69ddfe2f2bca6dd7ec8a88b32fb9c136f4ea4dab81600037a12c0b80c03f7",
+      "export_sha256": "eddd2ec4d8fbeb416dd331d04dd166d7ef0b8a5c245ef7fe812b4770e68210ca"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livevideo/FrameBuffer.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "5ac0c560194c2b4cabefe6bc52835859ff1927af96ab67c88be2dfa986db7dba",
+      "export_sha256": "338d95eb509b3c1c210a727af91596f81cb14324f262047f43b4eb382111281f"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livevideo/FrameCodec.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "d0117071d6ff6639a041630e2c3ac4f0f0f62aba4db4cf56e570d19de7cc6e2f",
+      "export_sha256": "45a6cff700f4d9b3f93bd1edf12499ed5916e9b4f8bc0b2dd22d7e10854126c1"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livevideo/VideoServer.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "be947925f5fd4c6da3e80395c0af8616964825f817c0428a5e78c452d79d7417",
+      "export_sha256": "be947925f5fd4c6da3e80395c0af8616964825f817c0428a5e78c452d79d7417"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/livevideo/VideoServerManager.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "206e0d0991a34c99e6ecc154c2f44b3145fb012435cd29821f8035c8b9dc493a",
+      "export_sha256": "7fcc175cc23ec9423ce3841856363590fb67ac4673b8cf3a5f028de63feae84a"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/networkstate/NetworkChangeListener.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "86e9bba93493b75e7ed7b4d433b5373236f0e8d862b0d5410ceb738059e99a15",
+      "export_sha256": "fc5865ce84cde06869ccddcaacedc47ae9194ac00e13108c428f8ee3a51da5fa"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/networkstate/NetworkMonitor.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "1fef8d2e273ead30426fdea16c081db4e27a964f1d885376aed9054084f5b575",
+      "export_sha256": "f7be6268989bcabf2a6de9afe6670f00880465acd3dc31a073e910d25f0c3beb"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/networkstate/NetworkType.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "ef71f0651a10ba8ff8679cc034d1525b40e3e4723df52b432236245af9dacc52",
+      "export_sha256": "ba48dc3aa0399aa7a6aaae007592bc1ac5a69f423e90bbf3d0cc0b5219df53b6"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/main/java/com/msdkremote/PcBridge.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "163ea7fbc48f6d5378f5566ea0a1e79fd89c60c464e21329a09a629046285120",
+      "export_sha256": "163ea7fbc48f6d5378f5566ea0a1e79fd89c60c464e21329a09a629046285120"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/test/java/com/msdkremote/lifecycle/RecoveryTest.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "d5e1d11c3cc47f17d2e80ba82f9aa4155ebd5f0f39fedda10abfab46e1f3263c",
+      "export_sha256": "d5e1d11c3cc47f17d2e80ba82f9aa4155ebd5f0f39fedda10abfab46e1f3263c"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/test/java/com/msdkremote/livevideo/DeliveryHealthTest.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "69633818a69d06613cd980db3fbd228e8f968c49421d34b77cb240af598f31d8",
+      "export_sha256": "69633818a69d06613cd980db3fbd228e8f968c49421d34b77cb240af598f31d8"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/src/test/java/com/msdkremote/livevideo/FrameBufferTest.java",
+      "origin": "current Android bridge source",
+      "source_sha256": "16f153f0ebf9641c564f62521dac1216c4ea191169621f671c44a34611ffea60",
+      "export_sha256": "16f153f0ebf9641c564f62521dac1216c4ea191169621f671c44a34611ffea60"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-bridge/build.gradle",
+      "origin": "current Android bridge module",
+      "source_sha256": "df090b7772b393bdc4b7f1dcfd865e8315543c396998d41cd91b268e632bdb7c",
+      "export_sha256": "df090b7772b393bdc4b7f1dcfd865e8315543c396998d41cd91b268e632bdb7c"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-as/settings.gradle",
+      "origin": "current sample/UX integration overlay",
+      "source_sha256": "0f5fdb4b3303e2b2358925025fcf6a76bf3980ad0cb5168de4b0368b006e41e1",
+      "export_sha256": "f080890fea35f20d79b86e314dd747d05323a02b656ecf38c01d22186b299cd4"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-sample/build.gradle",
+      "origin": "current sample/UX integration overlay",
+      "source_sha256": "aba695a55a42da7db29c994ac5f430cbcccdb503505895b297c92e82524f4820",
+      "export_sha256": "ad01f18f9287f5d6cbda197e6f05775bd5e2a7473c09c597c1cd79fb98e113aa"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-sample/src/main/java/dji/sampleV5/aircraft/models/MSDKManagerVM.kt",
+      "origin": "current sample/UX integration overlay",
+      "source_sha256": "8efce2d416605823e7e0de46d2281308d17cbd93f379e54ae2aa4377cb971c9f",
+      "export_sha256": "a779f10de377a13b7e03ac030dc105f66e643f3c28b8d3253eb33f9cc7ab5e5a"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-uxsdk/src/main/java/dji/v5/ux/core/widget/fpv/FPVWidget.kt",
+      "origin": "current sample/UX integration overlay",
+      "source_sha256": "a0e3a01071e643e75aba548b0b5a56e86df47163e8c247b1a24bb5d8cc61127e",
+      "export_sha256": "2750ccd5834f7885a71d7403ebd38eee35797d06ed51f0e67d028d91cd29d82b"
+    },
+    {
+      "path": "android/SampleCode-V5/android-sdk-v5-uxsdk/src/main/java/dji/v5/ux/core/widget/fpv/FPVWidgetModel.kt",
+      "origin": "current sample/UX integration overlay",
+      "source_sha256": "f2807203c1bf861e0b17c07e8d38875b9cbd8816bf7ff82268f38e1c06d5db0a",
+      "export_sha256": "bf6bcd5d2531b806577fe23e29ebe6a9b4190e9d86a874e289e1b5b87452d60e"
+    },
+    {
+      "path": "android/DJI-LICENSE.txt",
+      "origin": "DJI upstream license",
+      "source_sha256": "614550637351349a60a4f7e4ec2a24233d8a2c308dd9dd2f67f0715bb7b773f6",
+      "export_sha256": "29d71f55af396933bbe3af83a1a6ee0d45baa3ad9bc0c32925dbebb7aac42645"
+    },
+    {
+      "path": "trials/counted_trial_23132_skip1_repeat_check.py",
+      "origin": "latest supervised trial; path-only portability edits",
+      "source_sha256": "637d16d0a799c359209c428f0be91e442f004aa0ee3cf4350a2241993ad1b041",
+      "export_sha256": "b81cb07f5708759a00ab9698d7626c6fdb82e4babd35882d0e3d282a32934b0f"
+    },
+    {
+      "path": "trials/bounded_sonar_climb.py",
+      "origin": "two unchanged functions extracted from bounded_left_check.py",
+      "source_sha256": "7fe9997c38c99154084049df6d5c4bec3505d05689719af4d1b677e3c0290254",
+      "export_sha256": "4a490a9840e66930513efa1252b68d1333e69735e5544f56175ec3ed22a97fc7"
+    },
+    {
+      "path": "pc/config.sample.json",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "9ae0f175ef4cbc719c738e6a0a0b3a0ad0ed087d4d754b3bd8e704fd26630d7e",
+      "export_sha256": "f0bd465869304e7918d3ad522a2f7114d6922fb01d15a97de5c28f1972381046"
+    },
+    {
+      "path": "pc/drone_nav/__init__.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "6a1730a2e04b7375343d6691e1e0dc2c8e7c40a89f11733eb1c274fb2b023f6c",
+      "export_sha256": "d644cd26a768045390bd2d1f094f573fbb11a76f5d9420bf0d7a0a3c922d7fff"
+    },
+    {
+      "path": "pc/drone_nav/__main__.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "482b8693e2fe6dbd732e3d7961e03827d3efa187bad11d29da188be580ebbeea",
+      "export_sha256": "935a1c1166b0c1ea35a82256345000bf2c73ded718d77773bc27a71ecce28f7d"
+    },
+    {
+      "path": "pc/drone_nav/cli.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "4b3f97e08cf19b1f2514d2bd8303da8ce430b3d26671624f7e85686eb1462be6",
+      "export_sha256": "1e2ecab9c3ae8aa45053ac6a3334620da2ef2e90ac2f743badb24b3b8b56de70"
+    },
+    {
+      "path": "pc/drone_nav/config.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "9b075d1e32500ac4d7256577b1c98eb6c5e90658c6c56523f4512b188f7c9042",
+      "export_sha256": "c706bddc9b968cdba5d3cdca8ded32721b1ff51b57b953c927926e59ee6e8c16"
+    },
+    {
+      "path": "pc/drone_nav/controller.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "14f2996ad712916a5acc673db181c3cc82da1dcc451ebb65079452132d198876",
+      "export_sha256": "f2e444303aa646febe9a85fdaa1e416360a7ece5685dae8bfaeee3fe2a2b3720"
+    },
+    {
+      "path": "pc/drone_nav/estimator.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "6e88f5e2fdeffe082486b007df3da0da907d1542a4072758f13023744e265658",
+      "export_sha256": "6e88f5e2fdeffe082486b007df3da0da907d1542a4072758f13023744e265658"
+    },
+    {
+      "path": "pc/drone_nav/localization.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "7bc292c57527dc6623f48764e443505414757d0d09a3b95e24927e639ee39d44",
+      "export_sha256": "0661c5e75100616d0296590db5c4dfb89a7d8f5d24c90498ea4962f93ea9913b"
+    },
+    {
+      "path": "pc/drone_nav/observation.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "68fdbb061ca2edf9aafda6c01429a5698b2b0fc0927c474bcd976a5ef4442eae",
+      "export_sha256": "68fdbb061ca2edf9aafda6c01429a5698b2b0fc0927c474bcd976a5ef4442eae"
+    },
+    {
+      "path": "pc/drone_nav/patrol.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "b399d29193fe03072f3598328ea5935994b0ec832c70306f53c6b9d17f8fede5",
+      "export_sha256": "b399d29193fe03072f3598328ea5935994b0ec832c70306f53c6b9d17f8fede5"
+    },
+    {
+      "path": "pc/drone_nav/protocol.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "17d7e46d95b1d5a4654cb3ba3ad669391b9c6326e9206b76e6c62644969d78df",
+      "export_sha256": "17d7e46d95b1d5a4654cb3ba3ad669391b9c6326e9206b76e6c62644969d78df"
+    },
+    {
+      "path": "pc/drone_nav/runtime.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "503caab24b7afee3ebaa3f3fc9e9fae2639a55664942ddc0ddba715df182206f",
+      "export_sha256": "bd1d8dc3839908604cbc34b7ec9693bfc774317758c628bfc6a52a6fba755cad"
+    },
+    {
+      "path": "pc/drone_nav/safety.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "98f07cbffc4694391eaaebe3b7bad38b9ae8713efdde42ddb74eb60d76ec0dcb",
+      "export_sha256": "89710326d0e539299702d6bd8fd5df30097f12ec71114f3e05457d0df8d28081"
+    },
+    {
+      "path": "pc/drone_nav/sdk_api.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "c6cae5146c88945c08dcde847fe011a01711df567673a0f0c6b99ac4033db650",
+      "export_sha256": "ec3cd2e1d4e6a06f965ec511b42cb27432e30d97d409b989b04e4dab3d7338a3"
+    },
+    {
+      "path": "pc/drone_nav/simulator.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "d7dc339443fba483ef172bb8068718492028ec4ddc85841cec004491a9b0c060",
+      "export_sha256": "d7dc339443fba483ef172bb8068718492028ec4ddc85841cec004491a9b0c060"
+    },
+    {
+      "path": "pc/drone_nav/transforms.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "0d346bd73da1eec46408302562ef03f4e5c13c0ebd85c353a4104bc29dd7ec37",
+      "export_sha256": "eae4cd5efb40c3e8511a38341e1e68e3bb7dd86419e895eb5cb2a0a86359c5c0"
+    },
+    {
+      "path": "pc/drone_nav/vision.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "0814e895733de5193c5ebcf666ae4731742b2f459ead01b698f26c70a00f2fce",
+      "export_sha256": "3d0b47d1ff90ede7326aa63be441e1789c25c71a7e70a0e49147d28df8b7a23b"
+    },
+    {
+      "path": "pc/drone_nav/wall_framing.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "94e06becc38fdc3af91b827be282e6bcca0490d5b6b265873f16a207ec7af098",
+      "export_sha256": "94e06becc38fdc3af91b827be282e6bcca0490d5b6b265873f16a207ec7af098"
+    },
+    {
+      "path": "pc/sdk_api.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "27a62d7072c651e546a18402aaaa4548f1459e4f035f3dd901345d596dc71390",
+      "export_sha256": "27a62d7072c651e546a18402aaaa4548f1459e4f035f3dd901345d596dc71390"
+    },
+    {
+      "path": "pc/tests/test_core.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "8684b0ea2855f84294eea8654a78878a461f2101e28f116d99dc9fbd3a001d0f",
+      "export_sha256": "8684b0ea2855f84294eea8654a78878a461f2101e28f116d99dc9fbd3a001d0f"
+    },
+    {
+      "path": "pc/tests/test_patrol.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "e3d543f527c3e512e9ff1714a13645ea85d4e593b2a06cf7346e7223133af771",
+      "export_sha256": "164dea4901f8e8c92f8e087a51a20337c08732c0bb805472105255cbda98eefc"
+    },
+    {
+      "path": "pc/tests/test_photo_pause.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "38e95b938486c34f8a2b1fbcda1064273a479ff6d30dcf03d381c027e10fdf26",
+      "export_sha256": "fc69914a737f724f40b01ba41435ccb54d19017e919e75247a2bb2646c2df6ef"
+    },
+    {
+      "path": "pc/tests/test_regressions_20260906.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "11a6d5bc4845cbdce9a72cfa757a2031308dc63cd8f43c212aed25fab7180ac7",
+      "export_sha256": "11a6d5bc4845cbdce9a72cfa757a2031308dc63cd8f43c212aed25fab7180ac7"
+    },
+    {
+      "path": "pc/tests/test_wall_framing.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "d0d52d0b920d8f31d48a8494d3b54090e073d51157506fe9cba49c98479ce4f8",
+      "export_sha256": "689badc742fff7bd55a901fb0190cbab6c15b186e7c34d10b2a062e35a6d1266"
+    },
+    {
+      "path": "pc/track.py",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "52790bd8a73f2d37c0967ff59692e31039a091b6a75685a649845b739c4f2c83",
+      "export_sha256": "52790bd8a73f2d37c0967ff59692e31039a091b6a75685a649845b739c4f2c83"
+    },
+    {
+      "path": "pyproject.toml",
+      "origin": "PC source snapshot; three tests use portable sample fixture",
+      "source_sha256": "f07263d48dbe8bbd5cf11c4fce9da8453b87a42da751e5549f716baee81e2032",
+      "export_sha256": "0e632e2e2b99a4a8477805aeeb6edce3e3ef9db54eaf160f8fe304dc02941c62"
+    }
+  ]
+}

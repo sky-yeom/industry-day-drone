@@ -1,4 +1,5 @@
 fastapi>=0.115.0
+starlette>=1.6.0        # exact-origin private-network preflight support
 uvicorn[standard]>=0.32.0
 websockets>=14.0
 azure-identity>=1.19.0

@@ -13,6 +13,7 @@ model deployment that supports structured outputs.
 from __future__ import annotations
 
 import os
+from urllib.parse import urlsplit
 
 # --- Azure AI Foundry / Voice Live -------------------------------------------
 
@@ -47,6 +48,11 @@ TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
 # --- Emergency triage image analysis (server only) -----------------------------
 
 TRIAGE_MODE = os.getenv("TRIAGE_MODE", "mock").strip().lower()
+# Flight mode is independent of image analysis. Tokens never leave this process.
+DRONE_CONTROL_MODE = os.getenv("DRONE_CONTROL_MODE", "mock").strip().lower()
+DRONE_CONTROL_API_URL = os.getenv("DRONE_CONTROL_API_URL", "http://127.0.0.1:8766").strip()
+DRONE_CONTROL_API_TOKEN = os.getenv("DRONE_CONTROL_API_TOKEN", "").strip()
+DRONE_CONTROL_TIMEOUT_SECONDS = 5.0
 AZURE_VISION_ENDPOINT = os.getenv("AZURE_VISION_ENDPOINT", "").strip()
 AZURE_VISION_DEPLOYMENT = os.getenv("AZURE_VISION_DEPLOYMENT", "").strip()
 AZURE_VISION_API_VERSION = os.getenv("AZURE_VISION_API_VERSION", "v1").strip()
@@ -133,3 +139,10 @@ WEB_ORIGIN_REGEX = os.getenv(
     "RELAY_WEB_ORIGIN_REGEX",
     r"http://(localhost|127\.0\.0\.1)(:\d+)?",
 )
+
+WEB_ORIGINS = tuple(value.strip() for value in os.getenv("RELAY_WEB_ORIGINS", "").split(",") if value.strip())
+for origin in WEB_ORIGINS:
+    parsed = urlsplit(origin)
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+            or parsed.path or parsed.query or parsed.fragment or parsed.netloc.endswith(":")):
+        raise ValueError("RELAY_WEB_ORIGINS must contain exact HTTPS origins without paths")

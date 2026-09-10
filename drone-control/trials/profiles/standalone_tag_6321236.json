@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "wall_ids_left_to_right": [1, 2, 3, 6],
+  "floor_tag_id": 0,
+  "home_tag_id": 6,
+  "route_ids": [6, 3, 2, 1, 2, 3, 6],
+  "target_height_m": 1.4,
+  "tag_size_m": 0.15,
+  "max_tilt_deg": 1.5,
+  "visit_pause_s": 3.0,
+  "leg_timeout_s": 45.0,
+  "total_timeout_s": 240.0,
+  "layout_confirmed": true,
+  "tag_size_confirmed": false
+}

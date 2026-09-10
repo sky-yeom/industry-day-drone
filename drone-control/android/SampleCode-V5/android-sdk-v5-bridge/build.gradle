@@ -1,0 +1,37 @@
+apply plugin: 'com.android.library'
+
+/**
+ * PC bridge: the TCP servers and flight-control handler that let a PC drive
+ * the aircraft. Kept in its own module so the sample's kapt (Glide) pass does
+ * not try to process this plain-Java code - doing so failed to resolve types
+ * across our packages.
+ */
+android {
+    namespace "com.msdkremote"
+    compileSdkVersion Integer.parseInt(project.ANDROID_COMPILE_SDK_VERSION)
+
+    defaultConfig {
+        minSdkVersion Integer.parseInt(project.ANDROID_MIN_SDK_VERSION)
+        targetSdkVersion Integer.parseInt(project.ANDROID_TARGET_SDK_VERSION)
+
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lintOptions {
+        abortOnError false
+    }
+}
+
+dependencies {
+    compileOnly deps.aircraftProvided
+    implementation deps.aircraft
+    implementation 'androidx.annotation:annotation:1.6.0'
+    testImplementation 'junit:junit:4.13.2'
+}

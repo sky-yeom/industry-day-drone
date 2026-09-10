@@ -8,6 +8,7 @@ COPY relay/requirements.lock.txt ./relay/requirements.lock.txt
 RUN pip install --no-cache-dir -r relay/requirements.lock.txt
 
 COPY relay ./relay
+COPY drone-control/integration/speech_control_contract/tools.json ./drone-control/integration/speech_control_contract/tools.json
 COPY data ./data
 COPY public/monitors ./public/monitors
 

@@ -15,26 +15,48 @@ from azure.identity.aio import DefaultAzureCredential
 from azure.core.exceptions import AzureError
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
 from websockets.exceptions import WebSocketException
 
 try:
     from . import config, tools
     from .survey import SurveySession
     from .mission_runner import MissionRunner
+    from .live_mission import LiveMissionRunner
+    from .drone_client import DroneClient, DroneError
     from .vision import create_providers
+    from .browser_access import BrowserAccessMiddleware
+    from .camera_preview import serve_camera
+    from .drone_status import read_drone_status
 except ImportError:
     import config
     import tools
     from survey import SurveySession
     from mission_runner import MissionRunner
+    from live_mission import LiveMissionRunner
+    from drone_client import DroneClient, DroneError
     from vision import create_providers
+    from browser_access import BrowserAccessMiddleware
+    from camera_preview import serve_camera
+    from drone_status import read_drone_status
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("relay")
 app = FastAPI(title="긴급 구조 훈련 관제")
-app.add_middleware(CORSMiddleware, allow_origin_regex=config.WEB_ORIGIN_REGEX,
-                   allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=list(config.WEB_ORIGINS), allow_origin_regex=config.WEB_ORIGIN_REGEX,
+                   allow_methods=["*"], allow_headers=["*"], allow_private_network=True)
+app.add_middleware(BrowserAccessMiddleware, origins=config.WEB_ORIGINS, origin_regex=config.WEB_ORIGIN_REGEX)
 _credential = None
+
+
+@app.get("/api/drone/status")
+async def api_drone_status():
+    return JSONResponse(await read_drone_status(), headers={"Cache-Control": "no-store"})
+
+
+@app.websocket("/ws/camera")
+async def camera_endpoint(browser: WebSocket):
+    await serve_camera(browser)
 
 
 def credential():
@@ -48,11 +70,24 @@ def credential():
 async def api_config():
     _, vision = create_providers(config.TRIAGE_MODE)
     error = vision.readiness()
+    drone_error = None
+    if config.DRONE_CONTROL_MODE == "live":
+        if config.TRIAGE_MODE != "azure":
+            drone_error = "실제 드론은 TRIAGE_MODE=azure로 실제 촬영 이미지를 분석해야 합니다."
+        else:
+            try:
+                drone_error = DroneClient("relay-readiness").readiness()
+            except DroneError as exc:
+                drone_error = str(exc)
+    elif config.DRONE_CONTROL_MODE != "mock":
+        drone_error = "DRONE_CONTROL_MODE는 mock 또는 live여야 합니다."
     return {
         "resource": config.RESOURCE, "model": config.MODEL, "voice": config.VOICE_NAME,
         "voiceType": config.VOICE_TYPE, "apiVersion": config.API_VERSION,
         "region": config.REGION, "sampleRate": config.SAMPLE_RATE,
         "mode": config.TRIAGE_MODE, "visionReady": error is None, "visionError": error,
+        "droneControlMode": config.DRONE_CONTROL_MODE,
+        "droneReady": drone_error is None, "droneError": drone_error,
     }
 
 
@@ -115,7 +150,11 @@ class Bridge:
         self._completed_commands = {}
         self._closing = False
         camera, vision = providers or create_providers(session.data["mode"])
-        self.runner = MissionRunner(session, camera, vision, self.publish_mission)
+        if session.data["droneControlMode"] == "live":
+            self.runner = LiveMissionRunner(session, camera, vision, self.publish_mission,
+                drone_client=DroneClient("relay-" + session.run_id))
+        else:
+            self.runner = MissionRunner(session, camera, vision, self.publish_mission)
 
     async def send_browser(self, payload):
         async with self._browser_lock:
@@ -461,7 +500,7 @@ class Bridge:
 @app.websocket("/ws")
 async def ws_endpoint(browser: WebSocket):
     await browser.accept()
-    session = SurveySession(mode=config.TRIAGE_MODE)
+    session = SurveySession(mode=config.TRIAGE_MODE, drone_control_mode=config.DRONE_CONTROL_MODE)
     bridge = Bridge(browser, session)
     pumps = []
     try:
@@ -478,7 +517,7 @@ async def ws_endpoint(browser: WebSocket):
             log.exception("failed to acquire Entra token")
             await bridge.send_browser({
                 "type": "relay.error",
-                "message": "Azure 음성 인증에 실패했습니다. az login과 설정을 확인하거나 음성 없이 시작하세요."})
+                "message": "Azure 음성 인증에 실패했습니다. PC에서 Azure 로그인을 완료한 뒤 연결 다시 시도를 눌러 주세요."})
             return
         async with websockets.connect(
             config.WS_URL, additional_headers={"Authorization": f"Bearer {token.token}"},

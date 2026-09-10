@@ -1,0 +1,22 @@
+{
+  "date": "2026-09-09",
+  "scope": "COEX tagless PC runner preparation",
+  "physical_execution": false,
+  "android_changed": false,
+  "android_reinstalled": false,
+  "offline_tests_passed": 56,
+  "suites": {
+    "transport": 22,
+    "controller": 16,
+    "runner": 18
+  },
+  "whole_mission_simulation": "passed",
+  "simulation_includes_command_delay_and_inertia": true,
+  "powershell_launcher_syntax": "passed",
+  "python_dependencies": "existing_environment_verified",
+  "private_config_readability": "verified_without_disclosing_token",
+  "live_distance_accuracy": "not_yet_validated",
+  "app_time_watchdog_enabled": false,
+  "limits": "PC close cannot guarantee delivery during a Wi-Fi blackhole; RC takeover remains required",
+  "profile_id": "coex-tagless-left-return-1m-height-1p8-v1"
+}

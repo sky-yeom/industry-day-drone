@@ -116,78 +116,66 @@ input {
   animation: opening-card-in 0.5s ease-out both;
 }
 
-/* Opening screen: discrete glowing red/blue "lights" strung around the
-   card's edge (marquee-sign style), not a filled shape or traced border.
-   Each edge is a strip of small dots, alternating colors, each snapping
-   on/off out of phase so it reads as actual alternating siren lights. */
+/* Opening screen: a soft, translucent red/blue glow that forms a
+   continuous border around the card (one blurred gradient strip per
+   edge, not discrete circles) - the color flows/shifts along each edge
+   so it reads as a single glowing border, not a row of separate lights. */
 .siren-frame {
   position: absolute;
-  inset: -46px;
+  inset: -34px;
   pointer-events: none;
+  opacity: 0.55;
+  mix-blend-mode: multiply;
 }
 
-.siren-edge {
+.siren-strip {
   position: absolute;
-  display: flex;
+  filter: blur(22px);
+  background-size: 200% 200%;
+  animation: siren-flow 4s linear infinite;
 }
 
-.siren-edge--top,
-.siren-edge--bottom {
-  left: 4px;
-  right: 4px;
-  justify-content: space-between;
+.siren-strip--top,
+.siren-strip--bottom {
+  left: -10px;
+  right: -10px;
+  height: 64px;
+  background-image: linear-gradient(
+    to right,
+    #ef4444, #3b82f6, #ef4444, #3b82f6, #ef4444
+  );
 }
 
-.siren-edge--top {
-  top: 0;
+.siren-strip--top {
+  top: -6px;
 }
 
-.siren-edge--bottom {
-  bottom: 0;
+.siren-strip--bottom {
+  bottom: -6px;
 }
 
-.siren-edge--left,
-.siren-edge--right {
-  top: 4px;
-  bottom: 4px;
-  flex-direction: column;
-  justify-content: space-between;
+.siren-strip--left,
+.siren-strip--right {
+  top: -10px;
+  bottom: -10px;
+  width: 64px;
+  background-image: linear-gradient(
+    to bottom,
+    #3b82f6, #ef4444, #3b82f6, #ef4444, #3b82f6
+  );
 }
 
-.siren-edge--left {
-  left: 0;
+.siren-strip--left {
+  left: -6px;
 }
 
-.siren-edge--right {
-  right: 0;
+.siren-strip--right {
+  right: -6px;
 }
 
-.siren-dot {
-  width: 110px;
-  height: 110px;
-  border-radius: 9999px;
-  background: radial-gradient(circle, currentColor 0%, currentColor 20%, transparent 70%);
-  filter: blur(7px);
-}
-
-.siren-dot--red {
-  color: #ef4444;
-  animation: siren-dot-flash-a 0.7s steps(1, end) infinite;
-}
-
-.siren-dot--blue {
-  color: #3b82f6;
-  animation: siren-dot-flash-b 0.7s steps(1, end) infinite;
-}
-
-@keyframes siren-dot-flash-a {
-  0%, 49% { opacity: 1; }
-  50%, 100% { opacity: 0.15; }
-}
-
-@keyframes siren-dot-flash-b {
-  0%, 49% { opacity: 0.15; }
-  50%, 100% { opacity: 1; }
+@keyframes siren-flow {
+  0% { background-position: 0% 0%; }
+  100% { background-position: 200% 0%; }
 }
 
 /* Opening screen: HUD-style viewfinder corner brackets on the card. */
@@ -261,14 +249,9 @@ input {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .siren-dot--red,
-  .siren-dot--blue,
+  .siren-strip,
   .live-dot,
   .typewriter-cursor {
     animation: none !important;
-  }
-  .siren-dot--red,
-  .siren-dot--blue {
-    opacity: 0.6;
   }
 }

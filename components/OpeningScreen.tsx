@@ -5,21 +5,6 @@ import { SCENARIO_BRIEFING, SCENARIO_TITLE } from "@/data/scenario";
 import Typewriter from "@/components/Typewriter";
 
 const CALLSIGN = "RAVEN-1";
-const TOP_BOTTOM_LIGHTS = 9;
-const SIDE_LIGHTS = 5;
-
-/** Renders `count` small alternating red/blue glowing dots (a strip of
- * discrete lights, marquee-sign style) - alternates color by index within
- * the strip so each edge reads R-B-R-B-... */
-function LightStrip({ count }: { count: number }) {
-  return Array.from({ length: count }, (_, index) => (
-    <span
-      key={index}
-      aria-hidden
-      className={`siren-dot ${index % 2 === 0 ? "siren-dot--red" : "siren-dot--blue"}`}
-    />
-  ));
-}
 
 /** Live-ticking clock for the HUD readout. Starts from the render-time
  * value (may briefly mismatch between server and client, hence
@@ -51,18 +36,10 @@ export default function OpeningScreen({ onStart }: { onStart: () => void }) {
 
       <div className="relative w-full max-w-2xl">
         <div aria-hidden className="siren-frame">
-          <div className="siren-edge siren-edge--top">
-            <LightStrip count={TOP_BOTTOM_LIGHTS} />
-          </div>
-          <div className="siren-edge siren-edge--bottom">
-            <LightStrip count={TOP_BOTTOM_LIGHTS} />
-          </div>
-          <div className="siren-edge siren-edge--left">
-            <LightStrip count={SIDE_LIGHTS} />
-          </div>
-          <div className="siren-edge siren-edge--right">
-            <LightStrip count={SIDE_LIGHTS} />
-          </div>
+          <div className="siren-strip siren-strip--top" />
+          <div className="siren-strip siren-strip--bottom" />
+          <div className="siren-strip siren-strip--left" />
+          <div className="siren-strip siren-strip--right" />
         </div>
 
         <section className="opening-card-in relative rounded-3xl border border-white bg-white p-8 shadow-xl sm:p-12">

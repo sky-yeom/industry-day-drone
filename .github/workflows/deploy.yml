@@ -1,0 +1,71 @@
+name: Deploy to Azure Container Apps
+
+# Pushing to main rebuilds both images and updates the two Container Apps
+# in place (idd-relay, idd-web) so the live site always tracks main.
+# Terraform (infra/*.tf) stays the source of truth for the surrounding
+# infra (env, ACR, role assignments) but is not run here — it's applied
+# manually when that structure changes, since this workflow has no
+# access to Terraform state. See infra/README or repo README for that.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write # required for OIDC federated login, no client secret stored
+  contents: read
+
+env:
+  RESOURCE_GROUP: industry-day-drone
+  ACR_NAME: industrydaydrone
+  RELAY_APP_NAME: idd-relay
+  WEB_APP_NAME: idd-web
+  RELAY_FQDN: idd-relay.livelysky-9813bb2d.southeastasia.azurecontainerapps.io
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build + push relay image
+        run: |
+          az acr build --registry "$ACR_NAME" \
+            --image "idd-relay:${{ github.sha }}" \
+            --image "idd-relay:latest" \
+            --file relay/Dockerfile .
+
+      - name: Build + push web image
+        run: |
+          az acr build --registry "$ACR_NAME" \
+            --image "idd-web:${{ github.sha }}" \
+            --image "idd-web:latest" \
+            --file Dockerfile \
+            --build-arg NEXT_PUBLIC_RELAY_HTTP="https://$RELAY_FQDN" \
+            --build-arg NEXT_PUBLIC_RELAY_WS="wss://$RELAY_FQDN/ws" \
+            .
+
+      - name: Update relay container app
+        run: |
+          az containerapp update \
+            --name "$RELAY_APP_NAME" --resource-group "$RESOURCE_GROUP" \
+            --image "$ACR_NAME.azurecr.io/idd-relay:${{ github.sha }}"
+
+      - name: Update web container app
+        run: |
+          az containerapp update \
+            --name "$WEB_APP_NAME" --resource-group "$RESOURCE_GROUP" \
+            --image "$ACR_NAME.azurecr.io/idd-web:${{ github.sha }}"
+
+      - name: Smoke test
+        run: |
+          sleep 20
+          curl -sf -m 30 "https://$RELAY_FQDN/api/config" | grep -q '"mode"' \
+            && echo "relay OK" || (echo "relay smoke test failed" && exit 1)

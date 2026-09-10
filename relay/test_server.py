@@ -355,6 +355,23 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.phase, "aborted")
         self.assertIsNone(self.session.data["score"])
 
+    async def test_voice_auth_failure_reports_setup_action_without_opening_upstream(self):
+        browser = Browser(voice="1")
+        token = SimpleNamespace(get_token=AsyncMock(side_effect=RuntimeError("private credential details")))
+        with patch.object(server, "credential", return_value=token), \
+                patch.object(server.websockets, "connect") as connect, \
+                self.assertLogs("relay", level="ERROR"):
+            await server.ws_endpoint(browser)
+        connect.assert_not_called()
+        self.assertTrue(browser.closed)
+        self.assertEqual(len(browser.events), 1)
+        error = browser.events[0]
+        self.assertEqual(error["type"], "relay.error")
+        self.assertIn("Azure 음성 인증", error["message"])
+        self.assertIn("Azure 로그인", error["message"])
+        self.assertNotIn("private credential", error["message"])
+        self.assertNotIn("음성 없이", error["message"])
+
     async def test_voice_zero_complete_fixture_flow_without_credentials(self):
         scenario = deepcopy(SCENARIO)
         scenario.update(travelMs=0, captureMs=0)

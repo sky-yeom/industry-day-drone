@@ -48,12 +48,12 @@ Industry Day 데모: 세 사람의 위급함을 판단하고 드론의 방문 �
 
 정상 이미지에서 사람을 찾지 못하면 한 번 더 촬영·분석하고 다음 지점으로
 이동합니다. 아직 시한이 남은 사람을 즉시 시한 초과로 처리하지는 않습니다.
-카메라·모델의 기술적 오류는 명시적으로 전체 시계를 일시 정지시키고, 참가자가
-재시도하거나 임무를 중단하도록 안내합니다.
+모의 실행 중 카메라·모델의 기술적 오류는 전체 시계를 일시 정지시키고 재시도나
+중단을 안내합니다. 실제 비행 중 오류는 중단을 요청하며 자동 재시도하지 않습니다.
 
 ## 이미지 입력과 탐지 모드
 
-현재 비행과 카메라는 **시나리오 이미지 기반 모의 장치**입니다.
+기본값 `DRONE_CONTROL_MODE=mock`의 비행과 카메라는 **시나리오 이미지 기반 모의 장치**입니다.
 `public/monitors/`의 직접 제작한 SVG를 PNG로 렌더링했으며, 화면과 분석기에
 동일한 PNG 픽셀을 전달합니다. 빈 장면과 다른 대상자 이미지도 회귀 테스트용으로
 포함합니다.
@@ -75,11 +75,12 @@ Industry Day 데모: 세 사람의 위급함을 판단하고 드론의 방문 �
 Azure 모드에서는 실제 픽셀의 같은 후보가 참가자의 원래 설명과 구조 대상의
 공통 외형을 **모두** 만족해야 탐지가 인정됩니다.
 
-실제 드론 연결은 추후 작업입니다. `relay/camera.py`의 캡처 어댑터를 실제
-장치의 이미지 수신 방식에 연결하면 됩니다. 프레임은 지점·캡처 ID와 연결되어야
-하며, 모니터 번호만 받거나 클라이언트가 보낸 성공 여부만 믿고 구조 처리하면
-안 됩니다. 실제 비행 제어, 스트림 프로토콜, 생체 신원 인식은 구현 범위에
-포함되지 않습니다.
+`feat/drone`에는 `LiveMissionRunner`와 PC 도구 서비스를 통한 실제 드론 제어·촬영
+연결 코드가 포함돼 있습니다. `DRONE_CONTROL_MODE=live`와 `TRIAGE_MODE=azure`,
+새 APK, 현장·카메라 설정 및 Azure 이미지 분석 배포가 필요합니다. 프레임은
+실제 도착과 지점·캡처 ID에 연결하며 연결 실패를 모의 성공으로 대체하지 않습니다.
+새 APK 설치 후 기체와의 연결 검증은 별도로 필요합니다.
+[드론 통합 안내](drone-control/docs/CONTROL_INTEGRATION_20260910.md)를 따르세요.
 
 ## 구조
 
@@ -103,8 +104,9 @@ Azure 자격 증명은 릴레이에만 보관합니다. 브라우저는 릴레�
 
 ## 빠른 시작
 
-다른 컴퓨터에서 다시 세팅할 때는 아래 명령으로 시작합니다. 자세한 수동 절차와
-Azure 연동은 이어지는 "실행" 절을 참고하세요.
+다른 컴퓨터에서는 먼저 [새 PC 준비 안내](drone-control/docs/NEW_PC_SETUP.md)를
+확인하세요. 아래 일괄 명령은 macOS/Linux용이며, Windows에서는 PowerShell
+실행 절차를 사용합니다. Azure 인증은 패키지 설치와 별도로 필요합니다.
 
 ```bash
 npm run setup    # relay/.venv 생성, relay/requirements.lock.txt 설치, npm install
@@ -142,7 +144,12 @@ $env:TRIAGE_MODE="mock"
 .\relay\.venv\Scripts\python.exe relay/server.py
 ```
 
-체험 전에 Azure CLI에서 `az login`을 실행합니다.
+체험 전에 Azure CLI를 설치하고, Voice Live 리소스에 접근할 수 있는 계정으로
+`az login`을 실행합니다. `TRIAGE_MODE=mock`과 `DRONE_CONTROL_MODE=mock`은
+이미지 분석과 비행만 가상으로 실행합니다. **음성은 이 모드에서도 실제 Azure를
+사용하므로 로그인과 리소스 권한이 필요합니다.** 웹페이지가 열리는 것만으로
+음성 연결 검증이 완료되지는 않습니다. Azure CLI를 설치한 뒤에는 릴레이를
+새 터미널에서 다시 실행해 변경된 PATH를 적용합니다.
 
 ### 2. 대시보드
 
@@ -300,7 +307,8 @@ npm run build
 | 공유 시나리오·구조 시한·이미지 | `data/emergency-triage.json` |
 | 경로·시계·구조 판정 | `relay/survey.py` |
 | 자동 임무와 일시 정지·재시도 | `relay/mission_runner.py` |
-| 이미지 캡처와 추후 카메라 연결 | `relay/camera.py` |
+| 모의 이미지 캡처 | `relay/camera.py` |
+| 실제 비행·촬영 연결 | `relay/live_mission.py`, `relay/drone_client.py`, `drone-control/pc/drone_nav/tool_control/` |
 | Azure 멀티모달 분석과 모의 탐지 | `relay/vision.py` |
 | 한국어 인사말·도구·대화 규칙 | `relay/tools.py` |
 | 음성·탐지 모델 설정 | `relay/config.py` |

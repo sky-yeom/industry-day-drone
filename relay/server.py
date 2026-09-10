@@ -499,7 +499,7 @@ async def ws_endpoint(browser: WebSocket):
             log.exception("failed to acquire Entra token")
             await bridge.send_browser({
                 "type": "relay.error",
-                "message": "Azure 음성 인증에 실패했습니다. az login과 설정을 확인하거나 음성 없이 시작하세요."})
+                "message": "Azure 음성 인증에 실패했습니다. PC에서 Azure 로그인을 완료한 뒤 연결 다시 시도를 눌러 주세요."})
             return
         async with websockets.connect(
             config.WS_URL, additional_headers={"Authorization": f"Bearer {token.token}"},

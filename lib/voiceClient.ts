@@ -18,6 +18,40 @@ const RELAY_HTTP =
   process.env.NEXT_PUBLIC_RELAY_HTTP ?? "http://127.0.0.1:8080";
 const RELAY_WS = process.env.NEXT_PUBLIC_RELAY_WS ?? "ws://127.0.0.1:8080/ws";
 
+// Only these errors contain messages intended for the UI. Other exceptions may
+// contain device details or internal diagnostics and use fixed guidance below.
+class VoiceConnectionError extends Error {}
+
+function relayErrorMessage(value: unknown): string {
+  const message = typeof value === "string" ? value.replace(/\s+/gu, " ").trim() : "";
+  const hasControlCharacter = Array.from(message).some((character) => {
+    const code = character.charCodeAt(0);
+    return code < 32 || code === 127;
+  });
+  return message && message.length <= 500 && !hasControlCharacter
+    ? message
+    : "관제 서버에서 연결 오류를 알렸습니다. 릴레이 로그와 음성 서비스 설정을 확인하세요.";
+}
+
+function startErrorMessage(error: unknown, withVoice: boolean): string {
+  if (error instanceof VoiceConnectionError) return error.message;
+  if (!withVoice) return "관제 서버에 연결하지 못했습니다. 릴레이 실행 상태를 확인하세요.";
+  const name = typeof error === "object" && error !== null && "name" in error ? error.name : null;
+  switch (name) {
+    case "NotAllowedError":
+    case "SecurityError":
+      return "마이크 사용이 허용되지 않았습니다. 브라우저의 사이트 설정에서 마이크를 허용한 뒤 연결 다시 시도를 눌러 주세요.";
+    case "NotFoundError":
+    case "DevicesNotFoundError":
+      return "마이크를 찾지 못했습니다. 마이크 연결과 브라우저의 입력 장치 설정을 확인하세요.";
+    case "NotReadableError":
+    case "TrackStartError":
+      return "마이크를 사용할 수 없습니다. 다른 앱의 마이크 사용과 입력 장치 상태를 확인한 뒤 다시 시도하세요.";
+    default:
+      return "음성 연결을 시작하지 못했습니다. 오디오 장치와 음성 서비스 설정을 확인한 뒤 연결 다시 시도를 눌러 주세요.";
+  }
+}
+
 export type VoiceStatus =
   | "idle"
   | "connecting"
@@ -220,9 +254,7 @@ export class VoiceSession {
       this.running = true;
     } catch (err) {
       if (generation !== this.generation) return;
-      const message = withVoice
-        ? "음성 연결을 시작하지 못했습니다. 마이크 권한과 음성 서비스 설정을 확인한 뒤 연결 다시 시도를 눌러 주세요."
-        : "관제 서버에 연결하지 못했습니다. 릴레이 실행 상태를 확인하세요.";
+      const message = startErrorMessage(err, withVoice);
       this.handlers.onStatus("error", message);
       this.handlers.onError(message);
       await this.stop(true);
@@ -324,23 +356,32 @@ export class VoiceSession {
       url.searchParams.set("voice", this.withVoice ? "1" : "0");
       const ws = new WebSocket(url);
       this.ws = ws;
+      let connected = false;
+      let failed = false;
 
-      ws.onerror = () =>
-        reject(new Error("릴레이에 연결하지 못했습니다. relay/server.py 가 실행 중인지 확인하세요."));
-      ws.onclose = (ev) => {
-        if (generation !== this.generation) return;
-        reject(new Error("관제 서버 연결이 종료되었습니다."));
-        if (!this.running) return;
-        // 중간에 끊기면 아무 표시가 없어서 에이전트가 그냥 대답을 멈춘 것처럼 보인다.
-        const why = `릴레이 연결이 끊어졌습니다. (코드 ${ev.code})`;
-        this.handlers.onStatus("error", why);
-        this.handlers.onError("관제 서버 연결이 끊어졌습니다. 처음부터 다시 시작해 주세요.");
-        void this.stop(true);
+      const fail = (message: string) => {
+        if (generation !== this.generation || failed) return;
+        failed = true;
+        this.rejectConnect = null;
+        reject(new VoiceConnectionError(message));
+        // Before relay.ready, start() reports the failure and releases audio.
+        // Afterwards the promise has settled, so this callback owns cleanup.
+        if (connected) {
+          this.handlers.onStatus("error", message);
+          this.handlers.onError(message);
+          void this.stop(true);
+        }
       };
+      ws.onerror = () => fail("릴레이에 연결하지 못했습니다. relay/server.py 가 실행 중인지 확인하세요.");
+      ws.onclose = (ev) => fail(connected
+        ? `관제 서버 연결이 끊어졌습니다. 처음부터 다시 시작해 주세요. (코드 ${ev.code})`
+        : "관제 서버 연결이 종료되었습니다. 릴레이 실행 상태와 음성 서비스 설정을 확인하세요.");
       ws.onmessage = (e) => {
-        if (generation !== this.generation) return;
+        if (generation !== this.generation || failed) return;
         const msg = JSON.parse(e.data as string);
         if (msg.type === "relay.ready") {
+          if (connected) return;
+          connected = true;
           this.rejectConnect = null;
           this.handlers.onConnection?.(true);
           this.handlers.onStatus("listening");
@@ -349,10 +390,7 @@ export class VoiceSession {
           return;
         }
         if (msg.type === "relay.error") {
-          this.handlers.onStatus("error", msg.message);
-          this.handlers.onError(msg.message);
-          reject(new Error(msg.message));
-          if (this.running) void this.stop(true);
+          fail(relayErrorMessage(msg.message));
           return;
         }
         this.handleEvent(msg);

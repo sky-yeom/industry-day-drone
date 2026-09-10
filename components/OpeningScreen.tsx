@@ -65,7 +65,7 @@ export default function OpeningScreen({ onStart }: { onStart: () => void }) {
           </div>
         </div>
 
-        <section className="opening-card-in relative rounded-3xl border border-white bg-white/90 p-8 shadow-xl sm:p-12">
+        <section className="opening-card-in relative rounded-3xl border border-white bg-white p-8 shadow-xl sm:p-12">
         <span aria-hidden className="hud-corner hud-corner--tl" />
         <span aria-hidden className="hud-corner hud-corner--tr" />
         <span aria-hidden className="hud-corner hud-corner--bl" />

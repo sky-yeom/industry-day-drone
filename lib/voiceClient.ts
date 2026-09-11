@@ -314,6 +314,15 @@ export class VoiceSession {
     return true;
   }
 
+  // Tells the relay that Gibby's map-finding animation has reached its last
+  // frame, releasing the agent's held "which site first?" question so its
+  // voice line starts in sync with the visual.
+  sendRouteIntroReady(): boolean {
+    if (this.ws?.readyState !== WebSocket.OPEN) return false;
+    this.ws.send(JSON.stringify({ type: "route_intro.ready" }));
+    return true;
+  }
+
   private connect(generation: number): Promise<void> {
     return new Promise((resolve, reject) => {
       this.rejectConnect = reject;

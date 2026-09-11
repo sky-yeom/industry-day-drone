@@ -27,8 +27,8 @@
       "initiallyInjured": false,
       "deadlineMs": 28000,
       "image": "/monitors/monitor-1.png",
-      "x": 20,
-      "y": 38,
+      "x": 17.5,
+      "y": 43,
       "mockBox": [0.35, 0.35, 0.29, 0.37]
     },
     {
@@ -39,8 +39,8 @@
       "initiallyInjured": true,
       "deadlineMs": 45000,
       "image": "/monitors/monitor-2.png",
-      "x": 78,
-      "y": 28,
+      "x": 71,
+      "y": 43,
       "mockBox": [0.39, 0.32, 0.25, 0.42]
     },
     {
@@ -51,8 +51,8 @@
       "initiallyInjured": false,
       "deadlineMs": 18000,
       "image": "/monitors/monitor-3.png",
-      "x": 50,
-      "y": 76,
+      "x": 46,
+      "y": 29,
       "mockBox": [0.42, 0.35, 0.17, 0.41]
     }
   ]

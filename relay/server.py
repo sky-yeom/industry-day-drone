@@ -114,6 +114,7 @@ class Bridge:
         self._debrief_attempts = 0
         self._completed_commands = {}
         self._closing = False
+        self._route_intro_pending = False
         camera, vision = providers or create_providers(session.data["mode"])
         self.runner = MissionRunner(session, camera, vision, self.publish_mission)
 
@@ -363,6 +364,8 @@ class Bridge:
                 self._completed_commands[activity_id] = (name, args, outcome)
                 if len(self._completed_commands) > 256:
                     del self._completed_commands[next(iter(self._completed_commands))]
+            if name == "confirm_prompt" and outcome["ok"]:
+                self._route_intro_pending = True
             if name == "launch_mission" and outcome["ok"] and self.upstream and not self.departure_started:
                 self._launch_pending = True
                 self._narration.clear()
@@ -396,7 +399,10 @@ class Bridge:
                             "output": json.dumps(outcome, ensure_ascii=False)}}))
         finally:
             self._pending_tools = max(0, self._pending_tools - 1)
-        await self.request_response()
+        # Hold the agent's next turn until the client confirms Gibby's map
+        # animation reached its last frame (see "route_intro.ready" below).
+        if not self._route_intro_pending:
+            await self.request_response()
 
     async def pump_browser(self):
         while True:
@@ -423,6 +429,10 @@ class Bridge:
                 await self.request_response()
             elif mtype == "greet":
                 await self.greet()
+            elif mtype == "route_intro.ready":
+                if self._route_intro_pending:
+                    self._route_intro_pending = False
+                    await self.request_response()
             # Browser events cannot replace instructions/tools or fabricate outputs.
             elif mtype in {"input_audio_buffer.clear", "response.cancel", "conversation.item.truncate"} and self.upstream and not self.departure_started:
                 await self.upstream.send(json.dumps(msg))

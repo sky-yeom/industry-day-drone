@@ -44,7 +44,6 @@ export default function ResultsPanel({ state, debrief, onReset }: {
           </div>
         </div>}
       </div>
-      <p className="shrink-0 text-[10px] leading-4 text-[#091f2c] [text-shadow:1px_1px_0_#fff]">마지막 5초 안에 구조하면 부상 상태로 집계됩니다. {MONITOR_MAP["monitor-2"].label}는 처음부터 부상이 있습니다. 부상 상태도 구조 성공이며 실제 의학적 판단은 아닙니다.</p>
     </>}
   </section>;
 }

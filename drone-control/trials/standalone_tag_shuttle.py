@@ -1,4 +1,4 @@
-"""Standalone camera-relative ID6 -> 1 -> 2 -> 3 -> 2 -> 1 -> 6 shuttle.
+"""Standalone camera-relative wall-tag shuttle (layout and route from the profile).
 
 No Speech, dashboard, HTTP tool service, GPS route, or surveyed wall poses are
 used. The default CLI is an offline plan: --execute and a private --config are
@@ -37,6 +37,8 @@ from bounded_sonar_climb import CLIMB_TIMEOUT_S, climb_command
 
 DEFAULT_PROFILE = Path(__file__).with_name("profiles") / "standalone_tag_6321236.json"
 DEFAULT_PAIR_REFERENCE = Path(__file__).with_name("profiles") / "id1_tv_pair_reference.json"
+# Defaults for the original four-tag wall. The profile carries the actual
+# layout and route; validate_profile() checks them structurally.
 WALL_IDS = [3, 2, 1, 6]
 ROUTE_IDS = [6, 1, 2, 3, 2, 1, 6]
 CONFIRM_S = .3
@@ -64,20 +66,29 @@ def _number(value, low, high):
 def validate_profile(profile):
     if not isinstance(profile, dict) or set(profile) != PROFILE_FIELDS:
         raise ValueError("Standalone shuttle profile fields do not match schema 2")
-    for key, expected in (("schema_version", 2), ("floor_tag_id", 0), ("home_tag_id", 6)):
+    for key, expected in (("schema_version", 2), ("floor_tag_id", 0)):
         if type(profile[key]) is not int or profile[key] != expected:
             raise ValueError(f"{key} must be {expected}")
-    for key, expected in (("wall_ids_left_to_right", WALL_IDS), ("route_ids", ROUTE_IDS)):
-        if (profile[key] != expected or not isinstance(profile[key], list)
-                or any(type(item) is not int for item in profile[key])):
-            raise ValueError(f"{key} must be {expected}")
+    home = profile["home_tag_id"]
+    wall, route = profile["wall_ids_left_to_right"], profile["route_ids"]
+    if type(home) is not int or home <= 0:
+        raise ValueError("home_tag_id must be a positive wall tag id")
+    if (not isinstance(wall, list) or len(wall) < 2 or any(type(item) is not int for item in wall)
+            or len(set(wall)) != len(wall) or 0 in wall or wall[-1] != home):
+        raise ValueError("wall_ids_left_to_right must list distinct wall tags ending with the home tag")
+    if (not isinstance(route, list) or len(route) < 3 or any(type(item) is not int for item in route)
+            or route[0] != home or route[-1] != home or route != route[::-1]
+            or set(route) != set(wall) or route[1] != wall[-2] or route.count(wall[0]) != 1
+            or any(abs(wall.index(a) - wall.index(b)) != 1 for a, b in zip(route, route[1:]))):
+        raise ValueError("route_ids must leave home leftwards through each adjacent tag, "
+                         "turn once at the far tag and mirror back to home")
     if type(profile["layout_confirmed"]) is not bool:
         raise ValueError("layout_confirmed must be a boolean")
     for key, expected in (("wall_measurement", "image_only"), ("floor_size_source", "private_config")):
         if profile[key] != expected:
             raise ValueError(f"{key} must be {expected}")
     for key, low, high in (
-        ("target_height_m", 1.4, 1.6),
+        ("target_height_m", 1.0, 1.6),
         ("max_tilt_deg", .1, 1.5), ("visit_pause_s", 0., 10.),
         ("leg_timeout_s", 1., 45.), ("total_timeout_s", 10., 240.),
     ):
@@ -90,20 +101,28 @@ def load_profile(path):
     return validate_profile(json.loads(Path(path).read_text(encoding="utf-8-sig")))
 
 
-def planned_direction(departure, expected):
-    if (departure, expected) not in tuple(zip(ROUTE_IDS, ROUTE_IDS[1:])):
+def planned_direction(departure, expected, wall_ids=None, route_ids=None):
+    wall = WALL_IDS if wall_ids is None else list(wall_ids)
+    route = ROUTE_IDS if route_ids is None else list(route_ids)
+    if (departure, expected) not in tuple(zip(route, route[1:])):
         raise ValueError(f"Unapproved shuttle leg: {departure} -> {expected}")
-    return "left" if WALL_IDS.index(expected) < WALL_IDS.index(departure) else "right"
+    return "left" if wall.index(expected) < wall.index(departure) else "right"
+
+
+def outbound_leg_count(profile):
+    """Legs from home to the far tag; every one of them gets the mock framing."""
+    return len(profile["wall_ids_left_to_right"]) - 1
 
 
 def plan(profile, pair_reference=None, continue_patrol=False):
     validate_profile(profile)
     if continue_patrol and pair_reference is None:
         raise ValueError("continue_patrol requires ID1 pair framing")
+    wall, route, home = profile["wall_ids_left_to_right"], profile["route_ids"], profile["home_tag_id"]
     result = {
         "mode": "offline_plan", "profile": profile,
-        "legs": [{"from": a, "to": b, "direction": planned_direction(a, b)}
-                 for a, b in zip(ROUTE_IDS, ROUTE_IDS[1:])],
+        "legs": [{"from": a, "to": b, "direction": planned_direction(a, b, wall, route)}
+                 for a, b in zip(route, route[1:])],
         "required_bridge_build_id": BUILD_ID,
         "height_source": "downward_ultrasonic_display_with_floor_ID0_visual_crosscheck",
         "climb_timeout_s": CLIMB_TIMEOUT_S,
@@ -122,8 +141,8 @@ def plan(profile, pair_reference=None, continue_patrol=False):
     }
     if pair_reference is not None:
         result.pop("wall_capture_bounds_fraction", None)
-        result.update(mission_scope="ID1_and_TV_pair_capture_only", active_route_ids=[6, 1],
-            legs=[{"from": 6, "to": 1, "direction": "left"}],
+        result.update(mission_scope="ID1_and_TV_pair_capture_only", active_route_ids=[home, route[1]],
+            legs=[{"from": home, "to": route[1], "direction": "left"}],
             finish="hover_at_ID1_release_to_RC_manual_landing",
             framing_reference=pair_reference, approach_tilt_limit_deg=.6,
             right_correction_limit_deg=.6, tv_visibility_verified=False,
@@ -133,11 +152,11 @@ def plan(profile, pair_reference=None, continue_patrol=False):
         if continue_patrol:
             result.update(mission_scope="full_patrol_with_first_ID1_pair_capture",
                 photo_quality_policy="require_full_ID1_and_mock_framing_before_continuing",
-                active_route_ids=list(ROUTE_IDS),
-                legs=[{"from": a, "to": b, "direction": planned_direction(a, b)}
-                      for a, b in zip(ROUTE_IDS, ROUTE_IDS[1:])],
+                active_route_ids=list(route),
+                legs=[{"from": a, "to": b, "direction": planned_direction(a, b, wall, route)}
+                      for a, b in zip(route, route[1:])],
                 finish="hover_at_ID6_release_to_RC_manual_landing",
-                pair_capture_visit_index=1, pair_capture_ids=[1, 2, 3], patrol_tilt_limit_deg=.6,
+                pair_capture_visit_index=1, pair_capture_ids=route[1:len(wall)], patrol_tilt_limit_deg=.6,
                 profile={**profile, "max_tilt_deg": .6})
         if pair_reference.get("arrival_center_x_fraction") is not None:
             result.update(navigation="ID1_tag_right_edge_band",
@@ -171,7 +190,8 @@ def configure_execution(config, profile, host=None):
     # need no map entry, so the new home ID6 is never assigned a made-up size.
     return replace(config,
         network=replace(config.network, host=address, rate_hz=10.),
-        patrol=replace(config.patrol, route_ids=tuple(ROUTE_IDS[:4]), outbound_direction="left", obstacle_stop_m=0.,
+        patrol=replace(config.patrol, route_ids=tuple(profile["route_ids"][:len(profile["wall_ids_left_to_right"])]),
+            outbound_direction="left", obstacle_stop_m=0.,
             cruise_altitude_m=profile["target_height_m"],
             angle_deg=profile["max_tilt_deg"], recovery_max_angle_deg=profile["max_tilt_deg"],
             leg_timeout_s=profile["leg_timeout_s"], acquire_timeout_s=12.,
@@ -198,7 +218,8 @@ class MixedDetector:
     floor ID0 can contribute metric output; its existing private size and the
     calibrated camera are passed unchanged to the tested floor pose adapter.
     """
-    def __init__(self, config, detector_factory=AprilTagDetector):
+    def __init__(self, config, detector_factory=AprilTagDetector, wall_ids=None):
+        self.wall_ids = set(WALL_IDS if wall_ids is None else wall_ids)
         floor = config.tag_map.get(0)
         if floor is None or not config.camera.calibrated:
             raise ValueError("Calibrated camera and existing floor ID0 configuration required")
@@ -214,7 +235,7 @@ class MixedDetector:
         walls = []
         for item in raw:
             tag_id = int(item.tag_id)
-            if tag_id not in WALL_IDS:
+            if tag_id not in self.wall_ids:
                 continue
             center = tuple(float(value) for value in item.center)
             corners = tuple(tuple(float(value) for value in corner) for corner in item.corners)
@@ -636,17 +657,17 @@ def _pause(client, limiter, stream, detector, logger, seconds, phase, expected):
             raise RuntimeError("Camera became stale while hovering")
 
 
-def acquire_wall_home(client, limiter, stream, detector, logger, config):
-    """Confirm visible ID6 while stationary; no center alignment is required."""
+def acquire_wall_home(client, limiter, stream, detector, logger, config, home=6):
+    """Confirm the visible wall home tag while stationary; no center alignment."""
     client.phase = "hover"
-    gate = HorizontalGate(6, "left", config.camera.cx, config.patrol.angle_deg,
+    gate = HorizontalGate(home, "left", config.camera.cx, config.patrol.angle_deg,
                           config.patrol, stationary_home=True)
     deadline = time.monotonic() + config.patrol.acquire_timeout_s
     while time.monotonic() < deadline:
         limiter.wait()
         client.zero()
         _require_flight(client)
-        tags, age = _observe(client, stream, detector, logger, PatrolPhase.WALL_HOME, 6)
+        tags, age = _observe(client, stream, detector, logger, PatrolPhase.WALL_HOME, home)
         now = time.monotonic()
         if now >= deadline:
             break
@@ -655,17 +676,17 @@ def acquire_wall_home(client, limiter, stream, detector, logger, config):
         _, confirmed = gate.update(tags, now, age, _snapshot_key(stream), frame_shape)
         if confirmed is not None:
             client.log_event("tag_visit_confirmed", logger.payload(confirmed,
-                phase=PatrolPhase.WALL_HOME, expected_id=6, frame_age_s=age,
+                phase=PatrolPhase.WALL_HOME, expected_id=home, frame_age_s=age,
                 telemetry=client.last_telemetry, direction=None))
             logger.save_confirmation_photo(stream, confirmed, phase=PatrolPhase.WALL_HOME)
             return confirmed
-    raise TimeoutError("Wall home ID6 was not fully visible in fresh images; no lateral movement")
+    raise TimeoutError(f"Wall home ID{home} was not fully visible in fresh images; no lateral movement")
 
 
 def traverse_horizontal(client, limiter, stream, detector, logger, config, profile,
                         departure, expected, phase):
     client.phase = "lateral"
-    direction = planned_direction(departure, expected)
+    direction = planned_direction(departure, expected, profile["wall_ids_left_to_right"], profile["route_ids"])
     gate = HorizontalGate(expected, direction, config.camera.cx, profile["max_tilt_deg"], config.patrol)
     deadline = time.monotonic() + profile["leg_timeout_s"]
     client.log_event("standalone_leg", {"from": departure, "to": expected, "direction": direction})
@@ -879,7 +900,9 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
             arrival_band=pair_reference.get("arrival_center_x_fraction"))
         profile = {**profile, "max_tilt_deg": .6}
         config = replace(config, patrol=replace(config.patrol, angle_deg=.6, recovery_max_angle_deg=.6))
-    active_route = list(ROUTE_IDS) if continue_patrol or pair_gate is None else [6, 1]
+    route, home = list(profile["route_ids"]), profile["home_tag_id"]
+    outbound_legs = outbound_leg_count(profile)
+    active_route = route if continue_patrol or pair_gate is None else [home, route[1]]
     cancel = threading.Event() if cancel is None else cancel
     client = ShuttleClient(config, cancel, lambda snapshot: None)
     stream = logger = None
@@ -904,7 +927,7 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
             "actual_measurements_confirmed": config.actual_measurements_confirmed,
             "world_pose_used": False})
         print(f"GROUND confirmed; log={client.log_path}", flush=True)
-        detector = MixedDetector(config)
+        detector = MixedDetector(config, wall_ids=profile["wall_ids_left_to_right"])
         stream = FreshVideoStream(config.network.host, config.network.video_port, config.network.video_codec,
                                   initial_keyframe_timeout_s=15.)
         client.stream = stream
@@ -920,7 +943,7 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
         rc_age = client.last_telemetry.rc_override_age_s
         if rc_age is not None and 0 <= rc_age < 5:
             raise InterruptedError("Recent RC stick input; no takeoff")
-        print(f"TAKEOFF once; floor0 -> height{profile['target_height_m']:g}m -> wall6", flush=True)
+        print(f"TAKEOFF once; floor0 -> height{profile['target_height_m']:g}m -> wall{home}", flush=True)
         client.takeoff(config.network.confirmation_token)
         _wait_takeoff_settled(client, limiter)
         client.arm(config.network.confirmation_token)
@@ -928,13 +951,13 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
         _acquire_tag(client, limiter, stream, detector, logger, floor, config.patrol)
         _climb(client, limiter, stream, detector, logger, config, profile["target_height_m"])
         client.gimbal(0.)
-        _pause(client, limiter, stream, detector, logger, 1., PatrolPhase.WALL_HOME, 6)
-        acquire_wall_home(client, limiter, stream, detector, logger, config)
+        _pause(client, limiter, stream, detector, logger, 1., PatrolPhase.WALL_HOME, home)
+        acquire_wall_home(client, limiter, stream, detector, logger, config, home)
         _require_flight(client)
-        visited.append(6)
-        _pause(client, limiter, stream, detector, logger, profile["visit_pause_s"], PatrolPhase.WALL_HOME, 6)
+        visited.append(home)
+        _pause(client, limiter, stream, detector, logger, profile["visit_pause_s"], PatrolPhase.WALL_HOME, home)
         for index, (departure, expected) in enumerate(zip(active_route, active_route[1:])):
-            phase = PatrolPhase.OUTBOUND if index < 3 else PatrolPhase.RETURN
+            phase = PatrolPhase.OUTBOUND if index < outbound_legs else PatrolPhase.RETURN
             if pair_gate is not None and phase is PatrolPhase.OUTBOUND:
                 # First visit of every wall tag: frame the tag with its mock.
                 # Return visits only need the tag in the broad view.
@@ -975,7 +998,7 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
                            control_released_to_rc=ground)
         result = {**release, "route_completed": completed, "visited_ids": visited,
                   "active_route_ids": active_route,
-                  "full_route_completed": completed and visited == ROUTE_IDS,
+                  "full_route_completed": completed and visited == route,
                   "error": error, "log_path": str(client.log_path) if client.log_path else None,
                   "no_flight_action_dispatched": not client.attempted_action,
                   "manual_landing_required": client.attempted_action and not release["ground_verified"]}
@@ -1034,7 +1057,7 @@ def main(argv=None):
             parser.error("--config is required with --execute or --check")
         config = prepare_config(args.config, profile, args.host)
         if args.check:
-            MixedDetector(config)
+            MixedDetector(config, wall_ids=profile["wall_ids_left_to_right"])
             if pair_reference is not None:
                 from id1_pair_framing import PairFramingGate
                 PairFramingGate(pair_reference, direction="left",

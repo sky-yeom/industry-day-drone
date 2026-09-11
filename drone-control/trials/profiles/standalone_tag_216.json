@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "wall_ids_left_to_right": [2, 1, 6],
+  "floor_tag_id": 0,
+  "home_tag_id": 6,
+  "route_ids": [6, 1, 2, 1, 6],
+  "target_height_m": 1.2,
+  "max_tilt_deg": 1.5,
+  "visit_pause_s": 3.0,
+  "leg_timeout_s": 45.0,
+  "total_timeout_s": 240.0,
+  "layout_confirmed": true,
+  "wall_measurement": "image_only",
+  "floor_size_source": "private_config"
+}

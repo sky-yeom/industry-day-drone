@@ -84,3 +84,12 @@
 - ID3 모크 구도 촬영의 실기 확인(15:34는 하방 검사로 도달 전 중단).
 - 앱 비행제어기 조회 오류의 근본 수정(`docs/fix_ready_20260907/` 계획 그대로 미적용).
 - Speech 도구 7개와의 실기 연동 검증(코드는 `pc/drone_nav/tool_control/`, 모의 테스트만 통과).
+
+## 7. 2026-09-11 설정 변경 (비행 전 설정만)
+
+- 벽 배치 **2 · 1 · 6**(왼쪽부터), 바닥 0은 6 아래. 경로 **6 → 1 → 2 → 1 → 6**. 순항 **1.2 m**.
+- 새 프로필 `trials/profiles/standalone_tag_216.json`이 `START_TAG_SHUTTLE.ps1`의 기본값.
+  네 장 배치는 `standalone_tag_6321236.json`으로 남아 있고 `-ProfilePath`로 선택.
+- 코드: 배치·경로·홈 태그가 프로필 기반으로 바뀜(구조 검증), 고도 허용 1.0~1.6 m,
+  `climb_command`는 목표보다 0.3 m 이내 높게 안착해도 도달로 처리(자동이륙이 1.1~1.3 m에 안착하므로).
+- 실기 미검증. 실행: `./drone-control/trials/START_TAG_SHUTTLE.ps1 -Mode Patrol -PhoneIp <폰IP>`

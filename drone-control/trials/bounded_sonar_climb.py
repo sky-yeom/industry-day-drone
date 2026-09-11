@@ -13,9 +13,12 @@ def climb_command(height, age, target=1.5):
     if not .5 <= height <= 1.8 or not .5 <= target <= 1.6:
         raise RuntimeError("height/target outside bounded ascent")
     error = target - height
-    if error < -.051:
-        raise RuntimeError("already above ascent target; no automatic descent")
-    if abs(error) <= .051:
+    # DJI auto-takeoff settles anywhere from 1.1 to 1.3 m on the sonar
+    # display, so a 1.2 m target must accept being a little above it.
+    # Nothing ever commands a descent; only a large excess is refused.
+    if error < -.301:
+        raise RuntimeError("already well above ascent target; no automatic descent")
+    if error <= .051:
         return 0.0
     return min(.18, max(.10, error*.8))
 

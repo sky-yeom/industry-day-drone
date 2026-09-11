@@ -34,8 +34,8 @@ MODEL = os.getenv("VOICE_LIVE_MODEL", "gpt-realtime")
 #
 #   openai          -> shimmer, marin, cedar, alloy, echo  (네이티브, 한국어 가능)
 #   azure-standard  -> ko-KR-SunHiNeural 등                (Azure TTS, 한 단계 더 거침)
-VOICE_NAME = os.getenv("VOICE_LIVE_VOICE", "ko-KR-SunHiNeural")
-VOICE_TYPE = os.getenv("VOICE_LIVE_VOICE_TYPE", "azure-standard")
+VOICE_NAME = os.getenv("VOICE_LIVE_VOICE", "shimmer")
+VOICE_TYPE = os.getenv("VOICE_LIVE_VOICE_TYPE", "openai")
 
 WS_URL = (
     f"wss://{RESOURCE}.cognitiveservices.azure.com/voice-live/realtime"

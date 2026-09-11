@@ -1,0 +1,81 @@
+package com.msdkremote.livevideo;
+
+import android.util.Log;
+
+import java.io.IOException;
+
+public class VideoServerManager
+{
+    public final String TAG = this.getClass().getSimpleName();
+
+    private static VideoServerManager instance = null;
+
+    private VideoServer videoServer = null;
+    private final AvailableCameraListener availableCameraListener = new AvailableCameraListener();
+    // Lifecycle binding is always maintained. Recovery of a stalled existing stream is opt-in.
+    private boolean automaticRecoveryEnabled = false;
+
+    FrameBuffer frameBuffer = null;
+
+
+    public static synchronized VideoServerManager getInstance()
+    {
+        if (instance == null)
+            instance = new VideoServerManager();
+
+        return instance;
+    }
+
+    private VideoServerManager() { }
+
+    public synchronized org.json.JSONObject diagnostics() throws org.json.JSONException {
+        org.json.JSONObject result = frameBuffer == null
+                ? new org.json.JSONObject() : frameBuffer.diagnostics();
+        result.put("server_started", videoServer != null);
+        result.put("socket", videoServer == null ? org.json.JSONObject.NULL : videoServer.diagnostics());
+        result.put("sdk_binding", availableCameraListener.diagnostics());
+        result.put("automatic_recovery_enabled", automaticRecoveryEnabled);
+        result.put("phone_preview_evidence", "separate_FPVWidget_diagnostics_not_raw_callback");
+        return result;
+    }
+
+    public synchronized void startServer(int port) {
+        if (videoServer != null)
+            return;
+
+        frameBuffer = new FrameBuffer(1_000_000);
+
+        videoServer = new VideoServer();
+        videoServer.startServer(port, frameBuffer);
+
+    }
+
+    public synchronized void ensureSdkBinding() {
+        if (frameBuffer != null) availableCameraListener.startListener(frameBuffer);
+        if (videoServer != null && frameBuffer != null) {
+            boolean groundDisarmed = com.msdkremote.livecontrol.advanced.TelemetryProvider.getInstance()
+                    .isGroundedFresh(1000)
+                    && !com.msdkremote.livecontrol.advanced.StickControlManager.getInstance().isArmedOrEnabling();
+            if (videoServer.recoverGroundDelivery(automaticRecoveryEnabled, groundDisarmed,
+                    frameBuffer.cameraAgeMs(), frameBuffer.isWaitingKeyframe()))
+                availableCameraListener.recoverDelivery();
+        }
+    }
+
+    public synchronized void unbindSdk() {
+        availableCameraListener.stopListener();
+    }
+
+    public synchronized void setAutomaticRecoveryEnabled(boolean enabled) {
+        automaticRecoveryEnabled = enabled;
+    }
+
+    public synchronized void killServer() throws InterruptedException {
+        if (videoServer == null)
+            return;
+
+        availableCameraListener.stopListener();
+        try { videoServer.stopServer(); }
+        finally { videoServer = null; }
+    }
+}

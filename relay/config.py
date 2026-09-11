@@ -13,6 +13,12 @@ model deployment that supports structured outputs.
 from __future__ import annotations
 
 import os
+from urllib.parse import urlsplit
+
+try:
+    from .tool_target import resolve_tool_target
+except ImportError:
+    from tool_target import resolve_tool_target
 
 # --- Azure AI Foundry / Voice Live -------------------------------------------
 
@@ -46,11 +52,32 @@ TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
 
 # --- Emergency triage image analysis (server only) -----------------------------
 
-TRIAGE_MODE = os.getenv("TRIAGE_MODE", "mock").strip().lower()
+_tool_target = resolve_tool_target()
+DRONE_RUN_MODE = _tool_target.run_mode
+TRIAGE_MODE = _tool_target.triage_mode
+# Without the explicit selector, flight and image-analysis settings stay independent.
+DRONE_CONTROL_MODE = _tool_target.control_mode
+DRONE_CONTROL_API_URL = _tool_target.api_url
+DRONE_CONTROL_API_TOKEN = _tool_target.api_token
+DRONE_CONTROL_TIMEOUT_SECONDS = 5.0
+DRONE_CONTROL_TRANSPORT = _tool_target.transport
+DRONE_CONTROL_USE_TOOLS = _tool_target.use_tools
+DRONE_REMOTE_DEVICE_ID = os.getenv("DRONE_REMOTE_DEVICE_ID", "").strip()
+DRONE_REMOTE_DEVICE_TOKEN = os.getenv("DRONE_REMOTE_DEVICE_TOKEN", "").strip()
+DRONE_REMOTE_EXECUTION_MODE = (
+    "live" if DRONE_RUN_MODE == "real" and DRONE_CONTROL_TRANSPORT == "remote"
+    else os.getenv("DRONE_REMOTE_EXECUTION_MODE", "").strip().lower()
+)
+DRONE_REMOTE_SINGLE_REPLICA = os.getenv("DRONE_REMOTE_SINGLE_REPLICA", "0") == "1"
+RELAY_OPERATOR_TOKEN = os.getenv("RELAY_OPERATOR_TOKEN", "").strip()
+RELAY_PUBLIC_ORIGIN = os.getenv("RELAY_PUBLIC_ORIGIN", "").strip()
+RELAY_LOCAL_DIRECT = os.getenv("RELAY_LOCAL_DIRECT", "0") == "1"
 AZURE_VISION_ENDPOINT = os.getenv("AZURE_VISION_ENDPOINT", "").strip()
 AZURE_VISION_DEPLOYMENT = os.getenv("AZURE_VISION_DEPLOYMENT", "").strip()
 AZURE_VISION_API_VERSION = os.getenv("AZURE_VISION_API_VERSION", "v1").strip()
 AZURE_VISION_API_KEY = os.getenv("AZURE_VISION_API_KEY", "").strip()
+AZURE_VISION_MAX_COMPLETION_TOKENS = int(os.getenv("AZURE_VISION_MAX_COMPLETION_TOKENS", "1000"))
+AZURE_VISION_REASONING_EFFORT = os.getenv("AZURE_VISION_REASONING_EFFORT", "").strip().lower()
 
 # The documented v1 Chat Completions contract supports image input and strict
 # JSON schema output on compatible deployments, independently of Voice Live.
@@ -133,3 +160,10 @@ WEB_ORIGIN_REGEX = os.getenv(
     "RELAY_WEB_ORIGIN_REGEX",
     r"http://(localhost|127\.0\.0\.1)(:\d+)?",
 )
+
+WEB_ORIGINS = tuple(value.strip() for value in os.getenv("RELAY_WEB_ORIGINS", "").split(",") if value.strip())
+for origin in WEB_ORIGINS:
+    parsed = urlsplit(origin)
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+            or parsed.path or parsed.query or parsed.fragment or parsed.netloc.endswith(":")):
+        raise ValueError("RELAY_WEB_ORIGINS must contain exact HTTPS origins without paths")

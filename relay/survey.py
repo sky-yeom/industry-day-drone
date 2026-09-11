@@ -63,9 +63,11 @@ class RouteState:
 
 
 class SurveySession:
-    def __init__(self, *, clock=time.monotonic, mode="mock", scenario=None, run_id=None):
+    def __init__(self, *, clock=time.monotonic, mode="mock", drone_control_mode="mock", scenario=None, run_id=None):
         if mode not in ("mock", "azure"):
             raise ValueError("지원하지 않는 이미지 분석 모드입니다.")
+        if drone_control_mode not in ("mock", "live"):
+            raise ValueError("지원하지 않는 드론 제어 모드입니다.")
         self.clock = clock
         self.scenario = deepcopy(scenario or SCENARIO)
         self.state = RouteState()
@@ -74,6 +76,9 @@ class SurveySession:
             "promptPhase": "briefing", "userPromptText": "",
             "appearanceConstraints": [], "unsupportedAppearance": [],
             "mode": mode, "elapsedMs": 0, "clockRunning": False,
+            "droneControlMode": drone_control_mode, "droneMissionId": None,
+            "droneState": "idle", "droneStopState": "not_requested", "droneErrorCode": None,
+            "activeVisitIndex": None,
             "activeMonitorId": None, "people": [], "captures": [], "score": None, "error": None,
         }
         for person in self.scenario["people"]:
@@ -220,6 +225,11 @@ class SurveySession:
             "id": capture.id, "monitorId": capture.monitor_id, "imageUrl": capture.image_url,
             "capturedAtMs": self.elapsed_ms(), "status": "captured", "evidence": None,
             "mode": self.data["mode"],
+            "droneControlMode": self.data["droneControlMode"],
+            "missionId": getattr(capture, "mission_id", None),
+            "visitIndex": getattr(capture, "visit_index", None),
+            "destinationId": getattr(capture, "destination_id", None),
+            "capturedAtUnixMs": getattr(capture, "captured_at_unix_ms", None),
         })
         self.person(capture.monitor_id)["attempts"] += 1
         self.touch()

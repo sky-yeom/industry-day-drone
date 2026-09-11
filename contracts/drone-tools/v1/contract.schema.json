@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:industry-day:drone-tools:1.0.0",
+  "title": "Drone Tools v1 stable HTTP wire contract",
+  "description": "Tool argument schemas are defined by tools.json. Required response fields are stable; optional backend diagnostic fields may be added.",
+  "anyOf": [{"$ref":"#/$defs/request"},{"$ref":"#/$defs/response"}],
+  "$defs": {
+    "id": {"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9][A-Za-z0-9_.:-]*$"},
+    "toolId": {"type":"string","minLength":1,"maxLength":64,"pattern":"^[A-Za-z0-9_-]+$"},
+    "destination": {
+      "type":"object","required":["destination_id","monitor_id","physical_definition"],
+      "properties":{
+        "destination_id":{"$ref":"#/$defs/toolId"},
+        "monitor_id":{"type":"string","enum":["monitor-1","monitor-2","monitor-3"]},
+        "physical_definition":{"type":"object","required":["type","marker_id"],"properties":{
+          "type":{"const":"apriltag"},"marker_id":{"type":"integer","enum":[1,2,3]}
+        }}
+      }
+    },
+    "request": {
+      "type":"object","required":["arguments","caller_id","request_id"],"additionalProperties":false,
+      "properties":{"arguments":{"type":"object"},"caller_id":{"$ref":"#/$defs/id"},"request_id":{"$ref":"#/$defs/id"}}
+    },
+    "response": {
+      "type":"object","required":["schema_version","ok","execution_mode","physical_execution"],
+      "properties":{
+        "schema_version":{"const":1},"ok":{"type":"boolean"},
+        "execution_mode":{"enum":["mock","live"]},"physical_execution":{"type":"boolean"}
+      },
+      "anyOf":[
+        {"required":["status"],"properties":{"ok":{"const":true},"status":{"const":"ok"}}},
+        {"required":["error"],"properties":{"ok":{"const":false},"error":{"$ref":"#/$defs/error"}}}
+      ]
+    },
+    "error": {
+      "type":"object","required":["code","message"],
+      "properties":{"code":{"type":"string","minLength":1},"message":{"type":"string","minLength":1}}
+    },
+    "visit": {
+      "type":"object","required":["visit_index","destination_id","state","arrival_confirmed","capture_ids"],
+      "properties":{
+        "visit_index":{"type":"integer","minimum":0,"maximum":2},
+        "destination_id":{"$ref":"#/$defs/toolId"},
+        "state":{"enum":["pending","moving","arrived","captured"]},
+        "arrival_confirmed":{"type":"boolean"},
+        "capture_ids":{"type":"array","maxItems":2,"uniqueItems":true,"items":{"$ref":"#/$defs/id"}}
+      }
+    },
+    "mission": {
+      "type":"object",
+      "required":["mission_id","caller_id","request_id","profile_id","site_revision","state","destination_ids",
+                  "execution_mode","physical_execution","stop_requested","physical_stop_confirmed","verification_pending","visits"],
+      "properties":{
+        "mission_id":{"$ref":"#/$defs/toolId"},
+        "caller_id":{"$ref":"#/$defs/id"},"request_id":{"$ref":"#/$defs/id"},
+        "profile_id":{"$ref":"#/$defs/toolId"},"site_revision":{"$ref":"#/$defs/toolId"},
+        "state":{"enum":["accepted","preflight","taking_off","running","returning","awaiting_rc_landing","completed","stop_requested","stopped","failed","outcome_unknown"]},
+        "destination_ids":{"type":"array","minItems":3,"maxItems":3,"uniqueItems":true,"items":{"$ref":"#/$defs/toolId"}},
+        "execution_mode":{"enum":["mock","live"]},"physical_execution":{"type":"boolean"},
+        "stop_requested":{"type":"boolean"},"physical_stop_confirmed":{"type":"boolean"},
+        "verification_pending":{"type":"boolean"},"ground_verified":{"type":"boolean"},
+        "route_completed":{"type":"boolean"},"simulated":{"type":"boolean"},
+        "visits":{"type":"array","minItems":3,"maxItems":3,"items":{"$ref":"#/$defs/visit"}},
+        "visited_ids":{"type":"array","maxItems":5,"items":{"type":"integer"}},
+        "updated_at_unix_ms":{"type":"integer","minimum":0},
+        "error":{"type":["string","null"]},"stop_reason":{"type":"string"}
+      }
+    },
+    "capture": {
+      "type":"object",
+      "required":["capture_id","mission_id","visit_index","destination_id","arrival_confirmed",
+                  "content_type","image_base64","sha256","captured_at_unix_ms"],
+      "properties":{
+        "capture_id":{"$ref":"#/$defs/id"},"mission_id":{"$ref":"#/$defs/toolId"},
+        "visit_index":{"type":"integer","minimum":0,"maximum":2},"destination_id":{"$ref":"#/$defs/toolId"},
+        "monitor_id":{"enum":["monitor-1","monitor-2","monitor-3"]},"arrival_confirmed":{"const":true},
+        "content_type":{"const":"image/png"},"image_base64":{"type":"string","minLength":1,"maxLength":5592408},
+        "sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"captured_at_unix_ms":{"type":"integer","minimum":1},
+        "simulated":{"type":"boolean"},"capture_source":{"type":"string"},
+        "frame_generation":{"type":"integer","minimum":1},"frame_id":{"type":"integer","minimum":1},
+        "physical_stop_confirmed":{"type":"boolean"}
+      }
+    },
+    "capabilitiesResponse": {
+      "allOf":[{"$ref":"#/$defs/response"}],
+      "required":["live_ready","expected_mode_guard","profile_id","site_revision","home_tag_id","floor_tag_id","target_height_m","tools","destinations","supported_ordered_sequences"],
+      "properties":{
+        "ok":{"const":true},"live_ready":{"type":"boolean"},"expected_mode_guard":{"const":true},
+        "profile_id":{"$ref":"#/$defs/toolId"},"site_revision":{"$ref":"#/$defs/toolId"},
+        "home_tag_id":{"type":"integer"},"floor_tag_id":{"type":"integer"},"target_height_m":{"type":"number","exclusiveMinimum":0},
+        "tools":{"type":"array","minItems":7,"maxItems":7,"uniqueItems":true,"items":{"type":"string"}},
+        "destinations":{"type":"array","minItems":3,"maxItems":3,"items":{"$ref":"#/$defs/destination"}},
+        "supported_ordered_sequences":{"type":"array","minItems":6,"maxItems":6,"uniqueItems":true,
+          "items":{"type":"array","minItems":3,"maxItems":3,"uniqueItems":true,"items":{"$ref":"#/$defs/toolId"}}},
+        "adapter":{"type":"string"},"mock_capture_ready":{"type":"boolean"},
+        "readiness_issues":{"type":"array","items":{"type":"string"}}
+      }
+    },
+    "statusResponse": {
+      "allOf":[{"$ref":"#/$defs/response"}],
+      "required":["connected","ground_verified","active_mission_id","active_mission","active_request"],
+      "properties":{
+        "ok":{"const":true},"connected":{"type":"boolean"},"ground_verified":{"type":"boolean"},
+        "active_mission_id":{"anyOf":[{"$ref":"#/$defs/toolId"},{"type":"null"}]},
+        "active_mission":{"anyOf":[{"$ref":"#/$defs/mission"},{"type":"null"}]},
+        "active_request":{"anyOf":[{"type":"object","required":["caller_id","request_id","mission_id"],
+          "properties":{"caller_id":{"$ref":"#/$defs/id"},"request_id":{"$ref":"#/$defs/id"},"mission_id":{"$ref":"#/$defs/toolId"}}},{"type":"null"}]},
+        "is_flying":{"type":["boolean","null"]},"are_motors_on":{"type":["boolean","null"]},
+        "vs_enabled":{"type":["boolean","null"]},"simulated":{"type":"boolean"}
+      }
+    },
+    "missionResponse": {
+      "allOf":[{"$ref":"#/$defs/response"}],"required":["mission"],
+      "properties":{"ok":{"const":true},"mission":{"$ref":"#/$defs/mission"}}
+    },
+    "stopResponse": {
+      "allOf":[{"$ref":"#/$defs/missionResponse"}],"required":["stop_requested","physical_stop_confirmed"],
+      "properties":{"stop_requested":{"type":"boolean"},"physical_stop_confirmed":{"type":"boolean"}}
+    },
+    "capturesResponse": {
+      "allOf":[{"$ref":"#/$defs/response"}],"required":["mission_id","captures"],
+      "properties":{"ok":{"const":true},"mission_id":{"$ref":"#/$defs/toolId"},
+        "captures":{"type":"array","maxItems":6,"items":{"$ref":"#/$defs/capture"}}}
+    },
+    "sensorResponse": {
+      "allOf":[{"$ref":"#/$defs/response"}],"required":["snapshot","sensor_semantics"],
+      "properties":{"ok":{"const":true},"snapshot":{"type":"object"},"sensor_semantics":{"type":"string","minLength":1}}
+    }
+  }
+}

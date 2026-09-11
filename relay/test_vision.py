@@ -202,11 +202,29 @@ class AzureTests(unittest.IsolatedAsyncioTestCase):
             ("deployment", "", "AZURE_VISION_DEPLOYMENT"),
             ("deployment", "../elsewhere", "AZURE_VISION_DEPLOYMENT"),
             ("api_version", "2023-12-01-preview", "v1"),
+            ("max_completion_tokens", 0, "MAX_COMPLETION_TOKENS"),
+            ("max_completion_tokens", 8193, "MAX_COMPLETION_TOKENS"),
+            ("max_completion_tokens", True, "MAX_COMPLETION_TOKENS"),
+            ("reasoning_effort", "unsupported", "REASONING_EFFORT"),
         ):
             with self.subTest(field=field, value=value):
                 vision = AzureVision()
                 setattr(vision, field, value)
                 self.assertIn(message, vision.readiness())
+
+    async def test_reasoning_budget_is_explicit_and_other_models_keep_their_default(self):
+        for effort, budget in (("", 1000), ("minimal", 2000)):
+            with self.subTest(effort=effort):
+                self.vision.reasoning_effort, self.vision.max_completion_tokens = effort, budget
+                session, _ = fake_http(completion())
+                with patch("relay.vision.aiohttp.ClientSession", return_value=session):
+                    await self.vision.analyze(self.capture, self.target)
+                payload = session.post.call_args.kwargs["json"]
+                self.assertEqual(payload["max_completion_tokens"], budget)
+                if effort:
+                    self.assertEqual(payload["reasoning_effort"], effort)
+                else:
+                    self.assertNotIn("reasoning_effort", payload)
 
     async def test_missing_config_errors_before_request(self):
         self.vision.deployment = ""

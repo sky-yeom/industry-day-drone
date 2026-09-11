@@ -34,8 +34,8 @@ MODEL = os.getenv("VOICE_LIVE_MODEL", "gpt-realtime")
 #
 #   openai          -> shimmer, marin, cedar, alloy, echo  (네이티브, 한국어 가능)
 #   azure-standard  -> ko-KR-SunHiNeural 등                (Azure TTS, 한 단계 더 거침)
-VOICE_NAME = os.getenv("VOICE_LIVE_VOICE", "shimmer")
-VOICE_TYPE = os.getenv("VOICE_LIVE_VOICE_TYPE", "openai")
+VOICE_NAME = os.getenv("VOICE_LIVE_VOICE", "ko-KR-SunHiNeural")
+VOICE_TYPE = os.getenv("VOICE_LIVE_VOICE_TYPE", "azure-standard")
 
 WS_URL = (
     f"wss://{RESOURCE}.cognitiveservices.azure.com/voice-live/realtime"
@@ -113,7 +113,7 @@ TRANSCRIPTION_PROMPT = os.getenv(
     "드론 긴급 구조 관제 대화입니다. 자주 나오는 말: 현장 1, 현장 2, 현장 3, "
     "첫번째, 첫 번째, 첫째, 두번째, 두 번째, 둘째, 세번째, 세 번째, 셋째, "
     "일번, 한 번, 이번, 두 번, 삼번, 세 번, 1번, 2번, 3번, "
-    "네, 예, 응, 맞아요, 아니요, "
+    "네, 예, 응, 엉, 맞아, 맞아요, 오케이, 오키, 콜, 좋아, 가자, 아니요, "
     "구조, 바다에 빠진 사람, 물에 빠진 사람, 익수자, 잔해 아래의 사람, 불길 속의 사람, 불이 난 집, "
     "우선순위, 경로, 확정, 출발, 상태, 다시 시도, 중단, 다시, 취소.",
 )

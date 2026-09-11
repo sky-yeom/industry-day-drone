@@ -175,7 +175,6 @@ export default function Home() {
       targetImage={TARGET_APPEARANCE.referenceImage}
       targetAlt={TARGET_APPEARANCE.referenceAlt}
       briefing={SCENARIO_BRIEFING}
-      agentText={agentText}
       onIntroReady={() => sessionRef.current?.sendRouteIntroReady()}
       onDone={() => setStep("route")}
     />;

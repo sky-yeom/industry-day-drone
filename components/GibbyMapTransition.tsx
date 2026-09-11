@@ -5,7 +5,6 @@ import { Press_Start_2P } from "next/font/google";
 import { useEffect, useState } from "react";
 import PixelGround from "@/components/PixelGround";
 import { ANCHOR_W, LAST_FRAME, gibbyFrameStyle } from "@/lib/gibbyMapSprite";
-import { useTypewriter } from "@/lib/useTypewriter";
 import type { BriefingBullet } from "@/lib/types";
 
 const pixelFont = Press_Start_2P({ weight: "400", subsets: ["latin"] });
@@ -36,19 +35,16 @@ export default function GibbyMapTransition({
   targetImage,
   targetAlt,
   briefing,
-  agentText,
   onIntroReady,
   onDone,
 }: {
   targetImage: string;
   targetAlt: string;
   briefing: BriefingBullet[];
-  agentText: string;
   onIntroReady: () => void;
   onDone: () => void;
 }) {
   const [frame, setFrame] = useState(0);
-  const typed = useTypewriter(agentText);
   // Old photo/briefing content starts fading out as soon as Gibby actually
   // pulls the scroll out of his pocket (frame 2), instead of waiting for
   // the whole animation to finish — so the "content leaves" beat is synced
@@ -128,14 +124,6 @@ export default function GibbyMapTransition({
       >
         <div aria-hidden className="pixel-rendering shrink-0" style={gibbyFrameStyle(frame)} />
       </div>
-
-      {typed && (
-        <div className="absolute bottom-[calc(16%+146px)] z-20 right-[calc(6%+161px)]">
-          <div className="pixel-bubble pixel-bubble--right relative max-w-[260px] px-4 py-3 text-sm leading-6 text-[#091f2c] sm:max-w-xs">
-            {typed}
-          </div>
-        </div>
-      )}
     </main>
   );
 }

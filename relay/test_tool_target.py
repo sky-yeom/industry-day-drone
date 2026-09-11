@@ -7,7 +7,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from relay.tool_target import REAL_API_URL, TEST_API_URL, resolve_tool_target, validate_test_api_url
+from relay.tool_target import EMBEDDED_API_URL, REAL_API_URL, TEST_API_URL, resolve_tool_target, validate_test_api_url
 
 
 class ToolTargetTests(unittest.TestCase):
@@ -37,7 +37,18 @@ class ToolTargetTests(unittest.TestCase):
             DRONE_CONTROL_TRANSPORT="remote", DRONE_CONTROL_USE_TOOLS="0", TRIAGE_MODE="azure"))
         self.assertEqual((target.run_mode, target.control_mode, target.api_url, target.api_token,
             target.transport, target.use_tools, target.triage_mode),
-            ("test", "mock", TEST_API_URL, "", "local", True, "mock"))
+            ("test", "mock", EMBEDDED_API_URL, "", "inprocess", True, "mock"))
+
+    def test_existing_hosted_deployment_defaults_to_embedded_test_without_new_settings(self):
+        target = resolve_tool_target({"RELAY_HOST": "0.0.0.0", "TRIAGE_MODE": "azure",
+                                      "DRONE_CONTROL_TRANSPORT": "remote"})
+        self.assertEqual((target.run_mode, target.transport, target.api_url, target.use_tools),
+                         ("test", "inprocess", EMBEDDED_API_URL, True))
+        live = resolve_tool_target({"RELAY_HOST": "0.0.0.0", "DRONE_CONTROL_MODE": "live"})
+        self.assertIsNone(live.run_mode)
+        self.assertEqual(live.control_mode, "live")
+        real = resolve_tool_target({"RELAY_HOST": "0.0.0.0", "DRONE_RUN_MODE": "real"})
+        self.assertEqual((real.control_mode, real.transport), ("live", "remote"))
 
     def test_test_target_and_auth_are_opt_in_and_never_exposed_in_repr(self):
         target = resolve_tool_target(dict(DRONE_RUN_MODE="test",
@@ -65,6 +76,13 @@ class ToolTargetTests(unittest.TestCase):
                 env["DRONE_CONTROL_API_TOKEN"] = token
             with self.subTest(token=token), self.assertRaisesRegex(ValueError, "DRONE_CONTROL_API_TOKEN"):
                 resolve_tool_target(env)
+
+    def test_explicit_remote_real_preserves_cloud_to_pc_transport(self):
+        target = resolve_tool_target({"DRONE_RUN_MODE": "real", "DRONE_REAL_TRANSPORT": "remote"})
+        self.assertEqual((target.run_mode, target.control_mode, target.transport, target.api_token),
+                         ("real", "live", "remote", ""))
+        with self.assertRaisesRegex(ValueError, "DRONE_REAL_TRANSPORT"):
+            resolve_tool_target({"DRONE_RUN_MODE": "real", "DRONE_REAL_TRANSPORT": "invalid"})
 
     def test_present_but_empty_or_unknown_selector_never_falls_back(self):
         for mode in ("", " \t ", "mock", "live", "production", "typo-secret"):
@@ -145,7 +163,7 @@ class ConfigSubprocessTests(unittest.TestCase):
         self.assertEqual(Path(value["config_file"]), self.root / "relay" / "config.py")
         return value
 
-    def test_clean_process_defaults_are_legacy_and_voice_matches_227acc5(self):
+    def test_clean_process_defaults_are_legacy_and_voice_matches_main_a828ee0(self):
         value = self.snapshot({})
         self.assertIsNone(value["DRONE_RUN_MODE"])
         self.assertEqual(value["DRONE_CONTROL_API_URL"], REAL_API_URL)
@@ -155,7 +173,7 @@ class ConfigSubprocessTests(unittest.TestCase):
         self.assertFalse(value["DRONE_CONTROL_USE_TOOLS"])
         self.assertFalse(value["has_token"])
         self.assertEqual((value["VOICE_NAME"], value["VOICE_TYPE"], value["MODEL"],
-            value["TRANSCRIPTION_MODEL"]), ("ko-KR-SunHiNeural", "azure-standard", "gpt-realtime", "gpt-4o-transcribe"))
+            value["TRANSCRIPTION_MODEL"]), ("shimmer", "openai", "gpt-realtime", "gpt-4o-transcribe"))
         self.assertEqual(value["VAD_TYPE"], "azure_semantic_vad_multilingual")
         self.assertEqual(value["VAD_LANGUAGES"], ["ko"])
         self.assertEqual((value["SILENCE_DURATION_MS"], value["SPEECH_DURATION_MS"],
@@ -170,13 +188,13 @@ class ConfigSubprocessTests(unittest.TestCase):
         real = self.snapshot(dict(inherited, DRONE_RUN_MODE="real", DRONE_CONTROL_MODE="mock",
             DRONE_TEST_API_URL="invalid-secret-sentinel", DRONE_TEST_API_TOKEN="test-secret-sentinel", TRIAGE_MODE="mock"))
         for value, mode, control, url, triage in (
-            (test, "test", "mock", TEST_API_URL, "mock"),
+            (test, "test", "mock", EMBEDDED_API_URL, "mock"),
             (real, "real", "live", REAL_API_URL, "azure"),
         ):
             self.assertEqual((value["DRONE_RUN_MODE"], value["DRONE_CONTROL_MODE"],
                 value["DRONE_CONTROL_API_URL"], value["TRIAGE_MODE"]), (mode, control, url, triage))
             self.assertTrue(value["DRONE_CONTROL_USE_TOOLS"])
-            self.assertEqual(value["DRONE_CONTROL_TRANSPORT"], "local")
+            self.assertEqual(value["DRONE_CONTROL_TRANSPORT"], "inprocess" if mode == "test" else "local")
             for field in self.fields[6:]:
                 self.assertEqual(value[field], baseline[field], field)
         self.assertFalse(test["has_token"])
@@ -199,6 +217,23 @@ class ConfigSubprocessTests(unittest.TestCase):
         self.assertEqual(value["DRONE_CONTROL_API_URL"], "http://127.0.0.1:18768")
         self.assertTrue(value["uses_test_token"])
         self.assertFalse(value["uses_real_token"])
+
+    def test_process_hosted_real_and_test_use_configured_transport_without_voice_changes(self):
+        real = self.snapshot({"DRONE_RUN_MODE": "real", "DRONE_REAL_TRANSPORT": "remote"})
+        test = self.snapshot({"DRONE_RUN_MODE": "test", "DRONE_REAL_TRANSPORT": "remote",
+                              "DRONE_CONTROL_TRANSPORT": "remote", "TRIAGE_MODE": "azure"})
+        self.assertEqual(real["DRONE_CONTROL_TRANSPORT"], "remote")
+        self.assertEqual(test["DRONE_CONTROL_TRANSPORT"], "inprocess")
+        self.assertEqual(real["VOICE_NAME"], test["VOICE_NAME"])
+        self.assertFalse(real["has_token"])
+
+    def test_existing_hosted_environment_needs_no_node_or_new_deployment_settings(self):
+        value = self.snapshot({"RELAY_HOST": "0.0.0.0", "TRIAGE_MODE": "azure"})
+        self.assertEqual((value["DRONE_RUN_MODE"], value["DRONE_CONTROL_TRANSPORT"],
+                          value["DRONE_CONTROL_API_URL"]),
+                         ("test", "inprocess", EMBEDDED_API_URL))
+        self.assertTrue(value["DRONE_CONTROL_USE_TOOLS"])
+        self.assertFalse(value["has_token"])
 
     def test_process_invalid_configuration_fails_clearly_without_secrets(self):
         cases = [

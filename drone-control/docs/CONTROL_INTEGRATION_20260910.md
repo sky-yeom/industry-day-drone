@@ -1,19 +1,160 @@
-# 고정 Drone Tools v1 계약과 독립 mock
+# 대시보드 × 드론 연동 가이드 — 고정 Tools v1 / Test·Real
+
+> **팀원용 결론:** 이 PR이 main에 병합되고 기존 자동 배포가 끝나면,
+> **기존 대시보드 주소에서 mock으로 계속 개발·테스트**합니다.
+> 별도 mock 서버 실행, Docker 실행, Node/Python 설치, 드론 연결이 필요하지 않습니다.
+> PR 브랜치에 push한 것과 main 배포 완료는 다릅니다.
+
+## 통합 구성과 구현 범위
+
+| 구성 | 역할 | 이번 변경 |
+|---|---|---|
+| 기존 대시보드 | 음성 입력·선택 순서·지도 애니메이션·이미지·결과 표시 | 9월 12일 main `a828ee0` 그대로 유지 |
+| 기존 Voice | 대화·확인·출발 도구 호출 | 팀원의 prompt·도구·shimmer/openai 기본값 유지 |
+| 기존 relay | `/api/config`, `/ws`, 요청 검증·실행·상태·캡처 전달 | 동일 실행기에서 Test/Real 대상 선택 |
+| 내장 mock | 7개 고정 Tools의 모의 응답 | relay 프로세스 안에서 처리, 새 프로세스·포트 없음 |
+| 실제 PC Tools | 같은 계약으로 실제 드론 제어 | 기존 HTTP/원격 연결·인증·안전 조건 유지 |
+| 독립 Node mock | 백엔드 없이 별도 프런트 adapter를 개발할 때 사용 | 선택 사항, 배포 대시보드 사용에 불필요 |
+
+새 Docker 구성·Node 사이드카·별도 mock 배포는 추가하지 않습니다.
+기존 relay 배포에 이미 포함되는 Python 코드와 Tools 인자 schema만 사용합니다.
+
+```text
+기존 대시보드 / Voice
+  │  GET /api/config + WebSocket /ws (변경 없음)
+  ▼
+기존 relay → LiveMissionRunner → DroneClient
+                                 │ 같은 tool 이름·인자·응답 계약
+                                 ├─ Test: 내장 contract mock (함수 호출)
+                                 │        → 모의 방문·PNG·결과
+                                 └─ Real: 실제 PC Tools (HTTP / 원격 WSS)
+                                          → Android → DJI 기체
+```
+
+Test는 화면에 결과만 덮어씌우거나 기존 타이머 실행기로 우회하지 않습니다.
+실기와 같은 `DroneClient` 인자 검증·요청 ID 처리·`LiveMissionRunner`를 통과한 뒤
+**통신 대상만 내장 mock으로 교체**합니다. 실제 TCP/HTTP의 지연·유실까지
+시험하려면 아래 선택 사항인 독립 HTTP mock을 사용합니다.
+
+## A. 팀원: 기존 웹에서 바로 테스트
+
+1. 기존 PR #3이 main에 병합되고, 저장소의 기존 자동 배포가 성공했는지 확인합니다.
+2. 기존 대시보드 주소를 새로 엽니다. 별도 mock 주소를 입력하지 않습니다.
+3. 기존 음성 절차로 조건을 확인하고 현장 2 → 3 → 1을 확정한 뒤 출발합니다.
+4. 순서·방문 상태·모의 이미지·결과가 대시보드에 전달되는지 확인합니다.
+
+음성은 Test에서도 **기존 Azure Voice**를 사용합니다. 마이크 권한과 기존 배포의
+Voice 리소스 접근은 필요합니다. 드론과 이미지 분석 호출은 모의 처리입니다.
+`/ws?voice=0`은 자동화된 프로토콜 시험용이며, 기존 UI의 음성 사용법을 바꾸지 않습니다.
+
+relay의 `/api/config`에서 다음 값을 확인할 수 있습니다.
+
+```json
+{
+  "runMode": "test",
+  "droneControlMode": "mock",
+  "droneControlUseTools": true,
+  "droneControlTransport": "inprocess",
+  "toolEndpoint": "inprocess://drone-tools/v1",
+  "droneReady": true
+}
+```
+
+`inprocess://...`는 브라우저가 접속할 URL이 아니라 **내장 모듈 식별자**입니다.
+모의 상태는 대시보드 세션별로 분리되므로 팀원끼리 같은 드론 점유를 경쟁하지 않습니다.
+세션 종료/서버 재시작 시 초기화됩니다. 실제 PC 한 대의 전역 점유·영속성은 별개입니다.
+
+기존 배포처럼 `RELAY_HOST=0.0.0.0`이고 `DRONE_RUN_MODE`가 없으면 Test를 기본으로
+선택합니다. 단, 명시적인 기존 `DRONE_CONTROL_MODE=live`는 자동으로 바꾸지 않습니다.
+기존 mock용 remote/triage 설정은 이 Test 선택에서 덮어쓰며 실제 토큰을 사용하지 않습니다.
+로컬의 모드 미지정 실행은 기존 설정 방식을 유지합니다.
+
+## B. 개발 PC에서 같은 화면으로 Test ↔ Real
+
+이 절차는 **로컬에서 앱 자체를 실행할 개발자용**입니다. 배포된 웹을 쓰는 팀원에게
+설치를 요구하는 절차가 아닙니다. 기존 앱의 frontend/relay 실행 환경을 사용합니다.
+
+```powershell
+# Test: 기존 UI + relay만 시작. mock용 Node 서버/PC 서비스는 시작하지 않음.
+.\scripts\start-integrated.ps1 -Mode Test
+
+# 기존 세션과 실행을 종료한 다음 Real로 새로 시작.
+# 실제 PC 설정은 저장소 밖의 기존 개인 설정 파일을 사용.
+.\scripts\start-integrated.ps1 -Mode Real -EnvFile "$env:LOCALAPPDATA\IndustryDayDrone\config\field-live.env"
+
+# 프로세스/비행을 시작하지 않고 설정만 확인
+.\scripts\start-integrated.ps1 -Mode Test -NoWeb -CheckOnly
+.\scripts\start-integrated.ps1 -Mode Real -NoWeb -CheckOnly -EnvFile "C:\private\field-live.env"
+```
+
+로컬 기본 주소는 UI `http://127.0.0.1:3000`, relay `http://127.0.0.1:8080`입니다.
+다른 포트를 쓰면 `-RelayPort`, `-WebPort`를 지정하고 UI의 기존
+`NEXT_PUBLIC_RELAY_HTTP`/`NEXT_PUBLIC_RELAY_WS` 빌드 설정도 같은 relay로 맞춥니다.
+`-NoWeb`은 relay만 실행합니다. 기존 가상환경 경로는 `-RelayPython`/
+`-ControlPython`으로 지정할 수 있습니다.
+
+| 선택 | Tools 대상 | 이미지 분석 | 필요한 실제 준비 |
+|---|---|---|---|
+| Test 기본 | 내장 mock, 추가 포트 없음 | 생성된 MOCK PNG의 결정적 결과 | 드론·실제 토큰 불필요 |
+| Test + `DRONE_TEST_API_URL` | 명시한 loopback 독립 HTTP mock | 같은 모의 분석 | 선택적 Node mock 개발 환경 |
+| 로컬 Real | `127.0.0.1:8766` PC Tools | 실제 Azure 이미지 분석 | 실제 nav/site·PC 토큰·APK·연결·지상 조건 |
+| 배포 Real | 기존 원격 PC 커넥터 | 실제 Azure 이미지 분석 | 장치 인증·운영자 인증·커넥터·단일 replica |
+
+모드 전환은 **실행 중인 비행의 hot switch가 아닙니다.** 기존 세션을 종료하고
+relay를 새 설정으로 시작합니다. 실행 중인 포트를 강제로 종료하거나, 실패 시
+Real을 mock으로 바꾸거나, 이전 출발 명령을 자동 재전송하지 않습니다.
+
+## C. 배포 Real 전환: 사전 연결이 완료된 경우에만
+
+Test용 기본 배포는 실제 PC 없이 동작합니다. 반대로 클라우드의
+`127.0.0.1`은 사용자의 PC가 아니므로, **모드 하나만 바꾼다고 미연결 PC가 연결되지는 않습니다.**
+
+기존 원격 경로를 준비한 후 `DRONE_RUN_MODE=real`로 전환합니다.
+공개 바인딩에서는 Real 기본 transport가 `remote`, 로컬에서는 `local`이며,
+명시적 선택은 `DRONE_REAL_TRANSPORT=remote|local`입니다.
+
+원격 Real은 기존 `DRONE_REMOTE_DEVICE_ID`, `DRONE_REMOTE_DEVICE_TOKEN`,
+`RELAY_OPERATOR_TOKEN` 및 `DRONE_REMOTE_SINGLE_REPLICA=1`이 필요합니다.
+**실제 배포도 min/max replica를 1/1로 구성**해야 하며 환경변수만으로 인프라가
+변경되지는 않습니다. 커넥터의 live opt-in·실제 PC live 설정·Azure 분석도 준비되어야 합니다.
+장치가 없거나 모드/인증이 다르면 명시적으로 실패합니다.
+이번 PR 준비 과정에서 실기 활성화나 배포 변경을 실행하지 않습니다.
+
+실제 토큰·휴대폰 arm token·개인 nav/site는 저장소나 브라우저 설정에 넣지 않습니다.
+이 문서는 별도 암호화 도구나 추가 로컬 로그인 절차를 요구하지 않습니다.
+
+## D. 프런트/Voice 개발 시 유지할 상위 계약
+
+| 경계 | 유지할 메시지/동작 |
+|---|---|
+| 초기 설정 | `GET /api/config` (추가 진단 필드는 무시해도 됨) |
+| 기존 대화 도구 | `confirm_prompt`, `select_stop`, `confirm_route`, `clear_route`, `launch_mission`, `retry_mission`, `abort_mission`, `get_state` |
+| 지도 전환 | `confirm_prompt` 이후 기존 애니메이션 완료 때 `route_intro.ready` 전송 |
+| 화면 갱신 | 기존 `route.state`, `tool.finished` 및 캡처/결과 필드 |
+| 우리 드론 경계 | 아래 7개 `drone_*` Tools — 상위 대화 도구와 혼동하지 않음 |
+
+9월 12일 main의 지도·드론 탑승 애니메이션과 Voice 대화/확인 문구는 수정하지 않습니다.
+`route_intro.ready` 이전에는 기존처럼 다음 질문을 보류합니다.
+모의 이미지에는 MOCK 표시와 캡처 식별자가 포함됩니다. 이미지 분석의 결과는
+시나리오 기반 모의 값이며 실제 인식 정확도의 증거가 아닙니다.
 
 ## 목적
 
-프런트 팀은 **우리 백엔드가 실행되지 않아도**, 아래 고정 계약을 기준으로
+별도 adapter를 개발하는 프런트 팀은 **우리 백엔드가 실행되지 않아도**, 아래 고정 계약을 기준으로
 화면·상태 관리·도구 호출을 개발할 수 있습니다. 우리 실제 백엔드가 이 계약에
 맞춰야 하며, 프런트가 우리 구현의 변경을 따라가도록 만드는 구조가 아닙니다.
 
 - 계약·mock: [`contracts/drone-tools/v1`](../../contracts/drone-tools/v1)
 - 계약 버전: **1.0.0**, wire `schema_version: 1`
-- 실행 의존성: **Node.js 20 이상만**. `npm install` 불필요
+- 아래 독립 모듈의 실행 의존성: **Node.js 20 이상만**. `npm install` 불필요
 - 불필요한 것: Python, relay, `drone_nav`, Azure, DJI SDK, 드론, APK, 실제 토큰/설정, ZIP
 - 해당 폴더만 checkout/copy해도 실행됩니다. 상위 저장소 코드·이미지를 import하지 않습니다.
 - 기존 프런트엔드와 Voice 대화·확인 문구는 변경하지 않습니다.
 
-## 1. GitHub에서 받아 바로 실행
+## 1. 선택 사항: 독립 HTTP 계약 mock 실행
+
+**위 A의 기존 대시보드 테스트에는 이 절차가 필요하지 않습니다.**
+우리 relay와 독립적으로 HTTP adapter를 개발하거나 유실/지연 시나리오를 시험할 때만 사용합니다.
 
 계약이 포함된 승인된 브랜치/커밋을 checkout한 뒤:
 
@@ -65,8 +206,8 @@ mock 구현의 오류는 API 계약을 바꾸지 않는 범위에서 수정할 �
 있을 수 있으므로 프런트는 모르는 응답 필드를 무시할 수 있어야 합니다.
 명세에 없는 진단 필드를 필수 UI 의존성으로 만들지 않습니다.
 
-우리 저장소의 `relay/test_fixed_tools_contract.py`는 실제 tool 인자 정의와
-고정된 `tools.json`이 같은지 검사합니다. 이 검사는 **우리 백엔드의 의무**이며,
+우리 저장소의 `relay/test_contract_mock.py`는 내장 mock의 응답을 고정된 v1 schema로
+검사합니다. 이 검사는 **우리 백엔드의 의무**이며,
 독립 mock 실행에 Python이 필요하다는 뜻이 아닙니다.
 
 ## 3. 프런트에서 시작하는 최소 예제
@@ -138,7 +279,8 @@ const images = await callTool("drone_get_captures", { mission_id: missionId });
 ```
 
 고정하는 경계는 **우리 7개 `drone_*` 도구의 HTTP 요청/응답**입니다.
-이 mock이 Voice 대화, 시나리오 점수, Azure 분석, DJI 비행 물리를 흉내 내지는 않습니다.
+독립 Node mock은 Voice 대화, 시나리오 점수, Azure 분석, DJI 비행 물리를 구현하지 않습니다.
+통합 Test에서는 기존 relay가 Voice와 시나리오 처리를 담당하고 이미지 분석만 모의 처리합니다.
 기존 Voice의 `confirm_prompt`, `select_stop`, `confirm_route`, `launch_mission`은
 별도 상위 계약이며 `drone_*` 이름으로 교체하지 않습니다.
 
@@ -270,7 +412,7 @@ real-mode에서도 `physical_execution:true`는 실제 모드라는 뜻이지 �
 - mock 데이터는 **메모리**에 있으므로 프로세스 재시작 시 초기화됩니다.
   실제 PC Tools의 SQLite 재시작 복구·영속성은 mock이 보장하지 않는 별도 동작입니다.
 
-## 8. 팀원이 재현할 mock 시나리오
+## 8. 독립 HTTP mock으로 재현할 오류 시나리오
 
 | `--scenario` | 개발할 화면/오류 처리 |
 |---|---|
@@ -306,6 +448,31 @@ mock 전용 엔드포인트:
 | 필수 field/type/상태 의미 변경 | 새 계약 버전 필요. 기존 v1 유지 |
 | Voice 대화/확인 문구 변경 | 다른 팀 영역. 이 mock에서 처리하지 않음 |
 
-이전 `relay.frontend_lab`는 우리 Python 서비스 재사용을 위한 내부 시험기였으며,
-프런트 팀 독립 실행 요구를 충족하는 배포 단위가 아닙니다. 팀원은 이 문서의
-**`contracts/drone-tools/v1`만** 사용합니다. ZIP이나 우리 PC 실행을 기다릴 필요가 없습니다.
+## 10. 확인 범위와 한계
+
+| 항목 | 의미 |
+|---|---|
+| 계약/자동화 테스트 | 같은 인자·응답 구조, 선택 순서, 중복 호출, 상태/캡처 전달을 검사 |
+| 통합 Test | 기존 `/ws` 명령과 지도 완료 신호를 거쳐 내장 mock 임무 수행 |
+| 독립 HTTP Test | 같은 경로를 Node HTTP mock으로 실행해 직렬화/통신 경계 검사 |
+| Real 신호 시험 | 실제 PC에는 capabilities/status 조회만 수행; 출발 payload는 시험용 수신기에서만 검사 |
+| 실제 비행 | 이번 작업에서 실행하지 않음. APK arm 승인·물리 이동·현장 촬영·착륙은 미검증 |
+| 배포 반영 | PR push와 다름. main 병합 + 기존 CI 성공 이후에 배포 웹에서 사용 가능 |
+
+개발자용 기존 테스트 실행:
+
+```powershell
+python -m unittest relay.test_tool_target relay.test_drone_client relay.test_contract_mock relay.test_integrated_modes relay.test_real_signal
+node --test .\contracts\drone-tools\v1\mock.test.mjs .\contracts\drone-tools\v1\validate.test.mjs
+node .\contracts\drone-tools\v1\verify.mjs
+```
+
+문제가 생기면 먼저 `/api/config`의 `runMode`, `droneControlTransport`, `droneReady`,
+`droneError`를 확인합니다. `inprocess`인데 18767 포트가 없다는 것은 정상입니다.
+`runMode:null`이거나 이전 화면이라면 새 PR 코드가 배포되었는지 확인합니다.
+Voice 인증 실패는 드론 mock 문제와 구분합니다. 실제 드론이 꺼진 Real에서는
+준비 안 됨이 정상이며, 이를 숨기려고 Test 성공 상태로 바꾸지 않습니다.
+
+시나리오 마감 시간(18/28/45초), Home6 복귀, RC 수동 착륙, 최종 음성 종료는
+서로 다른 조건입니다. Test 완료는 실제 전체 비행이 이 시간 안에 끝난다는 보장이 아닙니다.
+이전 `relay.frontend_lab`/ZIP은 현재 배포·팀원 테스트 절차가 아닙니다.

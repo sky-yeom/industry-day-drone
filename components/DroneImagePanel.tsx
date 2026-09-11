@@ -25,7 +25,7 @@ export default function DroneImagePanel({ captures }: { captures: CapturedImage[
         <p className="text-[10px] font-bold tracking-[0.2em] text-white [text-shadow:2px_2px_0_#091f2c]">카메라 이미지 수신</p>
         <h2 className="text-lg font-semibold text-white [text-shadow:2px_2px_0_#091f2c]">드론 이미지</h2>
       </div>
-      <span className="pixel-panel shrink-0 px-3 py-1.5 text-xs font-semibold text-[#7f5a1a]">
+      <span className="pixel-panel shrink-0 px-3 py-1.5 text-xs font-semibold text-[#091f2c]">
         {current ? CAPTURE_LABELS[current.status] : "수신 대기"}
       </span>
     </div>
@@ -34,7 +34,7 @@ export default function DroneImagePanel({ captures }: { captures: CapturedImage[
           <span>{current ? `${MONITOR_MAP[current.monitorId].label} · ${index + 1}차 촬영` : "촬영 이미지 수신 대기"}</span>
           <span className="tabular-nums">{current ? `촬영 ${(current.capturedAtMs / 1000).toFixed(1)}초` : "출발 전"}</span>
         </div>
-        {!current ? <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-center text-sm leading-6 text-[#8c8279]">
+        {!current ? <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-center text-sm leading-6 text-[#091f2c]">
           출발 후 자동으로 촬영합니다.<br />카메라 캡처를 기다리고 있습니다.
         </div> : <div className="relative min-h-0 flex-1" style={{ containerType: "size" }}>
           <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"

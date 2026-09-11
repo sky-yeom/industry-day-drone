@@ -114,6 +114,8 @@ class DroneClientTargetTests(unittest.IsolatedAsyncioTestCase):
         values = dict(DRONE_CONTROL_API_TOKEN="real-secret")
         if mode is not None:
             values["DRONE_RUN_MODE"] = mode
+        if mode == "test":
+            values["DRONE_TEST_API_URL"] = TEST_API_URL
         values.update(env or {})
         target = resolve_tool_target(values)
         with patch.multiple("relay.drone_client.config", DRONE_RUN_MODE=target.run_mode,

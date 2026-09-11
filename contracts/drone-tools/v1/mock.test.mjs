@@ -160,11 +160,12 @@ test('all six routes return home with two distinct attributed, decodable PNGs pe
 });
 
 test('observable finite stages, original admission lookup and write idempotency never replay', async t => {
-  const api = await fixture(t, { stepMs: 30, landingMs: 60 });
+  // Leave enough time for HTTP polling on loaded Windows development machines.
+  const api = await fixture(t, { stepMs: 150, landingMs: 250 });
   const request = 'original.admission:1';
   const admitted = await api.call('drone_execute_route', routeArgs(), request);
   const mid = admitted.body.mission.mission_id;
-  const progress = api.poll(mid, m => m.state === 'completed');
+  const progress = api.poll(mid, m => m.state === 'completed', 8000);
   const reordered = { destination_ids: routeArgs().destination_ids, site_revision: SITE_REVISION, profile_id: PROFILE_ID };
   assert.deepEqual((await api.call('drone_execute_route', reordered, request)).body, admitted.body);
   assert.equal((await api.call('drone_execute_route', routeArgs(['tag-3', 'tag-2', 'tag-1']), request)).code, 409);

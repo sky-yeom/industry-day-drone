@@ -1,5 +1,6 @@
-"""Same September-12 UI protocol through fixed mock HTTP and the actual relay."""
+"""Same September-12 UI protocol through embedded/HTTP mock and the actual relay."""
 import asyncio
+from contextlib import nullcontext
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -29,7 +30,7 @@ from relay.tool_target import resolve_tool_target
 from relay.vision import AzureVision, ContractMockVision, MockVision, VisionError, create_providers
 
 ROOT = Path(__file__).resolve().parents[1]
-UI_REF = "227acc589c7bd1788c05f7d95877fd71f112a810"
+UI_REF = "a828ee0be17c14cd2444ec44d9c101b5c28f2421"
 
 
 def free_port():
@@ -52,11 +53,22 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
 
     @unittest.skipUnless(shutil.which("node"), "Fixed mock requires Node")
     async def test_original_ws_commands_use_fixed_mock_and_keep_latest_map_contract(self):
-        port = free_port()
-        process = subprocess.Popen(
-            ["node", str(ROOT / "contracts" / "drone-tools" / "v1" / "mock.mjs"),
-             "--port", str(port), "--step-ms", "10", "--landing-ms", "40"],
-            cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        await self.run_ws_route(external=True)
+
+    async def test_existing_dashboard_uses_embedded_mock_without_mock_process_or_http(self):
+        with patch("subprocess.Popen", side_effect=AssertionError("No mock process")):
+            await self.run_ws_route(external=False)
+
+    async def run_ws_route(self, *, external):
+        process = None
+        values = {"DRONE_RUN_MODE": "test"}
+        if external:
+            port = free_port()
+            values["DRONE_TEST_API_URL"] = f"http://127.0.0.1:{port}"
+            process = subprocess.Popen(
+                ["node", str(ROOT / "contracts" / "drone-tools" / "v1" / "mock.mjs"),
+                 "--port", str(port), "--step-ms", "10", "--landing-ms", "40"],
+                cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         relay_socket = socket.socket()
         relay_socket.bind(("127.0.0.1", 0))
         relay_socket.listen()
@@ -65,24 +77,27 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
         thread = None
         opener = build_opener(ProxyHandler({}))
         try:
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline:
-                try:
-                    with opener.open(f"http://127.0.0.1:{port}/health", timeout=.2):
-                        break
-                except OSError:
-                    if process.poll() is not None:
-                        self.fail("Fixed mock exited during startup")
-                    await asyncio.sleep(.05)
-            else:
-                self.fail("Fixed mock did not start")
-            target = resolve_tool_target({"DRONE_RUN_MODE": "test", "DRONE_TEST_API_URL": f"http://127.0.0.1:{port}"})
+            if process:
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    try:
+                        with opener.open(values["DRONE_TEST_API_URL"] + "/health", timeout=.2):
+                            break
+                    except OSError:
+                        if process.poll() is not None:
+                            self.fail("Fixed mock exited during startup")
+                        await asyncio.sleep(.05)
+                else:
+                    self.fail("Fixed mock did not start")
+            target = resolve_tool_target(values)
             with patch.multiple(config, DRONE_RUN_MODE=target.run_mode, TRIAGE_MODE=target.triage_mode,
                                 DRONE_CONTROL_MODE=target.control_mode, DRONE_CONTROL_API_URL=target.api_url,
                                 DRONE_CONTROL_API_TOKEN=target.api_token, DRONE_CONTROL_USE_TOOLS=True,
-                                DRONE_CONTROL_TRANSPORT="local", RELAY_LOCAL_DIRECT=True,
+                                DRONE_CONTROL_TRANSPORT=target.transport, RELAY_LOCAL_DIRECT=True,
                                 HOST="127.0.0.1", PORT=relay_port), \
-                    patch.object(server, "credential", side_effect=AssertionError("No Azure in protocol test")):
+                    patch.object(server, "credential", side_effect=AssertionError("No Azure in protocol test")), \
+                    (nullcontext() if external else patch.object(
+                        DroneClient, "_http", side_effect=AssertionError("No HTTP mock server"))):
                 app = uvicorn.Server(uvicorn.Config(server.app, host="127.0.0.1", port=relay_port, log_level="error"))
                 thread = threading.Thread(target=app.run, kwargs={"sockets": [relay_socket]}, daemon=True)
                 thread.start()
@@ -90,6 +105,14 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
                 while not app.started and time.monotonic() < deadline:
                     await asyncio.sleep(.02)
                 self.assertTrue(app.started)
+                def read_config():
+                    with opener.open(f"http://127.0.0.1:{relay_port}/api/config", timeout=5) as response:
+                        return json.load(response)
+                info = await asyncio.to_thread(read_config)
+                self.assertEqual(info["runMode"], "test")
+                self.assertEqual(info["toolEndpoint"], target.api_url)
+                self.assertTrue(info["droneReady"], info["droneError"])
+                self.assertTrue(info["droneControlUseTools"])
                 async with websockets.connect(f"ws://127.0.0.1:{relay_port}/ws?voice=0",
                                               origin="http://127.0.0.1:13001", proxy=None) as ws:
                     state = None
@@ -142,8 +165,9 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
             if thread:
                 await asyncio.to_thread(thread.join, 10)
             relay_socket.close()
-            process.terminate()
-            await asyncio.to_thread(process.wait, 5)
+            if process:
+                process.terminate()
+                await asyncio.to_thread(process.wait, 5)
 
     async def test_same_voice_and_animation_handshake_in_both_modes_without_commands_to_aircraft(self):
         for selected, wire_mode, analysis in (("test", "mock", "mock"), ("real", "live", "azure")):
@@ -178,6 +202,39 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LatestUIContractTests(unittest.TestCase):
+    def test_existing_deployment_copy_layout_runs_without_node_or_standalone_contract_folder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copytree(ROOT / "relay", root / "relay",
+                            ignore=shutil.ignore_patterns(".venv", "__pycache__", "test_*.py"))
+            for name in ("data", "public/monitors"):
+                shutil.copytree(ROOT / name, root / name)
+            schema = Path("drone-control/integration/speech_control_contract/tools.json")
+            (root / schema).parent.mkdir(parents=True)
+            shutil.copy2(ROOT / schema, root / schema)
+            env = {key: value for key, value in os.environ.items()
+                   if not key.startswith(("DRONE_", "RELAY_", "TRIAGE_", "VOICE_", "AZURE_"))
+                   and key != "PYTHONPATH"}
+            env.update(RELAY_HOST="0.0.0.0", TRIAGE_MODE="azure")
+            code = (
+                "import sys,asyncio,json; from unittest.mock import patch; sys.path.insert(0,sys.argv[1])\n"
+                "with patch('subprocess.Popen',side_effect=AssertionError('No extra process')):\n"
+                " from relay import server\n"
+                " async def check():\n"
+                "  with patch('socket.socket.connect',side_effect=AssertionError('No external connection')):\n"
+                "   await server.validate_transport_configuration()\n"
+                "   return await server.api_config()\n"
+                " print(json.dumps(asyncio.run(check())))\n"
+            )
+            result = subprocess.run([sys.executable, "-B", "-I", "-c", code, str(root)],
+                                    cwd=root, env=env, capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            info = json.loads(result.stdout)
+            self.assertEqual((info["runMode"], info["droneControlTransport"]), ("test", "inprocess"))
+            self.assertTrue(info["droneReady"], info["droneError"])
+            self.assertTrue(info["droneControlUseTools"])
+            self.assertEqual(info["voice"], "shimmer")
+
     def test_latest_ui_and_voice_source_match_team_commit_ignoring_checkout_newlines(self):
         for relative in ("app/page.tsx", "lib/voiceClient.ts", "lib/types.ts",
                          "relay/tools.py", "data/emergency-triage.json"):

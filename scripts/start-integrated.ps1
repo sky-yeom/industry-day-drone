@@ -5,7 +5,6 @@ param(
     [switch]$NoWeb,
     [ValidateRange(1024,65535)][int]$RelayPort = 8080,
     [ValidateRange(1024,65535)][int]$WebPort = 3000,
-    [ValidateRange(1024,65535)][int]$MockPort = 18767,
     [string]$RelayPython = '',
     [string]$ControlPython = ''
 )
@@ -14,15 +13,14 @@ $root = Split-Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot 'load-local-settings.ps1')
 $modeValue = $Mode.ToLowerInvariant()
 $real = $Mode -eq 'Real'
-$toolPort = if ($real) { 8766 } else { $MockPort }
-if ($toolPort -in @(9997,9998,9999) -or (-not $real -and $toolPort -eq 8766) -or
-    $RelayPort -in @(8766,9997,9998,9999) -or $WebPort -in @(8766,9997,9998,9999) -or
-    $RelayPort -eq $toolPort -or (-not $NoWeb -and ($WebPort -eq $toolPort -or $WebPort -eq $RelayPort))) {
-    throw 'Relay, web and selected tool ports must be distinct and cannot use phone control ports.'
+$toolEndpoint = if ($real) { 'http://127.0.0.1:8766' } else { 'inprocess://drone-tools/v1' }
+if ($RelayPort -in @(8766,9997,9998,9999) -or $WebPort -in @(8766,9997,9998,9999) -or
+    (-not $NoWeb -and $WebPort -eq $RelayPort)) {
+    throw 'Relay and web ports must be distinct and cannot use PC or phone control ports.'
 }
 if (-not $RelayPython) { $RelayPython = Join-Path $root 'relay\.venv\Scripts\python.exe' }
 if (-not $ControlPython) { $ControlPython = Join-Path $root 'drone-control\.venv\Scripts\python.exe' }
-$node = (Get-Command node -ErrorAction Stop).Source
+$node = if (-not $NoWeb) { (Get-Command node -ErrorAction Stop).Source } else { $null }
 if (-not (Test-Path -LiteralPath $RelayPython -PathType Leaf)) { throw 'Create relay\.venv and install its existing requirements first.' }
 if ($real -and -not (Test-Path -LiteralPath $ControlPython -PathType Leaf)) { throw 'Create the PC controller environment before Real mode.' }
 if (-not $NoWeb -and -not (Test-Path -LiteralPath (Join-Path $root '.next\standalone\server.js'))) {
@@ -56,12 +54,14 @@ foreach ($key in $settings.Keys) {
 }
 # Keep the selected UI branch's voice/persona/VAD defaults; only connection settings are imported.
 $connection['DRONE_RUN_MODE'] = $modeValue
+$connection['DRONE_REAL_TRANSPORT'] = 'local'
 $connection['DRONE_CONTROL_TRANSPORT'] = 'local'
 $connection['DRONE_CONTROL_USE_TOOLS'] = '1'
 $connection['RELAY_HOST'] = '127.0.0.1'
 $connection['RELAY_PORT'] = [string]$RelayPort
 $connection['RELAY_LOCAL_DIRECT'] = '1'
-$connection['DRONE_TEST_API_URL'] = "http://127.0.0.1:$MockPort"
+$connection.Remove('DRONE_TEST_API_URL')
+$connection.Remove('DRONE_TEST_API_TOKEN')
 $connection['DRONE_CONTROL_MODE'] = if ($real) { 'live' } else { 'mock' }
 $connection['TRIAGE_MODE'] = if ($real) { 'azure' } else { 'mock' }
 $connection['DRONE_CONTROL_ENABLE_LIVE'] = if ($real) { '1' } else { '0' }
@@ -73,7 +73,7 @@ if (-not $real) {
     foreach ($key in @('DRONE_CONTROL_API_TOKEN','DRONE_CONTROL_CONFIG_PATH','DRONE_CONTROL_SITE_CONFIG',
                        'DRONE_CONTROL_FIELD_PROFILE','DRONE_CONTROL_FIELD_REFERENCE')) { $connection.Remove($key) }
 }
-$connection['DRONE_CONTROL_API_URL'] = "http://127.0.0.1:$toolPort"
+$connection['DRONE_CONTROL_API_URL'] = $toolEndpoint
 if ($real) {
     $connection['DRONE_CONTROL_FIELD_PROFILE'] = Join-Path $root 'drone-control\trials\profiles\standalone_tag_6321236.json'
     $connection['DRONE_CONTROL_FIELD_REFERENCE'] = Join-Path $root 'drone-control\trials\profiles\id1_tv_pair_reference.json'
@@ -107,11 +107,12 @@ try {
         & $ControlPython -B -c "from drone_nav.tool_control.server import adapter_from_environment; a=adapter_from_environment(); print('real profile ready='+str(a.live_ready)+'; no hardware commands sent'); a.video_broker.close()"
         if ($LASTEXITCODE -ne 0) { throw 'The actual PC profile is not valid.' }
     } else {
-        & $node (Join-Path $root 'contracts\drone-tools\v1\verify.mjs')
-        if ($LASTEXITCODE -ne 0) { throw 'The fixed mock contract changed.' }
+        & $RelayPython -B -c "import asyncio; from relay.drone_client import DroneClient; r=asyncio.run(DroneClient('preflight').call('drone_get_capabilities', {})); assert r['execution_mode']=='mock' and r['physical_execution'] is False; print('Embedded mock ready; no additional process or port.')"
+        if ($LASTEXITCODE -ne 0) { throw 'The embedded mock contract is not ready.' }
     }
     if ($CheckOnly) { Write-Output 'Configuration-only preflight finished. This does not prove current aircraft readiness.'; return }
-    $ports = @($RelayPort,$toolPort)
+    $ports = @($RelayPort)
+    if ($real) { $ports += 8766 }
     if (-not $NoWeb) { $ports += $WebPort }
     $listeners = [Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
     foreach ($port in $ports) {
@@ -122,10 +123,6 @@ try {
         $processes += Start-Process $ControlPython -ArgumentList '-B -m drone_nav.tool_control.server' `
             -WorkingDirectory $root -NoNewWindow -PassThru `
             -RedirectStandardOutput (Join-Path $logRoot 'tools.out.log') -RedirectStandardError (Join-Path $logRoot 'tools.err.log')
-    } else {
-        $mockFile = Join-Path $root 'contracts\drone-tools\v1\mock.mjs'
-        $processes += Start-NodeProcess -Arguments @("`"$mockFile`"",'--port',"$MockPort") `
-            -OutFile (Join-Path $logRoot 'tools.out.log') -ErrFile (Join-Path $logRoot 'tools.err.log')
     }
     $processes += Start-Process $RelayPython -ArgumentList '-B -m relay.server' -WorkingDirectory $root -NoNewWindow -PassThru `
         -RedirectStandardOutput (Join-Path $logRoot 'relay.out.log') -RedirectStandardError (Join-Path $logRoot 'relay.err.log')
@@ -157,7 +154,7 @@ try {
         if ($info.runMode -ne $modeValue) { throw 'Running relay mode differs from requested mode.' }
         break
     }
-    Write-Output "$Mode stack running; relay=http://127.0.0.1:$RelayPort; tools=http://127.0.0.1:$toolPort. No mission started."
+    Write-Output "$Mode stack running; relay=http://127.0.0.1:$RelayPort; tools=$toolEndpoint. No mission started."
     if (-not $NoWeb) { Write-Output "UI=http://127.0.0.1:$WebPort (same build for Test and Real)" }
     if (-not $info.droneReady) { Write-Warning $info.droneError }
     while ($true) {

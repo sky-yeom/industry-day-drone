@@ -13,10 +13,10 @@ from uuid import uuid4
 
 try:
     from . import config
-    from .tool_target import validate_test_api_url
+    from .tool_target import EMBEDDED_API_URL, validate_test_api_url
 except ImportError:
     import config
-    from tool_target import validate_test_api_url
+    from tool_target import EMBEDDED_API_URL, validate_test_api_url
 
 SCHEMAS = {t["name"]: t["parameters"] for t in json.loads((Path(__file__).resolve().parents[1]
     / "drone-control/integration/speech_control_contract/tools.json").read_text("utf-8"))}
@@ -65,7 +65,11 @@ class DroneClient:
         if self.expected_mode not in {"mock", "live"}:
             raise DroneError("INVALID_CONFIGURATION", "드론 실행 모드는 mock 또는 live여야 합니다.")
         self._test_target = config.DRONE_RUN_MODE == "test" and self.expected_mode == "mock"
-        if self._test_target:
+        self._embedded = self._test_target and config.DRONE_CONTROL_TRANSPORT == "inprocess"
+        if self._embedded:
+            if self.base_url != EMBEDDED_API_URL or self._token:
+                raise DroneError("INVALID_CONFIGURATION", "내장 mock은 외부 주소나 실제 토큰을 사용하지 않습니다.")
+        elif self._test_target:
             try:
                 if validate_test_api_url(self.base_url) != validate_test_api_url(config.DRONE_CONTROL_API_URL):
                     raise ValueError()
@@ -88,6 +92,12 @@ class DroneClient:
         self._remote_generation = None
         if transport is not None:
             self._transport = transport
+        elif self._embedded:
+            if __package__:
+                from .contract_mock import create_transport
+            else:
+                from contract_mock import create_transport
+            self._transport = create_transport(caller_id)
         elif config.DRONE_CONTROL_TRANSPORT == "remote":
             try:
                 from .device_hub import get_device_hub

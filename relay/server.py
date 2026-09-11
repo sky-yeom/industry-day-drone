@@ -111,6 +111,10 @@ async def device_endpoint(device: WebSocket):
 async def validate_transport_configuration():
     if config.DRONE_CONTROL_TRANSPORT == "remote":
         get_device_hub()  # Fail closed: memory routing cannot run with autoscaled replicas.
+    elif config.DRONE_CONTROL_TRANSPORT == "inprocess":
+        if config.DRONE_RUN_MODE != "test" or config.DRONE_CONTROL_MODE != "mock":
+            raise DroneError("INVALID_CONFIGURATION")
+        await DroneClient("relay-startup").call("drone_get_capabilities", {})
     elif config.DRONE_CONTROL_TRANSPORT != "local":
         raise DroneError("INVALID_CONFIGURATION")
 

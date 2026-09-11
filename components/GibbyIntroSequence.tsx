@@ -2,6 +2,7 @@
 
 import { Press_Start_2P } from "next/font/google";
 import { useCallback, useEffect, useState } from "react";
+import PixelGround from "@/components/PixelGround";
 import PixelPromptScreen from "@/components/PixelPromptScreen";
 import { useTypewriter } from "@/lib/useTypewriter";
 import type { BriefingBullet } from "@/lib/types";
@@ -103,11 +104,7 @@ export default function GibbyIntroSequence({
       <div aria-hidden className="absolute left-[8%] top-[14%] h-6 w-16 bg-white/80 [clip-path:polygon(10%_100%,10%_40%,30%_40%,30%_0%,70%_0%,70%_40%,90%_40%,90%_100%)]" />
       <div aria-hidden className="absolute right-[14%] top-[24%] h-5 w-12 bg-white/70 [clip-path:polygon(10%_100%,10%_40%,30%_40%,30%_0%,70%_0%,70%_40%,90%_40%,90%_100%)]" />
 
-      <div aria-hidden className="pixel-scene-dirt absolute inset-x-0 bottom-0 h-[16%]" />
-      <div
-        aria-hidden
-        className={`pixel-scene-ground pixel-rendering absolute inset-x-0 bottom-[12%] h-6 ${phase === "sliding" ? "pixel-scene-ground--scrolling" : ""}`}
-      />
+      <PixelGround scrolling={phase === "sliding"} />
 
       <div
         className={`gibby-travel absolute bottom-[16%] ${travelClass}`}

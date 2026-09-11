@@ -14,14 +14,6 @@ import { fetchRelayConfig, VoiceSession, type RelayConfig, type VoiceStatus } fr
 import type { ChatMessage, DashboardState } from "@/lib/types";
 
 const INITIAL_STATE: DashboardState = { ...INITIAL_ROUTE_STATE, ...INITIAL_MISSION_STATE };
-// TEMP DEBUG ONLY (not for shipping): lets us preview the Route screen with
-// a route already partially picked, mirroring the backend's "auto-fill 3rd
-// stop as soon as the 2nd is picked" behavior, without needing to drive a
-// real voice session. Remove alongside NEXT_PUBLIC_DEBUG_STEP once done.
-if (process.env.NEXT_PUBLIC_DEBUG_ROUTE) {
-  INITIAL_STATE.draftRoute = ["monitor-3", "monitor-2", "monitor-1"];
-  INITIAL_STATE.phase = "awaiting-confirmation";
-}
 // No tabs anymore: the mission plays out as sequential full-screen pixel
 // steps. "opening" covers the Gibby intro + prompt screen together (see
 // components/GibbyIntroSequence.tsx); "map-intro" is the pocket/map-finding
@@ -32,7 +24,7 @@ if (process.env.NEXT_PUBLIC_DEBUG_ROUTE) {
 type Step = "opening" | "map-intro" | "route" | "images" | "results";
 
 export default function Home() {
-  const [step, setStep] = useState<Step>((process.env.NEXT_PUBLIC_DEBUG_STEP as Step) || "opening");
+  const [step, setStep] = useState<Step>("opening");
   const [snapshot, setSnapshot] = useState({ state: INITIAL_STATE, receivedAt: 0 });
   const [now, setNow] = useState(0);
   const [status, setStatus] = useState<VoiceStatus>("idle");

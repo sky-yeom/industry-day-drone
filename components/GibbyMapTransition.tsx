@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { Press_Start_2P } from "next/font/google";
 import { useEffect, useState } from "react";
+import PixelGround from "@/components/PixelGround";
 import { ANCHOR_W, LAST_FRAME, gibbyFrameStyle } from "@/lib/gibbyMapSprite";
 import { useTypewriter } from "@/lib/useTypewriter";
 import type { BriefingBullet } from "@/lib/types";
@@ -81,8 +82,7 @@ export default function GibbyMapTransition({
   return (
     <main className="relative flex h-dvh w-full flex-col overflow-hidden">
       <div aria-hidden className="pixel-scene-sky absolute inset-0" />
-      <div aria-hidden className="pixel-scene-dirt absolute inset-x-0 bottom-0 h-[16%]" />
-      <div aria-hidden className="pixel-scene-ground pixel-rendering absolute inset-x-0 bottom-[12%] h-6" />
+      <PixelGround />
 
       <div className="relative z-10 flex h-full min-h-0 w-full flex-col gap-3 px-4 pb-[8dvh] pt-4 sm:px-6 sm:pt-6">
         <div className="shrink-0">

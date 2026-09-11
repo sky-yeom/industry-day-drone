@@ -105,50 +105,29 @@ input {
   animation: bar-error 1.1s ease-in-out infinite;
 }
 
-/* Gibby pixel-art opening screen (components/GibbyOpeningScreen.tsx). */
+/* Shared Gibby pixel-art backdrop. */
 .pixel-rendering {
   image-rendering: pixelated;
 }
 
-/* Sky gradient + a jagged pixel-art horizon line drawn with two stacked
-   clip-paths (light grass edge over a darker dirt band) instead of an
-   image asset. */
 .pixel-scene-sky {
   background: linear-gradient(to bottom, #bfe6f5 0%, #dff2ee 62%, #eaf7df 100%);
 }
 
 .pixel-scene-ground {
-  background-color: #6fae4a;
-  background-image: repeating-linear-gradient(
-    90deg,
-    #5f9c3e 0px, #5f9c3e 8px,
-    #6fae4a 8px, #6fae4a 16px,
-    #7cbb57 16px, #7cbb57 24px,
-    #6fae4a 24px, #6fae4a 32px
-  );
-  clip-path: polygon(
-    0% 18px, 4% 18px, 4% 6px, 8% 6px, 8% 18px, 16% 18px, 16% 0%, 24% 0%, 24% 18px,
-    32% 18px, 32% 10px, 40% 10px, 40% 18px, 48% 18px, 48% 2px, 56% 2px, 56% 18px,
-    64% 18px, 64% 12px, 72% 12px, 72% 18px, 80% 18px, 80% 4px, 88% 4px, 88% 18px,
-    96% 18px, 96% 8px, 100% 8px, 100% 100%, 0% 100%
-  );
+  background-image: url("/gibby/ground.png");
+  background-repeat: repeat-x;
+  background-size: auto 100%;
 }
 
-/* Scrolling variant used during the opening->prompt transition
-   (components/GibbyIntroSequence.tsx "sliding" phase): the ground keeps its
-   jagged horizon shape but its stripe texture scrolls while Gibby walks in
-   place and the next screen's content slides in. */
+/* The image scrolls while Gibby walks in place during the intro slide. */
 .pixel-scene-ground--scrolling {
-  animation: pixel-ground-scroll 0.6s linear infinite;
+  animation: pixel-ground-scroll var(--ground-scroll-duration) linear infinite;
 }
 
 @keyframes pixel-ground-scroll {
   from { background-position-x: 0; }
-  to { background-position-x: -32px; }
-}
-
-.pixel-scene-dirt {
-  background: #8a5a34;
+  to { background-position-x: calc(-1 * var(--ground-tile-width)); }
 }
 
 /* Gibby travel stage (components/GibbyIntroSequence.tsx): sits at the

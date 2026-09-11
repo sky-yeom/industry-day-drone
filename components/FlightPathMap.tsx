@@ -123,6 +123,6 @@ export default function FlightPathMap({ state }: {
       </div>
     </div>
 
-    <p className="shrink-0 text-[11px] leading-4 text-[#091f2c] [text-shadow:1px_1px_0_#fff]">{state.promptPhase !== "confirmed" ? "탐지 프롬프트를 먼저 음성으로 설명하고 확인해주세요." : state.missionPhase === "briefing" ? "첫 두 방문지를 음성으로 선택하세요. 출발에 동의하면 자동 비행을 시작합니다." : "방문 순서와 이미지 분석 완료 시점에 따라 구조 결과가 달라집니다."}</p>
+    {state.promptPhase === "confirmed" && <p className="shrink-0 text-[11px] leading-4 text-[#091f2c] [text-shadow:1px_1px_0_#fff]">{state.missionPhase === "briefing" ? "첫 두 방문지를 음성으로 선택하세요. 출발에 동의하면 자동 비행을 시작합니다." : "방문 순서와 이미지 분석 완료 시점에 따라 구조 결과가 달라집니다."}</p>}
   </section>;
 }

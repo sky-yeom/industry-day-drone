@@ -29,9 +29,9 @@ export default function PixelPromptScreen({
 }) {
   return (
     <div className="relative z-10 flex h-full min-h-0 w-full flex-col justify-center gap-3 px-4 pb-[8dvh] pt-4 sm:px-6 sm:pt-6">
-      <div className="shrink-0">
+      <div className="flex shrink-0 flex-wrap items-baseline gap-x-3 gap-y-1">
         <p className={`${pixelFont.className} pixel-title text-sm tracking-[0.14em] text-[#091f2c] sm:text-base`}>임무 브리핑</p>
-        <h2 className={`${pixelFont.className} pixel-title mt-2 text-lg text-[#091f2c] sm:text-xl`}>프롬프트</h2>
+        <h2 className={`${pixelFont.className} pixel-title text-lg text-[#091f2c] sm:text-xl`}>프롬프트</h2>
       </div>
 
       <div className="grid min-h-0 max-w-[860px] flex-1 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] sm:items-center">

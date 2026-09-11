@@ -121,8 +121,8 @@ class SurveyTests(unittest.TestCase):
         from relay import tools
 
         self.assertEqual(tools.GREETING,
-                         "안녕하세요. 지금 긴급 구조 요청이 세 건 들어와 있고, 드론 한 대로 모두 찾아내야 합니다. "
-                         "화면의 참고 사진을 보고, 드론이 어떤 사람을 찾아야 하는지 직접 설명해 주시겠어요?")
+                         "안녕! 난 Gibby라고해! 지금 긴급 구조 요청이 세 건 들어왔는데, 사람들 구조하기 위해 너의 도움이 필요해! "
+                         "화면의 참고 사진을 보고, 어떤 사람을 찾아야 하는지 얘기해줄수있어?")
         rejected = self.session.confirm_prompt("")
         confirmed = self.session.confirm_prompt(SEARCH_PROMPT)
         for person in SCENARIO["people"]:

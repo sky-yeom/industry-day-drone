@@ -1,5 +1,5 @@
 {
-  "title": "긴급 구조 작전",
+  "title": "코드 레드: 드론 구조대",
   "briefing": [
     "세 곳에서 긴급 구조 요청이 들어왔습니다. 드론 한 대로 세 사람을 모두 찾아 구해야 합니다.",
     "세 사람은 참고 사진과 같은 외형 특징을 가지고 있습니다. 사진을 보고 찾을 사람의 모습을 음성으로 설명해주세요.",
@@ -27,8 +27,8 @@
       "initiallyInjured": false,
       "deadlineMs": 28000,
       "image": "/monitors/monitor-1.png",
-      "x": 20,
-      "y": 38,
+      "x": 17.5,
+      "y": 43,
       "mockBox": [0.35, 0.35, 0.29, 0.37]
     },
     {
@@ -39,8 +39,8 @@
       "initiallyInjured": true,
       "deadlineMs": 45000,
       "image": "/monitors/monitor-2.png",
-      "x": 78,
-      "y": 28,
+      "x": 71,
+      "y": 43,
       "mockBox": [0.39, 0.32, 0.25, 0.42]
     },
     {
@@ -51,8 +51,8 @@
       "initiallyInjured": false,
       "deadlineMs": 18000,
       "image": "/monitors/monitor-3.png",
-      "x": 50,
-      "y": 76,
+      "x": 46,
+      "y": 29,
       "mockBox": [0.42, 0.35, 0.17, 0.41]
     }
   ]

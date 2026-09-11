@@ -112,7 +112,7 @@ class MissionRunner:
                 if person["outcome"] is not None:
                     continue
                 self.session.set_operation("flying", monitor, run_id)
-                await self._notify(f"모니터 {monitor[-1]}로 이동합니다.")
+                await self._notify(f"현장 {monitor[-1]}로 이동합니다.")
                 await self.sleep(self.session.scenario["travelMs"] / 1000)
                 self.session.expire()
                 # One negative recapture is the scenario's maximum; technical retries
@@ -151,9 +151,9 @@ class MissionRunner:
                     if evidence is None:
                         break
                     await self._notify(
-                        f"모니터 {monitor[-1]} 이미지에서 대상자를 확인했습니다."
+                        f"현장 {monitor[-1]} 이미지에서 대상자를 확인했습니다."
                         if person["captureId"] == capture.id
-                        else f"모니터 {monitor[-1]}의 구조 조건이 아직 충족되지 않았습니다.")
+                        else f"현장 {monitor[-1]}의 구조 조건이 아직 충족되지 않았습니다.")
                     if evidence["targetPresent"]:
                         break
             if self.session.phase in ACTIVE:

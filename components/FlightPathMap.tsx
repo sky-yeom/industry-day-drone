@@ -1,8 +1,10 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import DroneImagePanel from "@/components/DroneImagePanel";
 import { formatRoute, MONITOR_MAP, MONITORS } from "@/data/monitors";
+import { BOARDING_MIRRORED, MAP_MARKER_ENTRY, MAP_MARKER_HEIGHT, MAP_MARKER_SRC, MAP_MARKER_WIDTH } from "@/lib/gibbyDroneSprite";
 import { OUTCOME_LABELS, type DashboardState } from "@/lib/types";
 
 export const MISSION_LABELS: Record<DashboardState["missionPhase"], string> = {
@@ -16,7 +18,7 @@ export function MissionCountdownSummary({ state, elapsedMs, connected }: {
 }) {
   return <section aria-label="세 사람의 구조 시한과 현재 작전 상태" className="space-y-1">
     <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-      <strong>{MISSION_LABELS[state.missionPhase]}{state.activeMonitorId ? ` · 모니터 ${state.activeMonitorId.slice(-1)}` : ""}</strong>
+      <strong>{MISSION_LABELS[state.missionPhase]}{state.activeMonitorId ? ` · ${MONITOR_MAP[state.activeMonitorId].label}` : ""}</strong>
       <span className="tabular-nums">
         경과 {(elapsedMs / 1000).toFixed(1)}초 · {state.clockRunning ? connected ? "진행 중" : "연결 끊김 · 마지막 수신 상태" : "정지"}
       </span>
@@ -24,8 +26,8 @@ export function MissionCountdownSummary({ state, elapsedMs, connected }: {
     <div className="grid grid-cols-3 gap-2">
       {state.people.map((person) => {
         const remaining = Math.max(0, person.deadlineMs - (person.resolvedAtMs ?? elapsedMs));
-        return <div key={person.id} className={`rounded-xl border px-2 py-1 ${state.activeMonitorId === person.monitorId ? "border-[#8661c5] bg-[#f0ebf7]" : "border-[#e2dce9] bg-white"}`}>
-          <p className="text-xs font-semibold">모니터 {person.monitorId.slice(-1)}{person.attempts >= 2 ? " · 2회 시도" : ""}</p>
+        return <div key={person.id} className={`pixel-panel px-2 py-1 ${state.activeMonitorId === person.monitorId ? "bg-[#f0ebf7]" : "bg-white"}`}>
+          <p className="text-xs font-semibold">{MONITOR_MAP[person.monitorId].label}{person.attempts >= 2 ? " · 2회 시도" : ""}</p>
           <p className="text-xs font-semibold tabular-nums">{person.outcome ? OUTCOME_LABELS[person.outcome] : `남은 ${(remaining / 1000).toFixed(1)}초`}</p>
           {!person.outcome && remaining === 0 && <p className="mt-1 text-xs">서버 판정 대기 중</p>}
         </div>;
@@ -34,85 +36,149 @@ export function MissionCountdownSummary({ state, elapsedMs, connected }: {
   </section>;
 }
 
-export default function FlightPathMap({ state }: {
+/**
+ * Route step: a real map (public/gibby/map.png, matching the island art
+ * Gibby unrolls during the map-finding transition) instead of the old
+ * abstract dot-field/blob background. Each scenario (splash/rubble/fire)
+ * gets a location-pin.png pin positioned exactly over its spot on the map
+ * art (data/emergency-triage.json monitor x/y were remapped to match this
+ * art); pins stay hidden until the user picks that stop into the route,
+ * then pop in, and a dashed path connects picked pins in the order chosen.
+ *
+ * This screen now also persists through the whole mission (no separate
+ * full-screen "images" step anymore, see app/page.tsx): once Gibby boards
+ * the drone (`boarded`), a small live drone marker eases between pins on
+ * the map tracking `state.activeMonitorId` in real time, and the right
+ * column swaps from the clue cards below to the drone-image panel + the
+ * 3 rescue timers.
+ */
+export default function FlightPathMap({ state, boarded = false, elapsedMs, connected }: {
   state: DashboardState;
+  boarded?: boolean;
+  elapsedMs: number;
+  connected: boolean;
 }) {
-  const mapRef = useRef<HTMLDivElement>(null);
-  const [positions, setPositions] = useState(MONITORS.map((monitor) => monitor.y));
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    const cards = Array.from(map.querySelectorAll<HTMLElement>(".monitor-card"));
-    const observer = new ResizeObserver(() => {
-      if (!map.clientHeight) return;
-      const next = MONITORS.map((monitor, index) => {
-        const inset = Math.min(50, ((cards[index].offsetHeight / 2 + 8) / map.clientHeight) * 100);
-        return Math.max(inset, Math.min(100 - inset, monitor.y));
-      });
-      setPositions((previous) => next.every((y, index) => Math.abs(y - previous[index]) < 0.01) ? previous : next);
-    });
-    observer.observe(map);
-    cards.forEach((card) => observer.observe(card));
-    return () => observer.disconnect();
-  }, []);
-  const monitors = MONITORS.map((monitor, index) => ({
-    ...monitor, y: positions[index],
-  }));
   const route = state.confirmedRoute.length ? state.confirmedRoute : state.draftRoute;
   const isConfirmed = state.phase === "confirmed";
   const lineColor = isConfirmed ? "#0078d4" : "#8661c5";
-  return <section className="flex h-full min-h-0 w-full flex-col gap-2 p-3">
+  const orderedPicked = MONITORS
+    .map((monitor) => ({ monitor, order: route.indexOf(monitor.id) }))
+    .filter((entry) => entry.order >= 0)
+    .sort((a, b) => a.order - b.order);
+  // Live drone marker target: the site the backend is actually working
+  // (state.activeMonitorId) once boarding has finished, falling back to the
+  // first confirmed stop before the backend has reported an active site yet
+  // (e.g. right after launch, still climbing out).
+  const activeMonitorId = state.activeMonitorId ?? route[0] ?? null;
+  const droneMarkerMonitor = boarded && activeMonitorId ? MONITOR_MAP[activeMonitorId] : null;
+  // Entrance: mount at the off-map corner (MAP_MARKER_ENTRY, roughly where
+  // Gibby's dock overlay visually sits) then flip to the real target
+  // position one frame later, so the very first move is an actual CSS
+  // transition (flying in from the corner) rather than appearing already
+  // on the pin — same mount-then-flip-a-frame-later pattern used for
+  // .drone-fly-in--docked in GibbyDroneBoarding.
+  const [markerArrived, setMarkerArrived] = useState(false);
+  useEffect(() => {
+    if (!boarded) {
+      const id = window.setTimeout(() => setMarkerArrived(false), 0);
+      return () => window.clearTimeout(id);
+    }
+    const id = requestAnimationFrame(() => setMarkerArrived(true));
+    return () => cancelAnimationFrame(id);
+  }, [boarded]);
+  const markerPos = markerArrived && droneMarkerMonitor ? droneMarkerMonitor : MAP_MARKER_ENTRY;
+
+  return <section className="flex h-full min-h-0 w-full flex-col gap-3 p-3 sm:p-4">
     <div className="flex shrink-0 items-center justify-between gap-3 px-1">
       <div>
-        <p className="mb-1 text-[10px] font-bold tracking-[0.2em] text-[#8661c5]">실시간 경로 관제</p>
-        <h2 className="text-lg font-semibold text-[#091f2c]">비행 경로</h2>
-        <p className="text-xs text-[#5c4738]">{route.length ? formatRoute(route) : state.promptPhase === "confirmed" ? "첫 번째로 갈 곳을 말해주세요" : "프롬프트 확인 후 경로를 정합니다"}</p>
+        <div className="flex flex-wrap items-baseline gap-2">
+          <p className="text-[10px] font-bold tracking-[0.2em] text-[#091f2c]">실시간 경로 관제</p>
+          <h2 className="text-lg font-semibold text-[#091f2c]">비행경로</h2>
+        </div>
+        <p className="mt-1 text-xs font-semibold text-[#091f2c]">{route.length ? formatRoute(route) : "첫 번째로 갈 곳을 말해주세요"}</p>
       </div>
       <div className="shrink-0 text-right">
-      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${isConfirmed ? "bg-[#0078d4] text-white" : "bg-[#eee8f7] text-[#463668]"}`}>
-        {state.promptPhase !== "confirmed" ? "프롬프트 대기" : isConfirmed ? "경로 확정" : route.length === 3 ? "확정 대기" : "경로 구성 중"}
-      </span>
+        <span className={`pixel-panel px-3 py-1.5 text-xs font-semibold text-[#091f2c] ${isConfirmed ? "bg-[#0078d4]" : "bg-white"}`}>
+          {isConfirmed ? "경로 확정" : route.length === 3 ? "확정 대기" : "경로 구성 중"}
+        </span>
       </div>
     </div>
-    <div ref={mapRef} className="route-map relative min-h-0 flex-1 overflow-hidden rounded-2xl border border-[#ded8ea] bg-[linear-gradient(145deg,#ffffff_0%,#f3effb_56%,#e7f4fc_100%)]">
-      <div className="dot-field absolute inset-0 opacity-55 [mask-image:linear-gradient(to_bottom,black,transparent_88%)]" />
-      <div className="absolute -left-20 bottom-[-8rem] h-72 w-72 rounded-full bg-[#c5b4e3]/70 blur-3xl" />
-      <div className="absolute -right-20 top-[-6rem] h-64 w-64 rounded-full bg-[#8dc8e8]/55 blur-3xl" />
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="pointer-events-none absolute inset-0 z-10 h-full w-full" aria-hidden="true">
-        <defs>
-          <filter id="route-glow" x="-40%" y="-40%" width="180%" height="180%">
-            <feGaussianBlur stdDeviation="0.55" result="blur" />
-            <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-          </filter>
-          <marker id="route-arrow" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto">
-            <path d="M0,0 L5,2.5 L0,5 Z" fill={lineColor} />
-          </marker>
-        </defs>
-        {route.slice(1).map((id, index) => {
-          const from = monitors.find((monitor) => monitor.id === route[index]) ?? MONITOR_MAP[route[index]];
-          const to = monitors.find((monitor) => monitor.id === id) ?? MONITOR_MAP[id];
-          return <line key={`${from.id}-${to.id}`} x1={from.x} y1={from.y} x2={to.x} y2={to.y}
-            stroke={lineColor} strokeWidth="1.1" strokeDasharray={isConfirmed ? undefined : "3 2"}
-            strokeLinecap="round" vectorEffect="non-scaling-stroke" markerEnd="url(#route-arrow)" filter="url(#route-glow)" />;
+
+    <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,0.8fr)]">
+      <div className="pixel-frame pixel-rendering relative mx-auto aspect-[3/2] w-full max-w-[820px] overflow-hidden">
+        <Image src="/gibby/map.png" alt="탐색 지역 지도" fill unoptimized className="object-contain" sizes="(max-width: 1024px) 90vw, 820px" />
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="pointer-events-none absolute inset-0 z-10 h-full w-full" aria-hidden="true">
+          <defs>
+            {/* userSpaceOnUse (not the default objectBoundingBox) — a
+                perfectly horizontal or vertical route line has a zero-height
+                or zero-width bounding box, and objectBoundingBox percentages
+                degenerate to a zero-area filter region for those, which
+                makes the browser silently clip the whole line. Fixed
+                viewBox-space bounds avoid that regardless of a line's angle. */}
+            <filter id="route-glow" filterUnits="userSpaceOnUse" x="-10" y="-10" width="120" height="120">
+              <feGaussianBlur stdDeviation="0.55" result="blur" />
+              <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+            </filter>
+            <marker id="route-arrow" markerWidth="5" markerHeight="5" refX="4" refY="2.5" orient="auto">
+              <path d="M0,0 L5,2.5 L0,5 Z" fill={lineColor} />
+            </marker>
+          </defs>
+          {orderedPicked.slice(1).map((entry, index) => {
+            const from = orderedPicked[index].monitor;
+            const to = entry.monitor;
+            return <line key={`${from.id}-${to.id}`} x1={from.x} y1={from.y} x2={to.x} y2={to.y}
+              stroke={lineColor} strokeWidth="1.1" strokeDasharray="3 2"
+              strokeLinecap="round" vectorEffect="non-scaling-stroke" markerEnd="url(#route-arrow)" filter="url(#route-glow)" />;
+          })}
+        </svg>
+        {MONITORS.map((monitor) => {
+          const order = route.indexOf(monitor.id);
+          const picked = order >= 0;
+          return <div key={monitor.id}
+            className={`absolute z-20 -translate-x-1/2 -translate-y-full transition-all duration-500 ease-out ${picked ? "scale-100 opacity-100" : "scale-0 opacity-0"}`}
+            style={{ left: `${monitor.x}%`, top: `${monitor.y}%` }}>
+            <div className="relative">
+              <Image src="/gibby/location-pin.png" alt={`${monitor.label} 위치`} width={40} height={40} unoptimized className="pixel-rendering h-10 w-10 drop-shadow-[2px_2px_0_#091f2c]" />
+              {picked && <span className={`absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white ${isConfirmed ? "bg-[#0078d4]" : "bg-[#8661c5]"}`}>{order + 1}</span>}
+            </div>
+          </div>;
         })}
-      </svg>
-      {monitors.map((monitor) => {
-        const person = state.people.find((entry) => entry.monitorId === monitor.id);
-        const order = route.indexOf(monitor.id);
-        return <article key={monitor.id}
-          className={`monitor-card absolute z-20 w-[28%] max-w-64 -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl border bg-white/95 shadow-[0_12px_28px_rgba(42,68,111,0.13)] backdrop-blur ${order >= 0 ? isConfirmed ? "border-[#0078d4] ring-4 ring-[#0078d4]/10" : "border-[#8661c5] ring-4 ring-[#8661c5]/10" : "border-white/90"}`}
-          style={{ left: `${monitor.x}%`, top: `${monitor.y}%` }}>
-          <div className="monitor-preview relative bg-[#eee8f7]">
-            <Image src={monitor.image} alt={`${monitor.label}의 가상 구조 현장 미리보기 · 분석 전 이미지`} fill unoptimized className="object-contain" sizes="(max-width: 768px) 30vw, 256px" />
-            {order >= 0 && <span className={`absolute left-2 top-2 flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold text-white ${isConfirmed ? "bg-[#0078d4]" : "bg-[#8661c5]"}`}>{order + 1}</span>}
+        {boarded && (
+          <div
+            aria-label="드론 현재 위치" role="img"
+            className="absolute z-30 -translate-x-1/2 -translate-y-1/2 transition-[left,top] duration-[2800ms] ease-in-out"
+            style={{ left: `${markerPos.x}%`, top: `${markerPos.y}%` }}
+          >
+            <div
+              className="pixel-rendering drop-shadow-[2px_2px_0_#091f2c]"
+              style={{ width: MAP_MARKER_WIDTH, height: MAP_MARKER_HEIGHT, transform: BOARDING_MIRRORED ? "scaleX(-1)" : undefined }}
+            >
+              <Image src={MAP_MARKER_SRC} alt="" width={MAP_MARKER_WIDTH} height={MAP_MARKER_HEIGHT} unoptimized className="pixel-rendering h-full w-full object-contain" />
+            </div>
           </div>
-          <div className="space-y-1 p-2">
-            <h3 className="text-xs font-semibold text-[#091f2c]">{monitor.label} <span className="font-normal text-[#8661c5]">{order >= 0 ? `· ${order + 1}번째 방문` : ""}</span></h3>
-            <p className="text-[11px] leading-snug text-[#5c4738]">{person?.clue}</p>
-          </div>
-        </article>;
-      })}
+        )}
+      </div>
+
+      <div className={`flex min-h-0 flex-col gap-2 ${boarded ? "" : "overflow-y-auto"}`}>
+        {boarded ? (
+          <>
+            <div className="pixel-panel shrink-0 bg-white p-3">
+              <MissionCountdownSummary state={state} elapsedMs={elapsedMs} connected={connected} />
+            </div>
+            <div className="min-h-0 flex-1"><DroneImagePanel captures={state.captures} /></div>
+          </>
+        ) : MONITORS.map((monitor) => {
+          const person = state.people.find((entry) => entry.monitorId === monitor.id);
+          const order = route.indexOf(monitor.id);
+          return <article key={monitor.id}
+            className={`pixel-panel shrink-0 p-3 ${order >= 0 ? isConfirmed ? "bg-[#eaf3fb]" : "bg-[#f0ebf7]" : "bg-white"}`}>
+            <h3 className="text-xs font-semibold text-[#091f2c]">{monitor.label} <span className="font-normal text-[#091f2c]">{order >= 0 ? `· ${order + 1}번째 방문` : ""}</span></h3>
+            <p className="mt-1 text-[11px] leading-snug text-[#091f2c]">{person?.clue}</p>
+          </article>;
+        })}
+      </div>
     </div>
-    <p className="shrink-0 text-[11px] leading-4 text-[#6e6575]">{state.promptPhase !== "confirmed" ? "탐지 프롬프트를 먼저 음성으로 설명하고 확인해주세요." : state.missionPhase === "briefing" ? "첫 두 방문지를 음성으로 선택하세요. 출발에 동의하면 자동 비행을 시작합니다." : "방문 순서와 이미지 분석 완료 시점에 따라 구조 결과가 달라집니다."}</p>
+
+    {state.promptPhase === "confirmed" && <p className="shrink-0 text-[11px] leading-4 text-[#091f2c] [text-shadow:1px_1px_0_#fff]">{state.missionPhase === "briefing" ? "첫 두 방문지를 음성으로 선택하세요. 출발에 동의하면 자동 비행을 시작합니다." : "방문 순서와 이미지 분석 완료 시점에 따라 구조 결과가 달라집니다."}</p>}
   </section>;
 }

@@ -105,13 +105,266 @@ input {
   animation: bar-error 1.1s ease-in-out infinite;
 }
 
-/* Opening screen entrance (components/OpeningScreen.tsx): card fades and
-   slides up slightly on mount. Runs once, no dependency needed. */
-@keyframes opening-card-in {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: translateY(0); }
+/* Shared Gibby pixel-art backdrop. */
+.pixel-rendering {
+  image-rendering: pixelated;
 }
 
-.opening-card-in {
-  animation: opening-card-in 0.5s ease-out both;
+.pixel-scene-sky {
+  background: linear-gradient(to bottom, #bfe6f5 0%, #dff2ee 62%, #eaf7df 100%);
+}
+
+.pixel-scene-ground {
+  background-image: url("/gibby/ground.png");
+  background-repeat: repeat-x;
+  background-size: auto 100%;
+}
+
+/* The image scrolls while Gibby walks in place during the intro slide. */
+.pixel-scene-ground--scrolling {
+  animation: pixel-ground-scroll var(--ground-scroll-duration) linear infinite;
+}
+
+@keyframes pixel-ground-scroll {
+  from { background-position-x: 0; }
+  to { background-position-x: calc(-1 * var(--ground-tile-width)); }
+}
+
+/* Gibby travel stage (components/GibbyIntroSequence.tsx): sits at the
+   bottom-left by default and walks to the bottom-right over the walk-cycle
+   duration when the player presses "Let's Go!". Kept as a plain `left`
+   transition (not transform) so percentage/calc positions both interpolate
+   smoothly without needing to know the viewport width up front. The corner
+   value mirrors the 6% starting inset from the *opposite* edge (accounting
+   for Gibby's own ~145px sprite width), so he ends up roughly as far from
+   the right edge as he started from the left, instead of hugging the very
+   corner. No opacity/fade here on purpose — Gibby just stops walking and
+   stands still in place, he never fades in/out or swaps to a different
+   element. */
+.gibby-travel {
+  left: 6%;
+  z-index: 20;
+  transition: left 1.5s linear;
+}
+
+.gibby-travel--center {
+  left: 50%;
+}
+
+.gibby-travel--corner {
+  left: calc(94% - 145px);
+}
+
+/* Gibby walk-cycle: steps() through the 6-frame strip (public/gibby/walk-strip.png,
+   852x214 native, 142x214 per frame) via background-position, independent of the
+   translateX travel animation applied to the parent stage element. */
+@keyframes gibby-walk-cycle {
+  from { background-position-x: 0; }
+  to { background-position-x: -852px; }
+}
+
+.gibby-walk-sprite {
+  width: 142px;
+  height: 214px;
+  background-image: url("/gibby/walk-strip.png");
+  background-repeat: no-repeat;
+  background-size: 852px 214px;
+  animation: gibby-walk-cycle 0.66s steps(6) infinite;
+}
+
+/* Pixel-bordered speech bubble: hard-edged "step" border instead of a
+   smooth rounded corner/box-shadow, built from stacked box-shadows. */
+.pixel-bubble {
+  position: relative;
+  background: #fff;
+  border: 4px solid #091f2c;
+  box-shadow: 4px 4px 0 0 #091f2c;
+}
+
+.pixel-bubble::after {
+  content: "";
+  position: absolute;
+  left: 28px;
+  bottom: -14px;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 14px 10px 0 0;
+  border-color: #091f2c transparent transparent transparent;
+}
+
+.pixel-bubble::before {
+  content: "";
+  position: absolute;
+  left: 32px;
+  bottom: -9px;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 10px 7px 0 0;
+  border-color: #fff transparent transparent transparent;
+  z-index: 1;
+}
+
+/* Gibby's speech bubble: left-edge tail (rather than bottom), anchored
+   near the bottom-left corner of the box so it points toward Gibby who
+   stands at the bottom-left of the screen. Box position/size elsewhere is
+   unaffected. */
+.pixel-bubble--gibby::after {
+  left: -48px;
+  bottom: 20px;
+  border-width: 24px 48px 24px 0;
+  border-color: transparent #091f2c transparent transparent;
+}
+
+.pixel-bubble--gibby::before {
+  left: -37px;
+  bottom: 27px;
+  border-width: 17px 37px 17px 0;
+  border-color: transparent #fff transparent transparent;
+}
+
+/* Right-edge tail variant (components/PixelPromptScreen.tsx): bubble sits to
+   the left of docked Gibby, so the tail points right toward him instead of
+   down-left. */
+.pixel-bubble--right::after {
+  left: auto;
+  right: -20px;
+  bottom: 14px;
+  border-width: 14px 0 0 20px;
+  border-color: transparent transparent transparent #091f2c;
+}
+
+.pixel-bubble--right::before {
+  left: auto;
+  right: -14px;
+  bottom: 18px;
+  border-width: 10px 0 0 14px;
+  border-color: transparent transparent transparent #fff;
+}
+
+/* Speech bubble title (components/GibbyOpeningScreen.tsx): Press Start 2P
+   only ships a single regular weight, so "bold" is faked by stacking a
+   1px-offset text-shadow in every direction to thicken the pixel strokes
+   instead of relying on font-weight (which that font ignores). */
+.pixel-title {
+  text-shadow:
+    1px 0 0 currentColor,
+    -1px 0 0 currentColor,
+    0 1px 0 currentColor,
+    0 -1px 0 currentColor;
+}
+
+/* Chunky pixel-game button: flat colors, hard drop shadow, no rounding,
+   "presses" down on click by canceling the shadow offset. */
+.pixel-button {
+  border: 4px solid #091f2c;
+  box-shadow: 5px 5px 0 0 #091f2c;
+  transition: transform 0.08s ease-out, box-shadow 0.08s ease-out;
+}
+
+.pixel-button:active {
+  transform: translate(5px, 5px);
+  box-shadow: 0 0 0 0 #091f2c;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gibby-walk-sprite {
+    animation: none !important;
+  }
+}
+
+/* Pixel design-system additions shared by the reskinned prompt/route/images/
+   results screens (components/PixelPromptScreen.tsx, PixelShell.tsx, and the
+   restyled FlightPathMap/DroneImagePanel/ResultsPanel containers). Reuses the
+   same hard-border + flat drop-shadow language as .pixel-bubble/.pixel-button. */
+.pixel-panel {
+  position: relative;
+  background: #fff;
+  border: 4px solid #091f2c;
+  box-shadow: 6px 6px 0 0 #091f2c;
+}
+
+/* Photo frame variant: thicker "wood/plastic" border feel via an inset ring,
+   with room above for a ribbon-style header banner (.pixel-frame-header--danger). */
+.pixel-frame {
+  position: relative;
+  background: #fff;
+  border: 4px solid #091f2c;
+  box-shadow: 6px 6px 0 0 #091f2c;
+  padding: 10px;
+}
+
+.pixel-frame-header--danger {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translate(-50%, -60%);
+  z-index: 2;
+  background: #d63447;
+  color: #fff;
+  border: 4px solid #091f2c;
+  box-shadow: 4px 4px 0 0 #091f2c;
+  padding: 6px 14px;
+  white-space: nowrap;
+  text-shadow:
+    1px 0 0 #091f2c,
+    -1px 0 0 #091f2c,
+    0 1px 0 #091f2c,
+    0 -1px 0 #091f2c;
+}
+
+/* Incoming content stage during the transition: starts off-screen to the
+   left and slides rightward to its resting position; ground-scrolling and
+   this slide run together, per the "content slides in from the left while
+   the ground moves" choreography. */
+.intro-stage {
+  transform: translateX(-115%);
+  transition: transform 2.6s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.intro-stage--in {
+  transform: translateX(0%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pixel-scene-ground--scrolling {
+    animation: none !important;
+  }
+  .intro-stage {
+    transition: none !important;
+  }
+}
+
+/* Route -> drone-image handoff (components/GibbyDroneBoarding.tsx): the
+   drone flies up from below the viewport to Gibby's docked corner before
+   he boards it. Plain `bottom` transition (not transform), matching
+   .gibby-travel's own reasoning above — percentage math stays simple and
+   there's nothing else animating on this element at the same time. */
+.drone-fly-in {
+  bottom: -60%;
+  transition: bottom 0.8s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.drone-fly-in--docked {
+  bottom: 16%;
+}
+
+/* Ground permanently retreats once Gibby boards the drone (see
+   components/PixelGround.tsx's `hidden` prop) — slides straight down out
+   of view rather than fading, consistent with the ground never using
+   opacity transitions elsewhere in this file. */
+.pixel-ground--hidden {
+  transform: translateY(100%);
+  transition: transform 0.9s cubic-bezier(0.4, 0, 1, 1);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drone-fly-in {
+    transition: none !important;
+  }
+  .pixel-ground--hidden {
+    transition: none !important;
+  }
 }

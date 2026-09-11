@@ -118,7 +118,7 @@ async def validate_transport_configuration():
 def credential():
     global _credential
     if _credential is None:
-        _credential = DefaultAzureCredential()
+        _credential = DefaultAzureCredential(process_timeout=30)
     return _credential
 
 
@@ -155,6 +155,18 @@ async def api_config():
     elif (not config.DRONE_CONTROL_USE_TOOLS and config.DRONE_CONTROL_TRANSPORT == "remote"
           and config.DRONE_CONTROL_MODE == "mock"):
         drone_error = "원격 MOCK 도구 실행은 DRONE_CONTROL_USE_TOOLS=1로 명시적으로 활성화해야 합니다."
+    if config.DRONE_RUN_MODE and drone_error is None:
+        observed = await read_drone_status()
+        if not observed["apiConnected"]:
+            drone_error = observed["error"]
+        elif observed["executionMode"] != config.DRONE_CONTROL_MODE:
+            drone_error = "선택한 Test/Real 모드와 연결된 Tools의 모드가 다릅니다."
+        elif config.DRONE_RUN_MODE == "real" and (
+                observed["liveReady"] is not True or observed["physicalConnected"] is not True
+                or observed["groundVerified"] is not True):
+            drone_error = "실기 프로필·기체 연결·현재 지상 상태를 확인하지 못했습니다. 실제 출발은 준비되지 않았습니다."
+        elif observed["activeMissionId"] is not None:
+            drone_error = "기존 임무가 아직 점유 중입니다. 모드 전환 전에 임무 상태를 확인하세요."
     return {
         "resource": config.RESOURCE, "model": config.MODEL, "voice": config.VOICE_NAME,
         "voiceType": config.VOICE_TYPE, "apiVersion": config.API_VERSION,
@@ -167,6 +179,8 @@ async def api_config():
         "remoteConnected": remote_connected, "remoteExecutionMode": remote_mode,
         "operatorAuthorizationRequired": operator_access.required(),
         "operatorCookieLoginAvailable": operator_sessions.configured(),
+        "runMode": config.DRONE_RUN_MODE or None,
+        "toolEndpoint": config.DRONE_CONTROL_API_URL,
     }
 
 
@@ -193,6 +207,24 @@ def build_session():
         "voice": {"name": config.VOICE_NAME, "type": config.VOICE_TYPE},
         "modalities": ["text", "audio"], "tools": tools.TOOLS, "tool_choice": "auto",
     }}
+
+
+class VoiceSetupError(RuntimeError):
+    pass
+
+
+async def configure_voice(upstream, session):
+    await upstream.send(json.dumps(session))
+    async with asyncio.timeout(30):
+        for _ in range(32):
+            event = json.loads(await upstream.recv())
+            if not isinstance(event, dict):
+                raise VoiceSetupError("Voice Live returned invalid session setup")
+            if event.get("type") == "session.updated":
+                return
+            if event.get("type") == "error":
+                raise VoiceSetupError("Voice Live rejected session configuration")
+    raise VoiceSetupError("Voice Live did not confirm session configuration")
 
 
 class Bridge:
@@ -228,6 +260,7 @@ class Bridge:
         self._debrief_attempts = 0
         self._completed_commands = {}
         self._closing = False
+        self._route_intro_pending = False
         if (config.DRONE_CONTROL_TRANSPORT == "remote" and session.data["droneControlMode"] == "mock"
                 and not config.DRONE_CONTROL_USE_TOOLS):
             raise DroneError("MOCK_TOOLS_OPT_IN_REQUIRED")
@@ -297,7 +330,7 @@ class Bridge:
                 session = build_session()
                 session["session"]["turn_detection"].update(create_response=False, interrupt_response=False)
                 session["session"].update(tools=[], tool_choice="none")
-                await upstream.send(json.dumps(session))
+                await configure_voice(upstream, session)
                 self._voice_stopped = False
                 self._launch_pending = False
                 self._response_active = False
@@ -312,7 +345,7 @@ class Bridge:
                 await asyncio.wait_for(self.pump_upstream(), timeout=60)
                 if not self._debrief_completed:
                     raise OSError("Result speech ended before completion")
-        except (AzureError, WebSocketException, OSError, asyncio.TimeoutError):
+        except (AzureError, WebSocketException, OSError, asyncio.TimeoutError, VoiceSetupError):
             log.exception("result voice connection failed")
             await self.send_browser({
                 "type": "mission.debrief.failed", "runId": self.session.run_id,
@@ -485,6 +518,8 @@ class Bridge:
                 self._completed_commands[activity_id] = (name, args, outcome)
                 if len(self._completed_commands) > 256:
                     del self._completed_commands[next(iter(self._completed_commands))]
+            if name == "confirm_prompt" and outcome["ok"]:
+                self._route_intro_pending = True
             if name == "launch_mission" and outcome["ok"] and self.upstream and not self.departure_started:
                 self._launch_pending = True
                 self._narration.clear()
@@ -518,7 +553,10 @@ class Bridge:
                             "output": json.dumps(outcome, ensure_ascii=False)}}))
         finally:
             self._pending_tools = max(0, self._pending_tools - 1)
-        await self.request_response()
+        # Hold the agent's next turn until the client confirms Gibby's map
+        # animation reached its last frame (see "route_intro.ready" below).
+        if not self._route_intro_pending:
+            await self.request_response()
 
     async def pump_browser(self):
         while True:
@@ -545,6 +583,10 @@ class Bridge:
                 await self.request_response()
             elif mtype == "greet":
                 await self.greet()
+            elif mtype == "route_intro.ready":
+                if self._route_intro_pending:
+                    self._route_intro_pending = False
+                    await self.request_response()
             # Browser events cannot replace instructions/tools or fabricate outputs.
             elif mtype in {"input_audio_buffer.clear", "response.cancel", "conversation.item.truncate"} and self.upstream and not self.departure_started:
                 await self.upstream.send(json.dumps(msg))
@@ -559,7 +601,7 @@ class Bridge:
                 "요약, 의역, 생략, 추가 인사, 모의 훈련 설명은 금지합니다. 단어를 바꾸지 마세요.\n"
                 f"읽을 문장: {tools.GREETING}\n"
                 "마지막 질문 뒤에는 참가자의 답을 기다리세요. 이 질문에 스스로 답하거나 "
-                "인물의 외형, 모니터별 상황, 경로를 덧붙이지 마세요. "
+                "인물의 외형, 현장별 상황, 경로를 덧붙이지 마세요. "
                 "아직 참가자가 탐지 프롬프트를 말하거나 확인한 적이 없습니다.")
 
     async def cancel_tool_tasks(self):
@@ -620,7 +662,7 @@ async def ws_endpoint(browser: WebSocket):
             open_timeout=30, max_size=None,
         ) as upstream:
             bridge.upstream = upstream
-            await upstream.send(json.dumps(build_session()))
+            await configure_voice(upstream, build_session())
             await bridge.send_browser({
                 "type": "relay.ready", "model": config.MODEL, "voice": config.VOICE_NAME,
                 "region": config.REGION, "mode": config.TRIAGE_MODE})
@@ -643,6 +685,11 @@ async def ws_endpoint(browser: WebSocket):
                         log.error("pump ended: %r", exc)
     except WebSocketDisconnect:
         pass
+    except (VoiceSetupError, TimeoutError, WebSocketException):
+        log.warning("Voice session setup or transport failed")
+        await bridge.send_browser({
+            "type": "relay.error", "code": "VOICE_SETUP_FAILED",
+            "message": "Azure 음성 세션 설정을 완료하지 못했습니다. 리소스와 연결을 확인하세요."})
     except Exception:
         log.exception("relay failure")
         await bridge.send_browser({

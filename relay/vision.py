@@ -11,6 +11,7 @@ import asyncio
 import json
 import math
 import re
+import struct
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -297,7 +298,7 @@ class AzureVision:
     async def _authenticated_request(self, payload: dict) -> dict:
         if self.api_key:
             return await self._request(payload, {"api-key": self.api_key})
-        async with DefaultAzureCredential() as credential:
+        async with DefaultAzureCredential(process_timeout=30) as credential:
             token = await credential.get_token(config.VISION_TOKEN_SCOPE)
             return await self._request(payload, {"Authorization": f"Bearer {token.token}"})
 
@@ -336,10 +337,47 @@ class AzureVision:
             raise VisionError("Azure 이미지 분석 결과가 누락되었거나 거절·중단되어 사용할 수 없습니다.") from exc
 
 
-def create_providers(mode: str | None = None) -> tuple[FixtureCamera, MockVision | AzureVision]:
+class ContractMockVision:
+    """Deterministic scenario observations for explicitly generated contract frames."""
+
+    mode = "mock"
+
+    def readiness(self):
+        return None
+
+    async def analyze(self, capture: Capture, target_description: str, *, search_prompt: str = "",
+                      appearance_constraints=None, unsupported_appearance=None):
+        _validate_input(capture, target_description, search_prompt)
+        expected = f"Description\0MOCK synthetic fixture {capture.id}".encode()
+        image, offset, generated = capture.image_bytes, 8, False
+        while offset + 12 <= len(image):
+            size = struct.unpack_from(">I", image, offset)[0]
+            kind = image[offset + 4:offset + 8]
+            if kind == b"tEXt" and image[offset + 8:offset + 8 + size] == expected:
+                generated = True
+            offset += size + 12
+        if not generated or not capture.mission_id or capture.visit_index is None or not capture.destination_id:
+            raise VisionError("Test 모드는 고정 mock에서 받은 임무별 생성 프레임만 처리합니다.")
+        try:
+            matches = matches_appearance(
+                SCENARIO["targetAppearance"], appearance_constraints or [], unsupported_appearance or [])
+        except ValueError as exc:
+            raise VisionError(str(exc)) from exc
+        await asyncio.sleep(.05)
+        return {
+            "targetPresent": matches,
+            "description": ("모의 계약 테스트 · AI 미사용: 생성된 프레임에 사전 정의한 성공 결과를 적용했습니다."
+                            if matches else "모의 계약 테스트 · AI 미사용: 설정한 검색 조건과 테스트 대상 조건이 다릅니다."),
+            "box": None,
+        }
+
+
+def create_providers(mode: str | None = None) -> tuple[FixtureCamera, MockVision | ContractMockVision | AzureVision]:
     selected = config.TRIAGE_MODE if mode is None else mode
     camera = FixtureCamera()
     if selected == "mock":
+        if config.DRONE_RUN_MODE == "test":
+            return camera, ContractMockVision()
         return camera, MockVision(camera)
     if selected == "azure":
         return camera, AzureVision()

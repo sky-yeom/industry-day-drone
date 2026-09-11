@@ -13,8 +13,10 @@ from uuid import uuid4
 
 try:
     from . import config
+    from .tool_target import validate_test_api_url
 except ImportError:
     import config
+    from tool_target import validate_test_api_url
 
 SCHEMAS = {t["name"]: t["parameters"] for t in json.loads((Path(__file__).resolve().parents[1]
     / "drone-control/integration/speech_control_contract/tools.json").read_text("utf-8"))}
@@ -59,14 +61,29 @@ class DroneClient:
         self.base_url = config.DRONE_CONTROL_API_URL if base_url is None else base_url
         self._token = config.DRONE_CONTROL_API_TOKEN if token is None else token
         self.timeout = config.DRONE_CONTROL_TIMEOUT_SECONDS if timeout is None else timeout
-        parts = urlsplit(self.base_url)
-        if (parts.scheme != "http" or parts.hostname != "127.0.0.1" or parts.port != 8766
-                or parts.path not in ("", "/") or parts.query or parts.fragment or parts.username):
-            raise DroneError("INVALID_CONFIGURATION", "드론 API는 로컬 127.0.0.1:8766 주소로 설정해야 합니다.")
+        self.expected_mode = expected_mode or config.DRONE_CONTROL_MODE
+        if self.expected_mode not in {"mock", "live"}:
+            raise DroneError("INVALID_CONFIGURATION", "드론 실행 모드는 mock 또는 live여야 합니다.")
+        self._test_target = config.DRONE_RUN_MODE == "test" and self.expected_mode == "mock"
+        if self._test_target:
+            try:
+                if validate_test_api_url(self.base_url) != validate_test_api_url(config.DRONE_CONTROL_API_URL):
+                    raise ValueError()
+            except ValueError:
+                raise DroneError("INVALID_CONFIGURATION", "Test 드론 API는 DRONE_TEST_API_URL로 선택한 주소여야 합니다.") from None
+        else:
+            try:
+                parts = urlsplit(self.base_url)
+                valid = (parts.scheme == "http" and parts.hostname == "127.0.0.1" and parts.port == 8766
+                    and parts.path in ("", "/") and not parts.query and not parts.fragment
+                    and parts.username is None and parts.password is None)
+            except (ValueError, TypeError):
+                valid = False
+            if not valid:
+                raise DroneError("INVALID_CONFIGURATION", "드론 API는 로컬 127.0.0.1:8766 주소로 설정해야 합니다.")
         if type(caller_id) is not str or not 1 <= len(caller_id) <= 128:
             raise DroneError("INVALID_REQUEST_CONTEXT")
         self.caller_id = caller_id
-        self.expected_mode = expected_mode or config.DRONE_CONTROL_MODE
         self._hub = None
         self._remote_generation = None
         if transport is not None:
@@ -87,7 +104,7 @@ class DroneClient:
     def readiness(self):
         if self._hub is not None:
             return None if self._hub.connected else "원격 PC가 연결되어 있지 않습니다. PC 커넥터를 확인하세요."
-        return None if self._token else "DRONE_CONTROL_API_TOKEN을 relay와 PC 서비스에 설정해야 합니다."
+        return None if self._token or self._test_target else "DRONE_CONTROL_API_TOKEN을 relay와 PC 서비스에 설정해야 합니다."
 
     async def _remote(self, name, envelope):
         connection = self._hub.connection
@@ -102,15 +119,19 @@ class DroneClient:
         return await self._hub.request(name, envelope, timeout=self.timeout)
 
     async def _http(self, name, envelope):
+        if self.readiness():
+            raise DroneError("INVALID_CONFIGURATION", self.readiness())
         def send():
             lookup = name == "_lookup_request"
             camera = name.startswith("_camera_")
             path = ("/requests/" + quote(self.caller_id, safe="") + "/" + quote(envelope["request_id"], safe="")
                 if lookup else "/camera/" + name.removeprefix("_camera_") if camera else "/tools/" + name)
+            headers = {"Content-Type": "application/json", "X-Drone-Expected-Mode": self.expected_mode}
+            if self._token:
+                headers["Authorization"] = "Bearer " + self._token
             req = request.Request(self.base_url.rstrip("/") + path,
                 data=None if lookup else json.dumps(envelope, separators=(",", ":")).encode("utf-8"),
-                headers={"Content-Type": "application/json", "Authorization": "Bearer " + self._token,
-                         "X-Drone-Expected-Mode": self.expected_mode},
+                headers=headers,
                 method="GET" if lookup else "POST")
             # No environment proxy or redirect may forward the backend bearer token.
             opener = request.build_opener(request.ProxyHandler({}), _NoRedirect())
@@ -163,6 +184,8 @@ class DroneClient:
         """Read admission by the original caller/business intent; never execute it."""
         if type(request_id) is not str or not 1 <= len(request_id) <= 128:
             raise DroneError("INVALID_REQUEST_CONTEXT")
+        if self.readiness():
+            raise DroneError("INVALID_CONFIGURATION", self.readiness())
         return await self._request("_lookup_request", {}, request_id)
 
     async def call(self, name, arguments, *, request_id=None):

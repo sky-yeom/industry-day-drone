@@ -19,7 +19,7 @@ SCENARIO = json.loads(
     (Path(__file__).resolve().parents[1] / "data/emergency-triage.json").read_text("utf-8")
 )
 MONITOR_IDS = [p["monitorId"] for p in SCENARIO["people"]]
-LABELS = {mid: f"모니터 {i}" for i, mid in enumerate(MONITOR_IDS, 1)}
+LABELS = {person["monitorId"]: person["label"] for person in SCENARIO["people"]}
 TERMINAL = {"complete", "aborted"}
 ACTIVE = {"flying", "capturing", "analyzing"}
 MAX_PROMPT_LENGTH = 2000
@@ -146,8 +146,8 @@ class SurveySession:
         self.touch()
         cases = " / ".join(
             f"{LABELS[person['monitorId']]}: {person['clue']}" for person in self.data["people"])
-        return result(True, f"사용자가 확인한 탐색 프롬프트: {text}. 현장별 신고 내용: {cases}",
-                      "먼저 세 모니터의 신고 내용을 모두 설명한 뒤 첫 번째로 갈 모니터를 물어볼 것")
+        return result(True, f"사용자가 확인한 탐색 프롬프트: {text}. 장소별 신고 내용: {cases}",
+                      "먼저 세 장소의 신고 내용을 모두 설명한 뒤 첫 번째로 갈 장소를 물어볼 것")
 
     def select_stop(self, monitor):
         if self.data["promptPhase"] != "confirmed":
@@ -155,9 +155,9 @@ class SurveySession:
         if not self._editable():
             return result(False, "출발한 임무의 경로는 바꿀 수 없습니다.")
         if not isinstance(monitor, str) or monitor not in MONITOR_IDS:
-            return result(False, "모니터를 확인하지 못했습니다.", "모니터 1, 2, 3 중 어디인지 다시 물어볼 것")
+            return result(False, "장소를 확인하지 못했습니다.", "어느 장소인지 다시 물어볼 것")
         if monitor in self.state.draftRoute:
-            return result(False, "이미 경로에 있는 모니터입니다.", "수정하려면 경로를 지울지 물어볼 것")
+            return result(False, "이미 경로에 있는 장소입니다.", "수정하려면 경로를 지울지 물어볼 것")
         self.state.draftRoute.append(monitor)
         self.state.confirmedRoute = []
         self.data["missionPhase"] = "briefing"
@@ -167,7 +167,7 @@ class SurveySession:
             ask = "confirm_route로 준비한 뒤 전체 경로를 읽고 출발 동의를 물어볼 것"
         else:
             self.state.phase = "selecting-order"
-            ask = "두 번째로 갈 모니터를 물어볼 것"
+            ask = "두 번째로 갈 장소를 물어볼 것"
         self.touch()
         return result(True, f"선택 경로: {names(self.state.draftRoute)}", ask)
 
@@ -348,7 +348,7 @@ class SurveySession:
                 detail = ("대상은 확인했지만 분석이 구조 시한 안에 끝나지 않았습니다."
                           if evidence["targetPresent"] else
                           f"시한 내 대상을 찾지 못했습니다. 마지막 이미지 관찰: {evidence['description']}")
-            observations.append(f"모니터 {person['monitorId'][-1]}: {detail}")
+            observations.append(f"{LABELS[person['monitorId']]}: {detail}")
         return (f"{mode} 훈련이 끝났습니다. 방문 경로: {names(self.state.confirmedRoute)}. "
                 f"{score['total']}명 중 {score['rescuedCount']}명을 구조했고, "
                 f"그중 {score['injuredCount']}명은 부상 상태입니다. "

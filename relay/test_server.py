@@ -48,6 +48,9 @@ class Upstream:
     async def send(self, message):
         self.sent.append(json.loads(message))
 
+    async def recv(self):
+        return json.dumps({"type": "session.updated"})
+
     async def close(self):
         self.closed = True
 
@@ -400,6 +403,21 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.phase, "complete")
         self.assertEqual(session.data["score"]["rescuedCount"], 3)
         self.assertTrue(browser.closed)
+
+    async def test_route_intro_holds_agent_turn_until_client_ready_signal(self):
+        upstream = Upstream()
+        self.bridge.upstream = upstream
+        await self.bridge.handle_tool_call({
+            "name": "confirm_prompt", "call_id": "prompt-1",
+            "arguments": json.dumps(PROMPT_ARGS)})
+        self.assertTrue(self.bridge._route_intro_pending)
+        self.assertFalse(any(e["type"] == "response.create" for e in upstream.sent))
+        self.browser.incoming.put_nowait(json.dumps({"type": "route_intro.ready"}))
+        self.browser.incoming.put_nowait(None)
+        with self.assertRaises(WebSocketDisconnect):
+            await self.bridge.pump_browser()
+        self.assertFalse(self.bridge._route_intro_pending)
+        self.assertTrue(any(e["type"] == "response.create" for e in upstream.sent))
 
     async def test_command_prompt_first_guard_and_validation(self):
         for name, args in (("select_stop", {"monitor": "monitor-3"}), ("confirm_route", {}),

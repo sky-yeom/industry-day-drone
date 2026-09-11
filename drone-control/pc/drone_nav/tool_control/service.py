@@ -279,7 +279,8 @@ class MissionService:
                 self.cancel.clear()
                 self.lease_deadline = time.perf_counter() + self.lease_seconds
                 self.pending = queued
-                self.changed.notify()
+                # The mission worker and lease watcher share this condition.
+                self.changed.notify_all()
             return response
 
     @staticmethod

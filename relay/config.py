@@ -15,6 +15,11 @@ from __future__ import annotations
 import os
 from urllib.parse import urlsplit
 
+try:
+    from .tool_target import resolve_tool_target
+except ImportError:
+    from tool_target import resolve_tool_target
+
 # --- Azure AI Foundry / Voice Live -------------------------------------------
 
 RESOURCE = os.getenv("VOICE_LIVE_RESOURCE", "industry-day-drone-boot-resource")
@@ -35,8 +40,8 @@ MODEL = os.getenv("VOICE_LIVE_MODEL", "gpt-realtime")
 #
 #   openai          -> shimmer, marin, cedar, alloy, echo  (네이티브, 한국어 가능)
 #   azure-standard  -> ko-KR-SunHiNeural 등                (Azure TTS, 한 단계 더 거침)
-VOICE_NAME = os.getenv("VOICE_LIVE_VOICE", "shimmer")
-VOICE_TYPE = os.getenv("VOICE_LIVE_VOICE_TYPE", "openai")
+VOICE_NAME = os.getenv("VOICE_LIVE_VOICE", "ko-KR-SunHiNeural")
+VOICE_TYPE = os.getenv("VOICE_LIVE_VOICE_TYPE", "azure-standard")
 
 WS_URL = (
     f"wss://{RESOURCE}.cognitiveservices.azure.com/voice-live/realtime"
@@ -47,20 +52,23 @@ TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
 
 # --- Emergency triage image analysis (server only) -----------------------------
 
-TRIAGE_MODE = os.getenv("TRIAGE_MODE", "mock").strip().lower()
-# Flight mode is independent of image analysis. Tokens never leave this process.
-DRONE_CONTROL_MODE = os.getenv("DRONE_CONTROL_MODE", "mock").strip().lower()
-DRONE_CONTROL_API_URL = os.getenv("DRONE_CONTROL_API_URL", "http://127.0.0.1:8766").strip()
-DRONE_CONTROL_API_TOKEN = os.getenv("DRONE_CONTROL_API_TOKEN", "").strip()
+_tool_target = resolve_tool_target()
+DRONE_RUN_MODE = _tool_target.run_mode
+TRIAGE_MODE = _tool_target.triage_mode
+# Without the explicit selector, flight and image-analysis settings stay independent.
+DRONE_CONTROL_MODE = _tool_target.control_mode
+DRONE_CONTROL_API_URL = _tool_target.api_url
+DRONE_CONTROL_API_TOKEN = _tool_target.api_token
 DRONE_CONTROL_TIMEOUT_SECONDS = 5.0
-DRONE_CONTROL_TRANSPORT = os.getenv("DRONE_CONTROL_TRANSPORT", "local").strip().lower()
-DRONE_CONTROL_USE_TOOLS = os.getenv("DRONE_CONTROL_USE_TOOLS", "0") == "1"
+DRONE_CONTROL_TRANSPORT = _tool_target.transport
+DRONE_CONTROL_USE_TOOLS = _tool_target.use_tools
 DRONE_REMOTE_DEVICE_ID = os.getenv("DRONE_REMOTE_DEVICE_ID", "").strip()
 DRONE_REMOTE_DEVICE_TOKEN = os.getenv("DRONE_REMOTE_DEVICE_TOKEN", "").strip()
 DRONE_REMOTE_EXECUTION_MODE = os.getenv("DRONE_REMOTE_EXECUTION_MODE", "").strip().lower()
 DRONE_REMOTE_SINGLE_REPLICA = os.getenv("DRONE_REMOTE_SINGLE_REPLICA", "0") == "1"
 RELAY_OPERATOR_TOKEN = os.getenv("RELAY_OPERATOR_TOKEN", "").strip()
 RELAY_PUBLIC_ORIGIN = os.getenv("RELAY_PUBLIC_ORIGIN", "").strip()
+RELAY_LOCAL_DIRECT = os.getenv("RELAY_LOCAL_DIRECT", "0") == "1"
 AZURE_VISION_ENDPOINT = os.getenv("AZURE_VISION_ENDPOINT", "").strip()
 AZURE_VISION_DEPLOYMENT = os.getenv("AZURE_VISION_DEPLOYMENT", "").strip()
 AZURE_VISION_API_VERSION = os.getenv("AZURE_VISION_API_VERSION", "v1").strip()
@@ -120,16 +128,16 @@ SPEECH_DURATION_MS = int(os.getenv("VOICE_LIVE_SPEECH_DURATION_MS", "100"))
 # ("쭈쭈쭈쭈!" 같은 환청) gpt-4o-transcribe는 같은 상황에서 훨씬 안정적이다.
 TRANSCRIPTION_MODEL = os.getenv("VOICE_LIVE_TRANSCRIPTION_MODEL", "gpt-4o-transcribe")
 
-# 전사 모델에 도메인 어휘를 미리 알려주면 "모니터 3"을 "모니터 세"처럼 잘못 듣는
+# 전사 모델에 도메인 어휘를 미리 알려주면 "현장 3"을 "현장 세"처럼 잘못 듣는
 # 경우가 줄고, 잡음을 엉뚱한 단어로 채우는 것도 억제된다. "네", "1번" 같은 한두
 # 음절 대답은 특히 잘못 전사되거나 통째로 누락되기 쉬워서 숫자+번 표기를
 # 명시적으로 나열해 우선순위를 높인다.
 TRANSCRIPTION_PROMPT = os.getenv(
     "VOICE_LIVE_TRANSCRIPTION_PROMPT",
-    "드론 긴급 구조 관제 대화입니다. 자주 나오는 말: 모니터 1, 모니터 2, 모니터 3, "
+    "드론 긴급 구조 관제 대화입니다. 자주 나오는 말: 현장 1, 현장 2, 현장 3, "
     "첫번째, 첫 번째, 첫째, 두번째, 두 번째, 둘째, 세번째, 세 번째, 셋째, "
     "일번, 한 번, 이번, 두 번, 삼번, 세 번, 1번, 2번, 3번, "
-    "네, 예, 응, 맞아요, 아니요, "
+    "네, 예, 응, 엉, 맞아, 맞아요, 오케이, 오키, 콜, 좋아, 가자, 아니요, "
     "구조, 바다에 빠진 사람, 물에 빠진 사람, 익수자, 잔해 아래의 사람, 불길 속의 사람, 불이 난 집, "
     "우선순위, 경로, 확정, 출발, 상태, 다시 시도, 중단, 다시, 취소.",
 )

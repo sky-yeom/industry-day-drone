@@ -14,19 +14,29 @@ async def read_drone_status():
         "apiConnected": False, "executionMode": None, "physicalConnected": None,
         "liveReady": None, "homeTagId": None, "floorTagId": None, "targetHeightM": None,
         "destinations": [], "activeMissionId": None, "error": None,
+        "readinessIssues": [],
+        "groundVerified": None,
     }
     try:
         client = DroneClient("relay-diagnostics-" + str(uuid4()))
         caps = await client.call("drone_get_capabilities", {})
         status = await client.call("drone_get_status", {})
-        mode = caps["execution_mode"]
+        mode = caps.get("execution_mode")
         destinations = caps.get("destinations")
         height = caps.get("target_height_m")
-        if (status["execution_mode"] != mode or type(caps.get("live_ready")) is not bool
+        issues = caps.get("readiness_issues", [])
+        ground = status.get("ground_verified")
+        if (mode not in ("live", "mock") or status.get("execution_mode") != mode
+                or type(caps.get("live_ready")) is not bool
                 or type(destinations) is not list or len(destinations) != 3
                 or type(caps.get("home_tag_id")) is not int or type(caps.get("floor_tag_id")) is not int
                 or type(height) not in (int, float) or not math.isfinite(height) or height <= 0
-                or type(status.get("connected")) is not bool):
+                or type(status.get("connected")) is not bool
+                or ground is not None and type(ground) is not bool
+                or type(issues) is not list or len(issues) > 4
+                or any(type(issue) is not str or issue not in {
+                    "READ_ONLY_CONNECTION", "LAYOUT_NOT_CONFIRMED",
+                    "FIELD_SETUP_NOT_CONFIRMED", "MEASUREMENTS_NOT_CONFIRMED"} for issue in issues)):
             raise DroneError("INVALID_RESPONSE")
         cleaned = []
         for item in destinations:
@@ -49,6 +59,7 @@ async def read_drone_status():
             physicalConnected=status["connected"] if mode == "live" else None,
             liveReady=caps["live_ready"], homeTagId=caps["home_tag_id"],
             floorTagId=caps["floor_tag_id"], targetHeightM=height,
+            readinessIssues=issues, groundVerified=ground if mode == "live" else None,
             destinations=cleaned, activeMissionId=mission)
     except DroneError as exc:
         result["error"] = ("로컬 드론 API 연결을 확인하지 못했습니다 "

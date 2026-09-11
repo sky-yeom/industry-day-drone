@@ -1,384 +1,311 @@
-# Dashboard / Speech / drone integration — 2026-09-10
+# 고정 Drone Tools v1 계약과 독립 mock
 
-## Backend-only integration with current main
+## 목적
 
-Integration baseline: **main `e129277`**, prior backend `958cd49`, and field source
-`6a4e233`, with an explicit field HTTP adapter. The integration does not replace the main team's frontend,
-scenario assets, sign-in gate, infrastructure, web container or deployment script.
-Only `relay/`, `drone-control/` and the owned Windows backend launcher are included.
+프런트 팀은 **우리 백엔드가 실행되지 않아도**, 아래 고정 계약을 기준으로
+화면·상태 관리·도구 호출을 개발할 수 있습니다. 우리 실제 백엔드가 이 계약에
+맞춰야 하며, 프런트가 우리 구현의 변경을 따라가도록 만드는 구조가 아닙니다.
 
-The existing browser contract remains: `/api/config`, `/ws`, voice tool names and
-arguments, `route.state`, `tool.started`/`tool.finished`, departure/result events,
-and full-frame `captures[].imageUrl`. Drone status and capture attribution are
-additive fields. Camera preview `/ws/camera` and `/api/drone/status` are optional
-backend capabilities; main's unchanged frontend does **not** render those new
-panels or the detailed physical stop/landing states automatically.
+- 계약·mock: [`contracts/drone-tools/v1`](../../contracts/drone-tools/v1)
+- 계약 버전: **1.0.0**, wire `schema_version: 1`
+- 실행 의존성: **Node.js 20 이상만**. `npm install` 불필요
+- 불필요한 것: Python, relay, `drone_nav`, Azure, DJI SDK, 드론, APK, 실제 토큰/설정, ZIP
+- 해당 폴더만 checkout/copy해도 실행됩니다. 상위 저장소 코드·이미지를 import하지 않습니다.
+- 기존 프런트엔드와 Voice 대화·확인 문구는 변경하지 않습니다.
 
-Main now bakes the **cloud relay URL** into its web build. That relay cannot reach
-the operator PC's `127.0.0.1:8766`: loopback in Azure means the Azure container, not
-the PC. This merge preserves that deployment and keeps flight **mock by default**.
-An explicitly configured, authenticated, device-bound outbound PC channel is required before using that cloud
-relay for real flight; do not expose the raw local API or phone ports as a shortcut.
-Command identity, ordering, lease expiry, uncertain-write handling, stop verification
-and single-video ownership must survive such a channel, not just JSON field names.
+## 1. GitHub에서 받아 바로 실행
 
-`relay/Dockerfile` includes only the shared seven-tool JSON schema from the drone
-subtree. The cloud relay does not import or install DJI/PC vision code; the default
-mock scenario and existing Azure voice/vision deployment remain usable without a PC.
-Its Dockerfile-specific ignore list limits backend build context to relay source,
-scenario assets and that schema, excluding local environments, secrets and configs.
-Use a clean source checkout for shared image builds; the operator's runtime folder
-is not a deployment context.
-Frontend contract readiness is not physical-flight or camera-stream readiness.
-Before enabling live missions with the current frontend, agree the UI contract for
-RC takeover, unknown stop outcomes and manual landing; scenario completion is not
-aircraft landing.
+계약이 포함된 승인된 브랜치/커밋을 checkout한 뒤:
 
-The standalone CLI remains a separate entry point, with fixed route
-`[6,1,2,3,2,1,6]`. The **field HTTP adapter reuses those actual helpers**, including
-settled takeoff, bounded climb, `MixedDetector`, and the latest `PairFramingGate`.
-It has a separately validated external route extension, not a rewritten motion
-loop or the old PULSE controller. Do not run the standalone controller concurrently
-with the HTTP mission owner. A sample's flags do not certify the current PC/site.
+```powershell
+Set-Location .\contracts\drone-tools\v1
+node mock.mjs
+```
 
-Baseline: `sky/feat/dashboard` at `f416ae545f703542f30e4b69c2dbcd896635a5f7`.
-Branch: `feat/drone`, commit identity `WhoAmI125`.
+기본 주소: **`http://127.0.0.1:18767`**.
+실기 8766과 기존 relay 8080을 사용하지 않습니다.
 
-## Flow and ownership
+```powershell
+# 계약 잠금 확인
+node verify.mjs
 
-The dashboard still collects the participant's search description and visit order.
-Voice Live calls the existing `launch_mission` tool only after route confirmation.
-`SurveySession` retains the scenario, real-time deadlines, clue interpretation,
-image analysis and scoring. This integration does not choose a different route.
+# 모듈 자체 테스트
+node --test
 
-`DRONE_CONTROL_MODE=mock` preserves the dashboard's existing timed fixture flow.
-Only explicit `DRONE_CONTROL_MOCK_CAPTURES=1` enables capture-capable mock tools:
-capabilities then include `mock_capture_ready=true`. Each selected monitor returns
-the canonical `public/monitors/monitor-N.png` bytes and a second, visibly marked
-synthetic fixture variant with different pixels. Both are `simulated=true`,
-`capture_source=synthetic_fixture`; neither asserts camera freshness or physical
-arrival. `fixture_sha256` preserves the canonical asset identity for both variants;
-the actual capture `sha256` still describes its own transmitted bytes. The fixture
-variant encoder uses only Python's standard library, without PC vision dependencies.
-Default mock continues returning no tool captures. See relay settings for
-its explicit tools-transport mock mode; enabling mock captures alone does not change
-the relay's default scenario runner.
-`DRONE_CONTROL_MODE=live` creates a `LiveMissionRunner`: it reads capabilities,
-maps each `monitor-N` to the registered `tag-N`, submits the whole selected route
-once, then waits for actual arrival and attributed PNG frames. It never falls back
-to simulated travel or fixture images. `TRIAGE_MODE=azure` is required for live
-captures; the two mode flags have different responsibilities.
+# 다른 모의 시나리오
+node mock.mjs --scenario manual-landing
+node mock.mjs --scenario lost-ack
+```
 
-The field profile separates forward-facing **Home ID6** from the three
-scenario destinations: ID1 = sea, ID2 = rubble, ID3 = fire. **Floor ID0** remains the
-takeoff/manual-landing reference. The displayed downward target height remains
-**1.5m**, lateral BODY ANGLE at most **0.6 degrees**, and ascent at most **0.18m/s**.
-These are flight settings, not a surveyed mounting height for Home ID6.
+실제 토큰이나 로그인 없이 localhost에서 개발할 수 있습니다.
+`--token`은 인증 오류를 시험하고 싶을 때만 사용하는 **mock 전용** 옵션입니다.
+실기 자격 증명을 입력하지 않습니다.
 
-Field left-to-right order is **[3,2,1,6]**, with floor ID0 under the aircraft
-facing Home6. Direction for every selected leg, including non-adjacent legs and
-rightward visits, comes from this exact order. Only the expected ID confirms a
-visit. Target centre must be at **85–95%** of image width, with the entire black
-tag inside the image. Continuous proportional lateral correction/reacquisition
-uses the latest pair gate (correction **0.25–0.6 degrees**); reversals settle first.
-No vertical/depth/yaw corrections are permitted during lateral travel. The
-reference-plane footprint is diagnostic-only, and `tv_visibility_verified=false`.
-After the selected visits, Home6 uses the broad, non-pair return gate.
+이 문서의 코드가 아직 포함되지 않은 과거 브랜치를 clone하면 실행할 수 없습니다.
+GitHub 반영 전에는 완료되었다고 간주하지 말고, 합의된 branch/commit에
+`contracts/drone-tools/v1/package.json`이 있는지 확인합니다.
 
-The adapter accepts all six permutations visiting registered tags 1/2/3 exactly
-once. ID6 is not a fourth destination and does not count as a scenario visit or
-capture. It first acquires ID6 after ascent, then returns to ID6 after the selected
-route, deriving both outbound and return directions from the measured order. It
-releases Virtual Stick and waits for **manual RC landing at floor ID0**; this change
-does not add automatic floor alignment or landing.
+## 2. 고정되는 파일과 변경 규칙
 
-The explicit/default `DRONE_CONTROL_ADAPTER=legacy` preserves the older HTTP
-adapter, including 1.4m and the example's `[6,2,1,3]` aircraft-left ordering.
-`integration/site.example.json` is **legacy only**, not a field setup certificate.
-Existing measured Home-ID2 profiles remain supported. The legacy `drone-nav` patrol
-and historical trial scripts still use their original ID2 anchor; the HTTP adapter
-is the dashboard integration path. The tagless COEX 1.8m/1m-left-return runner remains
-separate and cannot stand in for three monitor destinations.
-
-Raw obstacle samples remain logged. PC obstacle-distance stop conditions are
-disabled for this profile; aircraft avoidance settings are not changed. Values
-such as 60000 are retained as unresolved range codes rather than measured 60m.
-
-## Seven backend tools
-
-All calls use `POST http://127.0.0.1:8766/tools/{name}`, bearer authentication, and
-`{arguments, caller_id, request_id}`. The browser and language model never receive
-the phone arm token or this bearer token. Arguments are validated again by the service.
-Connectors additionally send `X-Drone-Expected-Mode: mock` or `live` on every
-request. The service compares this with its actual mode **before** dispatching
-tools, camera operations or admission lookups; mismatch returns HTTP 409
-`MODE_MISMATCH` without execution. Invalid/duplicate mode headers are rejected.
-This prevents a mock connector from controlling a replacement live service
-between its capability preflight and execute POST. Existing local clients may
-omit the header; authenticated connectors must always set their fixed expected mode.
-Capabilities advertise `expected_mode_guard=true`; connectors require this before
-opening their cloud channel so an older unguarded PC service fails closed.
-
-| Tool | Result |
+| 파일 | 프런트 팀이 의존할 계약 |
 |---|---|
-| `drone_get_capabilities` | Mode, profile/site revision, Home/floor tag IDs, target height, registered destinations, exact supported sequences |
-| `drone_get_status` | Current status evidence, active mission and originating caller/request |
-| `drone_execute_route` | Durable admission of one external ordered route; not proof of takeoff or completion |
-| `drone_get_mission` | Visit/capture/state evidence; renews the active caller's 10-second lease |
-| `drone_stop_mission` | Cancellation request; physical stop and ground verification remain separate |
-| `drone_get_sensor_snapshot` | Raw telemetry and diagnostic snapshot; no object classes or identities |
-| `drone_get_captures` | PNG bytes bound to mission, visit index, destination, capture ID and SHA-256 |
+| `tools.json` | 7개 tool 이름·필수 인자·타입·추가 인자 금지 |
+| `contract.schema.json` | 요청 envelope·성공/오류·임무·방문·캡처 응답 JSON Schema |
+| `types.d.ts` | TypeScript request/response, 상태·ID 타입 |
+| `contract.lock.json` | 위 계약 파일의 SHA-256, 계약 버전 |
+| `validate.mjs` | 이 계약에 대한 독립 검증 함수 |
+| `mock.mjs` | 계약을 구현하는 Node 모의 서버 |
+| `verify.mjs` | 고정된 계약 파일이 바뀌지 않았는지 검사 |
 
-Responses contain `schema_version`, `ok`, `execution_mode`, `physical_execution`
-and tool-specific fields. Execute/get/stop return a `mission` object. Captures are
-at most two fresh PC-decoded camera frames per confirmed visit, 4MiB each; their
-timestamps describe PC decode/capture time, not an aircraft exposure timestamp.
-Field capabilities add `adapter=field`. Its full-frame PNG pixels are exactly
-the undistorted pixels used by `MixedDetector` for the same framing decision
-(`capture_source=pc_undistorted_camera_frame`), without crops or annotations.
-Frame identity, generation, finite stationary N/E/down velocity, current RC/MSDK
-ownership, and freshness <=500ms are rechecked after PNG/base64 encoding.
-Both decoded frame ID and PNG contents must differ for the second capture.
-Mission/visit/destination bindings, `capture_evidence`, `framing_diagnostic`,
-`arrival_band_fraction=[0.85,0.95]` and `simulated=false` accompany the bytes.
-Each ordered visit emits moving, visually confirmed arrival, then two captures;
-preflight/taking_off/running/returning remain mission states. Home6 is not a visit.
-If either capture is unavailable the mission stops/releases, without replaying
-movement or passing a stale JPEG off as fresh camera evidence.
-Local confirmation JPEGs, first-detection diagnostics, and the background frame
-recorder use `cv2.imencode` plus Python binary file writes, not OpenCV pathname
-writes. This supports Korean/Unicode checkout and capture directories; encoding,
-filesystem and incomplete-write failures remain failures, never saved-photo claims.
+**v1 계약 파일을 조용히 수정하지 않습니다.** 필드명·필수 여부·타입·상태 의미를
+바꿔야 하면 `v2` 등 새 버전에서 합의하고 기존 v1을 유지합니다.
+mock 구현의 오류는 API 계약을 바꾸지 않는 범위에서 수정할 수 있습니다.
 
-SQLite stores admissions, request fingerprints, visits and captures before replying.
-The same caller/request returns the original admission; changed arguments conflict.
-`GET /requests/{caller_id}/{request_id}` retrieves the durable result after an
-ambiguous reply. An uncertain write is never automatically replayed. A restart
-marks unfinished work `outcome_unknown` and does not launch it again. An occupied
-mission is released only by fresh independent ground evidence, or cancellation
-before any execution was dispatched. The single physical worker owns its socket.
+요청은 추가 키를 거절합니다. 응답은 필수 필드가 고정되어 있고 추가 진단 필드가
+있을 수 있으므로 프런트는 모르는 응답 필드를 무시할 수 있어야 합니다.
+명세에 없는 진단 필드를 필수 UI 의존성으로 만들지 않습니다.
 
-The relay polls the mission lease independently of image analysis. If the relay
-dies or loses the API for 10 seconds, the service requests cancellation. Closing
-voice/WebSocket, deadline expiration, abort and live-operation errors also request
-stop. ACK timeouts, RC takeover and app generation changes end automatic execution.
-New missions remain blocked while physical state is unresolved. The dashboard
-shows scenario completion separately from return, RC landing and stop confirmation.
+우리 저장소의 `relay/test_fixed_tools_contract.py`는 실제 tool 인자 정의와
+고정된 `tools.json`이 같은지 검사합니다. 이 검사는 **우리 백엔드의 의무**이며,
+독립 mock 실행에 Python이 필요하다는 뜻이 아닙니다.
 
-## Explicit camera preview (not an LLM tool)
+## 3. 프런트에서 시작하는 최소 예제
 
-The authenticated backend-only `POST /camera/{action}` endpoint accepts `start`,
-`frame`, or `stop` with exactly
-`{"arguments":{},"caller_id":"relay-camera-unique-id","request_id":"unique-id"}`.
-The same bearer, loopback Host and browser-Origin rejection as the seven tools
-apply; unknown fields, duplicate JSON fields and nonempty arguments are refused.
-No camera action arms, takes off, changes gimbal position or commands motion.
-Service startup and `frame` without a preceding `start` never open video.
+```typescript
+import type {
+  ToolName, ToolArguments, Response
+} from "./contracts/drone-tools/v1/types";
 
-Successful responses retain `schema_version:1`, `ok:true`, `status:"ok"`,
-`execution_mode` and `physical_execution`, adding this exact `camera` object:
+const base = "http://127.0.0.1:18767";
+const callerId = "frontend-development";
 
-```json
-{
-  "state": "streaming",
-  "simulated": false,
-  "frame_id": "1:1:42",
-  "age_ms": 23,
-  "content_type": "image/jpeg",
-  "image_base64": "<base64>",
-  "message": null
+async function callTool<T extends ToolName>(
+  name: T,
+  args: ToolArguments[T],
+  requestId = crypto.randomUUID(),
+): Promise<Response<T>> {
+  const response = await fetch(`${base}/tools/${name}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Drone-Expected-Mode": "mock",
+    },
+    body: JSON.stringify({
+      arguments: args,
+      caller_id: callerId,
+      request_id: requestId,
+    }),
+  });
+  return response.json();
 }
 ```
 
-States are `streaming`, `waiting`, `stopped`, or `unavailable`. Frame ID, age,
-content type, image and message are nullable. Image/content type are present only
-for a fresh streaming frame (PC decode age **<=500ms**, not aircraft exposure
-time). Live JPEGs have longest edge **<=960px**, decoded byte size **<=512KiB**,
-and one shared encode cache at **at most 5fps**, with no queued frame backlog.
-An unavailable/stale source is never relabeled as live. Expected source/encoding
-failures yield generic unavailable messages; malformed/auth requests use the
-existing error envelope without private endpoint or token details.
+TypeScript 파일의 상대 경로는 팀원의 폴더 구조에 맞춥니다.
+첫 호출은 capabilities이며 profile/site를 하드코딩하지 않습니다.
 
-Each `start` grants one of **four** caller-specific **5-second** preview leases.
-Only that caller's `start`/`frame` renews it; `stop` releases only that caller.
-A background expiry check releases abandoned viewers within approximately 5.1s.
-After expiration, `frame` reports stopped until a new explicit start. Preview
-requests are ephemeral and do not create durable mission admissions.
+```typescript
+const caps = await callTool("drone_get_capabilities", {});
+if (!caps.ok) throw new Error(caps.error.message);
 
-Phone video9999 admits one client, replacing the previous one. The live adapter
-and preview therefore share **one broker-owned FreshVideoStream**. Preview reads
-immutable decoded snapshots; only the mission invokes detection. Stopping or
-expiring preview cannot close the mission's stream, and mission cleanup preserves
-a still-viewed preview. Service shutdown cancels/waits for the mission before
-closing the broker. Transport loss remains observable and is not auto-reconnected;
-release all leases before a new explicit operation can open a new video transport.
-The independent legacy patrol stream retains its prior reconnect policy.
+const requestId = crypto.randomUUID(); // 동일 출발 의도에 하나만 생성
+const accepted = await callTool("drone_execute_route", {
+  profile_id: caps.profile_id,
+  site_revision: caps.site_revision,
+  destination_ids: ["tag-2", "tag-3", "tag-1"],
+}, requestId);
+if (!accepted.ok) throw new Error(accepted.error.message);
 
-Default mock preview uses only the canonical local
-`public/monitors/monitor-1.png` (640x400, within the bounds), explicitly labeled
-**MOCK fixture; not a live camera**, `simulated:true`, with PNG content type.
-Mock service/preview does not require PyAV, OpenCV, NumPy or AprilTag dependencies
-and never opens a phone connection. A missing fixture reports unavailable, never
-substitutes another image. The seven tool names and destination mapping are unchanged.
-
-## Windows setup and launch
-
-Use Node >=20.9, Python >=3.11 and the existing Azure credentials in backend-only
-environment variables. Install the root JavaScript lockfile dependencies with
-`npm ci`. Create isolated Python environments from the repository root:
-
-```powershell
-python -m venv relay/.venv
-relay/.venv/Scripts/python -m pip install -r relay/requirements.lock.txt
-python -m venv drone-control/.venv
-drone-control/.venv/Scripts/python -m pip install -e './drone-control[vision]'
+const missionId = accepted.mission.mission_id;
+// 같은 caller_id로 상태를 주기적으로 조회하며 임무 lease를 갱신합니다.
+const state = await callTool("drone_get_mission", { mission_id: missionId });
+const images = await callTool("drone_get_captures", { mission_id: missionId });
 ```
 
-Copy `drone-control/integration/control.env.example` to `.env.drone.local` and
-`relay/.env.example` settings into the same private file as needed. Set a random
-`DRONE_CONTROL_API_TOKEN` of at least 24 characters shared by the two backends.
-The script reads literal `KEY=value` lines; it does not evaluate shell expressions.
-Run each component in its own terminal:
+이 코드는 **mock용 개발 예제**입니다. 실제 PC Tools는 브라우저 Origin을
+거절하고 backend bearer를 요구하므로 실기에서는 relay/backend adapter가
+같은 계약을 호출해야 합니다. 실제 토큰을 브라우저에 넣거나 raw 기체 포트로
+직접 연결하는 구조로 바꾸지 않습니다.
 
-```powershell
-./scripts/start-drone.ps1 -Component control -EnvFile .env.drone.local
-./scripts/start-drone.ps1 -Component relay -EnvFile .env.drone.local
-./scripts/start-drone.ps1 -Component dashboard
-```
-
-Starting these processes does not start a mission. Default mode is mock, and the
-adapter selector defaults to legacy. Field execution requires all of:
+## 4. 프런트와 실제 백엔드 사이의 관계
 
 ```text
-DRONE_CONTROL_MODE=live
-DRONE_CONTROL_ENABLE_LIVE=1
-DRONE_CONTROL_ADAPTER=field
-DRONE_CONTROL_SITE_CONFIG=C:\private\field-site.local.json
-DRONE_CONTROL_CONFIG_PATH=C:\private\config.local.json
-DRONE_CONTROL_FIELD_PROFILE=C:\checkout\drone-control\trials\profiles\standalone_tag_6321236.json
-DRONE_CONTROL_FIELD_REFERENCE=C:\checkout\drone-control\trials\profiles\id1_tv_pair_reference.json
+프런트 개발:
+팀원 화면/adapter → 고정 v1 HTTP 계약 → 독립 Node mock
+                                      (우리 서비스 없어도 됨)
+
+실제 운용:
+기존 프런트/Voice → relay/backend adapter → 동일 v1 Tools 계약 → PC Tools → Android → 기체
 ```
 
-Use the relay's real-image analysis configuration separately. All paths must
-identify the intended local files; missing/invalid field settings fail, never fall
-back to legacy or mock. The private field site accepts exactly this schema:
+고정하는 경계는 **우리 7개 `drone_*` 도구의 HTTP 요청/응답**입니다.
+이 mock이 Voice 대화, 시나리오 점수, Azure 분석, DJI 비행 물리를 흉내 내지는 않습니다.
+기존 Voice의 `confirm_prompt`, `select_stop`, `confirm_route`, `launch_mission`은
+별도 상위 계약이며 `drone_*` 이름으로 교체하지 않습니다.
+
+모니터 매핑은 다음과 같습니다.
+
+| 프런트 ID | 우리 목적지 ID | 현장 태그 |
+|---|---|---|
+| `monitor-1` | `tag-1` | ID1 |
+| `monitor-2` | `tag-2` | ID2 |
+| `monitor-3` | `tag-3` | ID3 |
+| 목적지 아님 | Home | ID6 |
+| 목적지 아님 | 바닥 | ID0 |
+
+프런트 선택 `2→3→1`은 `["tag-2","tag-3","tag-1"]`입니다.
+우리 실제 경로는 **`6→2→3→1→6`**으로 확장됩니다. mock도 같은 순서 정보를
+보여줍니다. Home/바닥을 `destination_ids`에 넣지 않습니다.
+카드의 방문 순서 배지·배치 좌표는 태그 번호·물리 좌표와 별개입니다.
+
+현재 현장 계약은 목적지 1/2/3 각각 한 번, 총 3개이며 6가지 순서를 지원합니다.
+`tools.json`의 일반 배열 상한 32는 현재 목적지를 32개로 늘릴 수 있다는 뜻이 아닙니다.
+
+## 5. HTTP 요청 계약
+
+모든 tool 호출:
+
+```http
+POST /tools/{tool_name}
+Content-Type: application/json
+X-Drone-Expected-Mode: mock
+```
+
+```json
+{
+  "arguments": {},
+  "caller_id": "frontend-development",
+  "request_id": "one-command-id"
+}
+```
+
+| tool | `arguments`의 정확한 키 | 응답 데이터 |
+|---|---|---|
+| `drone_get_capabilities` | 없음 | 설정·매핑·허용 순서 |
+| `drone_get_status` | 없음 | 연결·지상·현재 임무 |
+| `drone_execute_route` | `profile_id`, `site_revision`, `destination_ids` | `mission` |
+| `drone_get_mission` | `mission_id` | `mission` |
+| `drone_stop_mission` | `mission_id` | `mission`, `stop_requested`, `physical_stop_confirmed` |
+| `drone_get_sensor_snapshot` | 없음 | `snapshot`, `sensor_semantics` |
+| `drone_get_captures` | `mission_id` | `mission_id`, `captures` |
+
+profile/site/mission/destination 인자는 1~64자 `[A-Za-z0-9_-]`입니다.
+caller/request ID는 1~128자이며 첫 글자는 영문/숫자, 나머지는 `_.:-`도 허용합니다.
+mode header `live`로 mock을 호출하면 dispatch 전에 `MODE_MISMATCH`입니다.
+
+일반 성공:
 
 ```json
 {
   "schema_version": 1,
-  "profile_id": "field-ordered-v1",
-  "site_revision": "replace-with-independent-private-site-revision",
-  "wall_ids_left_to_right": [3, 2, 1, 6],
-  "floor_tag_id": 0,
-  "home_tag_id": 6,
-  "target_height_m": 1.5,
-  "expected_bridge_build_id": "5.18-connectivity.20260910.6",
-  "layout_confirmed": false,
-  "field_setup_confirmed": false
+  "ok": true,
+  "status": "ok",
+  "execution_mode": "mock",
+  "physical_execution": false
 }
 ```
 
-Both confirmation booleans must independently be true for a prepared PC/site.
-Upstream profile `layout_confirmed=true` is not this confirmation. Private nav
-JSON must have calibrated camera intrinsics, `actual_measurements_confirmed=true`,
-the actual positive floor0 black-square size, current private non-loopback phone
-IP, and private non-placeholder confirmation token. Field's explicitly selected
-image-only-wall loader accepts only floor0 in `tags`, with `world_pose=null`;
-wall sizes/poses are neither required nor invented. Existing extra tag facts are
-preserved but never used for metric wall navigation. Legacy config validation
-and standalone CLI defaults are unchanged. Profile target must be 1.5m; reference
-band must be `[0.85,0.95]`. Do not treat sample dimensions/calibration as measurements.
+일반 오류:
 
-The service is loopback-only, rejects browser Origin requests and keeps tokens out
-of tools, browser bundles and logs. Raw flight JSONL, SQLite/captures, configs and
-APK files are local and excluded from Git. Do not run another flight controller
-against the same phone while this service owns a mission.
+```json
+{
+  "schema_version": 1,
+  "ok": false,
+  "execution_mode": "mock",
+  "physical_execution": false,
+  "error": {"code": "MISSION_BUSY", "message": "A mission is active"}
+}
+```
 
-## Android connectivity changes
+HTTP 상태와 `ok`를 모두 확인합니다. 400은 잘못된 인자/상태, 401은 선택적 mock
+인증 실패, 403은 허용되지 않은 origin/소유권 경계, 404는 없는 대상,
+409는 모드·중복 의도·임무 점유 충돌 등에 사용합니다.
+실제 오류 코드는 처리 기준이며 자연어 `message` 문자열에 로직을 묶지 않습니다.
 
-Required field source build: **5.18-connectivity.20260910.6**, versionCode **20260910**.
-The overlay implements bounded shared physical SDK reads, FC key health and
-actual motor telemetry, process/connection generations, transactional perception
-listeners, connection-owned query callbacks, camera-binding generations and
-Surface ownership. Automatic recovery is **off by default** and requires fresh
-ground/motors-off proof when enabled. There is no automatic re-arm or flight replay.
-Nonzero command freshness has a 300ms zero and 1000ms disable watchdog; STATUS and
-heartbeat do not refresh an old movement command. Video source/queue/socket/phone
-display evidence is kept separate so a black screen is not automatically called
-a network disconnection.
+## 6. 임무·방문·캡처
 
-The new APK must be installed on the phone to use these fixes. Source overlay
-details and the upstream sample baseline are in [Android README](../android/README.md).
-Existing historical counted trial scripts keep their original build requirement.
-The separate COEX runner accepts .4 and .5, requiring watchdog and fresh actual
-motor telemetry for .5. New-build execution still needs ground/hardware validation.
+임무 상태:
 
-## Verification and practical limits
+```text
+accepted → preflight → taking_off → running → returning
+                                             ↓
+                                    awaiting_rc_landing → completed
 
-### Legacy-only TV-left / tag-right capture framing
+실패/중단: failed, stop_requested, stopped, outcome_unknown
+```
 
-This section describes `DRONE_CONTROL_ADAPTER=legacy`, **not field**. Field uses
-the continuous 85–95% pair gate above and never invokes this older PULSE path.
+방문 상태: `pending → moving → arrived → captured`.
+`arrival_confirmed:true`와 `capture_ids`를 함께 사용합니다.
+HTTP 접수 성공과 실제 도착·완료는 다릅니다.
 
-The sample navigation config now opts into `patrol.tv_framing` for **scenario
-IDs 1/2/3 only**. Floor ID0 and forward Home ID6 retain their separate acquisition
-and return behavior. This is a reference composition for the operator's 32-inch
-TV mock: a TV on the left and its tag on the right, not a tag centred in the image.
+캡처 한 장의 필수 필드:
+`capture_id`, `mission_id`, `visit_index`, `destination_id`,
+`arrival_confirmed:true`, `content_type:"image/png"`, `image_base64`,
+`sha256`, `captured_at_unix_ms`.
 
-The tag centre must fall within **65–82% of decoded-frame width** and **25–60%
-of height**. The reference also reserves space from the tag centre: **6 tag
-widths left, 0.8 right, 1.5 tag heights above, 2.2 below**, with a **2% frame
-margin**. These adjustable image-space ratios come from the reference composition,
-not surveyed screen size, wall distance or tag-to-TV spacing. They include room
-for the shown mock but do **not detect a television** or prove that an arbitrary
-real TV fits. A different mount, gap, perspective or TV aspect ratio requires
-ground-level framing review before flight; no new measurement flag is asserted.
+목적지마다 서로 다른 PNG 두 장, 총 최대 6장입니다.
+`visit_index`는 0부터 시작하므로 순서 2→3→1에서 index0은 tag2입니다.
+표시할 때 `data:image/png;base64,`를 `image_base64` 앞에 붙입니다.
+SHA-256은 base64 문자열이 아닌 PNG 바이트 기준입니다.
 
-Framing uses the tag corners mapped back to the **raw decoded frame**, matching
-the full, uncropped image saved and sent to the VLM. This avoids treating
-undistorted detector coordinates as raw-image pixels. The same condition gates
-arrival, stationary photo dwell and the final two API PNG captures.
+mock PNG는 독립 모듈 안에서 생성한 가짜 이미지입니다. 실제 사진·시나리오
+이미지를 가져오지 않습니다. `simulated:true`, `physical_execution:false`,
+`physical_stop_confirmed:false`를 유지합니다.
+real-mode에서도 `physical_execution:true`는 실제 모드라는 뜻이지 조회 요청이
+비행을 실행했다는 뜻이 아닙니다.
 
-For these destination legs, tilt is capped at **0.5 degrees**, including stall
-recovery. When the expected tag is visible but the composition is outside the
-window, the controller **stops, observes, and applies small left/right-only
-corrections toward the TV-plus-tag composition**, even if the small lateral
-correction is opposite the route direction. It does not target the optical centre.
-Corrections aim slightly inside the nearest window edge, then stop anywhere
-inside the allowed window, avoiding continuous point chasing.
+`completed`, 시나리오 점수 완료, Voice 응답 종료를 혼동하지 않습니다.
+실제 현장 비행은 Home6 복귀 뒤 RC 수동 착륙과 신선한 지상 증거가 필요합니다.
+이 mock은 그 상태 전이만 재현하고 실제 착륙 성공을 증명하지 않습니다.
 
-Correction pulses are separated by at least **0.3s**; the next control iteration
-sends zero. Framing always commands **zero vertical velocity**; the configuration
-requires `tv_framing.max_vertical_speed_mps=0`. A **0.15m** height tolerance around
-the current profile's **1.4m** target remains a safety gate, not permission to
-change height. Ordinary takeoff/ascent and altitude-hold behavior are unchanged.
-Corrections stop after
-**8s** or **0.4m of travel estimated from measured velocity**, whichever comes
-first. These are software command/evidence budgets, not a guarantee of physical
-stopping distance. Fresh tag frames, finite recent height/velocity/heading,
-airborne MSDK authority and battery >=30% are required. Motion above 0.15m/s is
-held before another pulse; missing/stale evidence, a camera-generation change,
-RC takeover or an exceeded budget prevents further correction.
+## 7. 중복 호출·연결 실패·소유권
 
-Once framed, the controller sends zero and waits for fresh, low-speed frames
-before photographing. The same bounded correction can reacquire the composition
-if it drifts horizontally during dwell or before the final PNG captures.
-A vertical mismatch or insufficient room for the entire reference stops/withholds
-capture: it does **not** rise/fall, fly forward/backward, rotate yaw or infer a new
-wall distance automatically. Align the TV/tag mounting and camera view on the
-ground when their vertical framing is unsuitable.
-Home ID6 and floor ID0 acquisition/return settings are unchanged. The capture
-metadata deliberately retains `tv_visibility_verified=false`.
+- 출발/정지는 business request ID를 하나만 생성합니다.
+- 같은 caller/request와 같은 내용은 같은 접수 결과입니다.
+- 같은 ID의 내용이 달라지면 `IDEMPOTENCY_CONFLICT`입니다.
+- 응답이 유실되어도 새 ID로 다시 출발하지 않습니다.
+- `GET /requests/{caller_id}/{request_id}`로 원래 접수를 확인합니다.
+- 임무 조회·촬영·정지는 원래 caller가 수행합니다.
+- `drone_get_mission`을 주기적으로 호출해 기본 10초 lease를 갱신합니다.
+- 임무 점유/unknown을 화면 초기화만으로 지우지 않습니다.
+- mock 데이터는 **메모리**에 있으므로 프로세스 재시작 시 초기화됩니다.
+  실제 PC Tools의 SQLite 재시작 복구·영속성은 mock이 보장하지 않는 별도 동작입니다.
 
-Existing private configs do not automatically gain the sample setting. Copy the
-`tv_framing` object into their `patrol` object to opt in; omitting it preserves the
-legacy broad-view policy. Neither this configuration change nor the screenshot
-is evidence of calibrated camera intrinsics/extrinsics or a safe measured site.
+## 8. 팀원이 재현할 mock 시나리오
 
-Build/test results are recorded in `IMPLEMENTATION_VALIDATION_20260910.md` after
-the final integration checks. Pure tests and APK compilation do not prove that
-DJI's internal FC error has disappeared or that a phone's video is fixed in hardware.
-No live flight or paid Azure request is made by offline tests. The scenario's
-current 18/28/45-second deadlines include actual travel and analysis; whether all
-destinations are reachable in those windows must be measured, not replaced with
-the old seven-second simulated travel time.
+| `--scenario` | 개발할 화면/오류 처리 |
+|---|---|
+| `nominal` | 전체 순서·2장씩 캡처·복귀·모의 착륙 |
+| `preflight-failure` | 접수됐지만 비행 준비에서 실패 |
+| `camera-unavailable` | 도착했지만 이미지 없음 |
+| `connection-loss` | 연결 끊김·unknown·점유 유지 |
+| `manual-landing` | 복귀 후 모의 RC 착륙 신호 대기 |
+| `lost-ack` | 접수는 됐지만 첫 출발 응답만 유실 |
+
+mock 전용 엔드포인트:
+
+| 경로 | 용도 |
+|---|---|
+| `GET /health` | 독립 mock 프로세스 확인 |
+| `GET /tools.json` | 고정 tool 인자 schema |
+| `GET /contract.schema.json` | 고정 envelope/response schema |
+| `GET /mock/status` | 모의 상태·시나리오 확인 |
+| `POST /mock/land` | `{"mission_id":"...","caller_id":"..."}`로 모의 착륙 신호 |
+
+`/mock/*`는 실제 PC Tools에 없습니다. 프런트의 실제 API adapter에 이 경로를
+필수 의존성으로 넣지 않습니다. 테스트 harness에서만 사용합니다.
+
+## 9. 프런트 변경 시 기준
+
+| 변경 | 고정 계약에 미치는 영향 |
+|---|---|
+| 디자인·카드 배치 | 없음. ID와 상태 의미 유지 |
+| UI 프레임워크 | 없음. HTTP 계약과 타입을 사용 |
+| endpoint 주소 | adapter의 base URL만 구성. 실기는 backend proxy/auth 필요 |
+| 화면에 optional 진단 필드 추가 | required로 가정하지 않음 |
+| 목적지 개수/ID 변경 | capabilities와 버전 계약 합의 필요 |
+| 필수 field/type/상태 의미 변경 | 새 계약 버전 필요. 기존 v1 유지 |
+| Voice 대화/확인 문구 변경 | 다른 팀 영역. 이 mock에서 처리하지 않음 |
+
+이전 `relay.frontend_lab`는 우리 Python 서비스 재사용을 위한 내부 시험기였으며,
+프런트 팀 독립 실행 요구를 충족하는 배포 단위가 아닙니다. 팀원은 이 문서의
+**`contracts/drone-tools/v1`만** 사용합니다. ZIP이나 우리 PC 실행을 기다릴 필요가 없습니다.

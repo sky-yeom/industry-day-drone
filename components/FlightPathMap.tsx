@@ -1,7 +1,10 @@
 "use client";
 
 import Image from "next/image";
+import { useEffect, useState } from "react";
+import DroneImagePanel from "@/components/DroneImagePanel";
 import { formatRoute, MONITOR_MAP, MONITORS } from "@/data/monitors";
+import { BOARDING_MIRRORED, MAP_MARKER_ENTRY, MAP_MARKER_HEIGHT, MAP_MARKER_SRC, MAP_MARKER_WIDTH } from "@/lib/gibbyDroneSprite";
 import { OUTCOME_LABELS, type DashboardState } from "@/lib/types";
 
 export const MISSION_LABELS: Record<DashboardState["missionPhase"], string> = {
@@ -41,9 +44,19 @@ export function MissionCountdownSummary({ state, elapsedMs, connected }: {
  * art (data/emergency-triage.json monitor x/y were remapped to match this
  * art); pins stay hidden until the user picks that stop into the route,
  * then pop in, and a dashed path connects picked pins in the order chosen.
+ *
+ * This screen now also persists through the whole mission (no separate
+ * full-screen "images" step anymore, see app/page.tsx): once Gibby boards
+ * the drone (`boarded`), a small live drone marker eases between pins on
+ * the map tracking `state.activeMonitorId` in real time, and the right
+ * column swaps from the clue cards below to the drone-image panel + the
+ * 3 rescue timers.
  */
-export default function FlightPathMap({ state }: {
+export default function FlightPathMap({ state, boarded = false, elapsedMs, connected }: {
   state: DashboardState;
+  boarded?: boolean;
+  elapsedMs: number;
+  connected: boolean;
 }) {
   const route = state.confirmedRoute.length ? state.confirmedRoute : state.draftRoute;
   const isConfirmed = state.phase === "confirmed";
@@ -52,6 +65,28 @@ export default function FlightPathMap({ state }: {
     .map((monitor) => ({ monitor, order: route.indexOf(monitor.id) }))
     .filter((entry) => entry.order >= 0)
     .sort((a, b) => a.order - b.order);
+  // Live drone marker target: the site the backend is actually working
+  // (state.activeMonitorId) once boarding has finished, falling back to the
+  // first confirmed stop before the backend has reported an active site yet
+  // (e.g. right after launch, still climbing out).
+  const activeMonitorId = state.activeMonitorId ?? route[0] ?? null;
+  const droneMarkerMonitor = boarded && activeMonitorId ? MONITOR_MAP[activeMonitorId] : null;
+  // Entrance: mount at the off-map corner (MAP_MARKER_ENTRY, roughly where
+  // Gibby's dock overlay visually sits) then flip to the real target
+  // position one frame later, so the very first move is an actual CSS
+  // transition (flying in from the corner) rather than appearing already
+  // on the pin — same mount-then-flip-a-frame-later pattern used for
+  // .drone-fly-in--docked in GibbyDroneBoarding.
+  const [markerArrived, setMarkerArrived] = useState(false);
+  useEffect(() => {
+    if (!boarded) {
+      const id = window.setTimeout(() => setMarkerArrived(false), 0);
+      return () => window.clearTimeout(id);
+    }
+    const id = requestAnimationFrame(() => setMarkerArrived(true));
+    return () => cancelAnimationFrame(id);
+  }, [boarded]);
+  const markerPos = markerArrived && droneMarkerMonitor ? droneMarkerMonitor : MAP_MARKER_ENTRY;
 
   return <section className="flex h-full min-h-0 w-full flex-col gap-3 p-3 sm:p-4">
     <div className="flex shrink-0 items-center justify-between gap-3 px-1">
@@ -63,7 +98,7 @@ export default function FlightPathMap({ state }: {
         <p className="mt-1 text-xs font-semibold text-[#091f2c]">{route.length ? formatRoute(route) : "첫 번째로 갈 곳을 말해주세요"}</p>
       </div>
       <div className="shrink-0 text-right">
-        <span className={`pixel-panel px-3 py-1.5 text-xs font-semibold ${isConfirmed ? "bg-[#0078d4] text-white" : "bg-white text-[#463668]"}`}>
+        <span className={`pixel-panel px-3 py-1.5 text-xs font-semibold text-[#091f2c] ${isConfirmed ? "bg-[#0078d4]" : "bg-white"}`}>
           {isConfirmed ? "경로 확정" : route.length === 3 ? "확정 대기" : "경로 구성 중"}
         </span>
       </div>
@@ -108,16 +143,37 @@ export default function FlightPathMap({ state }: {
             </div>
           </div>;
         })}
+        {boarded && (
+          <div
+            aria-label="드론 현재 위치" role="img"
+            className="absolute z-30 -translate-x-1/2 -translate-y-1/2 transition-[left,top] duration-[2800ms] ease-in-out"
+            style={{ left: `${markerPos.x}%`, top: `${markerPos.y}%` }}
+          >
+            <div
+              className="pixel-rendering drop-shadow-[2px_2px_0_#091f2c]"
+              style={{ width: MAP_MARKER_WIDTH, height: MAP_MARKER_HEIGHT, transform: BOARDING_MIRRORED ? "scaleX(-1)" : undefined }}
+            >
+              <Image src={MAP_MARKER_SRC} alt="" width={MAP_MARKER_WIDTH} height={MAP_MARKER_HEIGHT} unoptimized className="pixel-rendering h-full w-full object-contain" />
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className="flex min-h-0 flex-col gap-2 overflow-y-auto">
-        {MONITORS.map((monitor) => {
+      <div className={`flex min-h-0 flex-col gap-2 ${boarded ? "" : "overflow-y-auto"}`}>
+        {boarded ? (
+          <>
+            <div className="pixel-panel shrink-0 bg-white p-3">
+              <MissionCountdownSummary state={state} elapsedMs={elapsedMs} connected={connected} />
+            </div>
+            <div className="min-h-0 flex-1"><DroneImagePanel captures={state.captures} /></div>
+          </>
+        ) : MONITORS.map((monitor) => {
           const person = state.people.find((entry) => entry.monitorId === monitor.id);
           const order = route.indexOf(monitor.id);
           return <article key={monitor.id}
             className={`pixel-panel shrink-0 p-3 ${order >= 0 ? isConfirmed ? "bg-[#eaf3fb]" : "bg-[#f0ebf7]" : "bg-white"}`}>
-            <h3 className="text-xs font-semibold text-[#091f2c]">{monitor.label} <span className="font-normal text-[#8661c5]">{order >= 0 ? `· ${order + 1}번째 방문` : ""}</span></h3>
-            <p className="mt-1 text-[11px] leading-snug text-[#5c4738]">{person?.clue}</p>
+            <h3 className="text-xs font-semibold text-[#091f2c]">{monitor.label} <span className="font-normal text-[#091f2c]">{order >= 0 ? `· ${order + 1}번째 방문` : ""}</span></h3>
+            <p className="mt-1 text-[11px] leading-snug text-[#091f2c]">{person?.clue}</p>
           </article>;
         })}
       </div>

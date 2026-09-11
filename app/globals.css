@@ -335,3 +335,36 @@ input {
     transition: none !important;
   }
 }
+
+/* Route -> drone-image handoff (components/GibbyDroneBoarding.tsx): the
+   drone flies up from below the viewport to Gibby's docked corner before
+   he boards it. Plain `bottom` transition (not transform), matching
+   .gibby-travel's own reasoning above — percentage math stays simple and
+   there's nothing else animating on this element at the same time. */
+.drone-fly-in {
+  bottom: -60%;
+  transition: bottom 0.8s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.drone-fly-in--docked {
+  bottom: 16%;
+}
+
+/* Ground permanently retreats once Gibby boards the drone (see
+   components/PixelGround.tsx's `hidden` prop) — slides straight down out
+   of view rather than fading, consistent with the ground never using
+   opacity transitions elsewhere in this file. */
+.pixel-ground--hidden {
+  transform: translateY(100%);
+  transition: transform 0.9s cubic-bezier(0.4, 0, 1, 1);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drone-fly-in {
+    transition: none !important;
+  }
+  .pixel-ground--hidden {
+    transition: none !important;
+  }
+}

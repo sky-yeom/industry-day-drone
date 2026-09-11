@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import FlightPathMap, { MissionCountdownSummary } from "@/components/FlightPathMap";
-import DroneImagePanel from "@/components/DroneImagePanel";
+import FlightPathMap from "@/components/FlightPathMap";
+import GibbyDroneBoarding from "@/components/GibbyDroneBoarding";
 import GibbyIntroSequence from "@/components/GibbyIntroSequence";
 import GibbyMapTransition from "@/components/GibbyMapTransition";
 import GibbyRouteDock from "@/components/GibbyRouteDock";
@@ -18,10 +18,12 @@ const INITIAL_STATE: DashboardState = { ...INITIAL_ROUTE_STATE, ...INITIAL_MISSI
 // steps. "opening" covers the Gibby intro + prompt screen together (see
 // components/GibbyIntroSequence.tsx); "map-intro" is the pocket/map-finding
 // handoff (components/GibbyMapTransition.tsx) that plays once before the
-// route step; route/images/results are separate steps swapped in
-// automatically by the same relay-driven signals that used to just switch
-// the active tab.
-type Step = "opening" | "map-intro" | "route" | "images" | "results";
+// route step. "route" now persists for the whole mission (map + right
+// column) — once the mission launches, GibbyDroneBoarding plays in place
+// of GibbyRouteDock and, once boarded, the right column swaps over to the
+// drone-image panel (see components/FlightPathMap.tsx); only "results" is
+// still a separate step, reached automatically at mission end.
+type Step = "opening" | "map-intro" | "route" | "results";
 
 export default function Home() {
   const [step, setStep] = useState<Step>("opening");
@@ -33,6 +35,7 @@ export default function Home() {
   const [config, setConfig] = useState<RelayConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [debrief, setDebrief] = useState("");
+  const [boarded, setBoarded] = useState(false);
   const sessionRef = useRef<VoiceSession | null>(null);
   const generationRef = useRef(0);
   const advancedToCapturesRef = useRef(false);
@@ -77,6 +80,7 @@ export default function Home() {
     setTranscript([]);
     setError(null);
     setDebrief("");
+    setBoarded(false);
   }, []);
 
   const start = useCallback(() => {
@@ -96,7 +100,6 @@ export default function Home() {
       onDeparture: () => {
         if (!current() || advancedToResultsRef.current) return;
         advancedToCapturesRef.current = true;
-        setStep("images");
       },
       onLevel: () => {},
       onDebrief: (text) => { if (current()) setDebrief(text); },
@@ -198,18 +201,12 @@ export default function Home() {
   </>;
 
   if (step === "route") return <div className="relative h-dvh w-full">
-    <PixelShell banners={banners}><FlightPathMap state={state} /></PixelShell>
-    <GibbyRouteDock agentText={agentText} />
+    <PixelShell banners={banners} groundHidden={boarded}>
+      <FlightPathMap state={state} boarded={boarded} elapsedMs={elapsedMs} connected={connected} />
+    </PixelShell>
+    {missionLaunched && !boarded && <GibbyDroneBoarding onBoarded={() => setBoarded(true)} />}
+    {!missionLaunched && <GibbyRouteDock agentText={agentText} />}
   </div>;
 
-  if (step === "images") return <PixelShell banners={banners}>
-    <div className="flex h-full min-h-0 flex-col gap-2">
-      {missionLaunched && <div className="pixel-panel shrink-0 bg-white p-3">
-        <MissionCountdownSummary state={state} elapsedMs={elapsedMs} connected={connected} />
-      </div>}
-      <div className="min-h-0 flex-1"><DroneImagePanel captures={state.captures} /></div>
-    </div>
-  </PixelShell>;
-
-  return <PixelShell banners={banners}><ResultsPanel state={state} debrief={debrief} onReset={reset} /></PixelShell>;
+  return <PixelShell banners={banners} groundHidden><ResultsPanel state={state} debrief={debrief} onReset={reset} /></PixelShell>;
 }

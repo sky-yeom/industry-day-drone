@@ -27,6 +27,7 @@ class FakeVision:
         self.calls = []
         self.search_prompts = []
         self.appearance_constraints = []
+        self.scene_contexts = []
         self.results = []
         self.block = None
         self.cancelled = False
@@ -35,10 +36,12 @@ class FakeVision:
     def readiness(self):
         return self.error
 
-    async def analyze(self, frame, target, *, search_prompt="", appearance_constraints=None, unsupported_appearance=None):
+    async def analyze(self, frame, target, *, search_prompt="", appearance_constraints=None,
+                      unsupported_appearance=None, scene_context=None):
         self.calls.append((frame, target))
         self.search_prompts.append(search_prompt)
         self.appearance_constraints.append((appearance_constraints, unsupported_appearance))
+        self.scene_contexts.append(scene_context)
         if self.block is not None:
             try:
                 await self.block.wait()
@@ -103,6 +106,11 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.data["score"]["injuredCount"], 1)
         self.assertEqual(self.vision.search_prompts, [participant_instruction] * 3)
         self.assertEqual(self.vision.appearance_constraints, [(requested, [])] * 3)
+        self.assertEqual(self.vision.scene_contexts, [
+            {"monitor_id": monitor, "label": self.session.person(monitor)["label"],
+             "report": self.session.person(monitor)["clue"]}
+            for monitor in self.camera.calls
+        ])
         for frame, target in self.vision.calls:
             displayed = next(c for c in self.session.data["captures"] if c["id"] == frame.id)
             self.assertEqual(displayed["imageUrl"], frame.image_url)

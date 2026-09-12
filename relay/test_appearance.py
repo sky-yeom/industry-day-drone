@@ -53,15 +53,15 @@ class AppearanceTests(unittest.TestCase):
         for prompt, target in ((False, True), (True, False), (False, False)):
             with self.subTest(prompt=prompt, target=target):
                 evidence = validate_analysis({
-                    "matchesPrompt": prompt, "matchesTarget": target,
+                    "matchesPrompt": prompt, "matchesTarget": target, "needsRescue": True,
                     "description": "보이는 사람의 외형과 요청 또는 구조 대상의 조건이 일치하지 않습니다.",
                     "box": None,
                 })
                 self.assertFalse(evidence["targetPresent"])
         positive = validate_analysis({
-            "matchesPrompt": True, "matchesTarget": True,
+            "matchesPrompt": True, "matchesTarget": True, "needsRescue": True,
             "description": "초록색 티셔츠와 갈색 머리의 사람이 요청한 모습에 맞게 보입니다.",
-            "box": [0.1, 0.1, 0.2, 0.3],
+            "box": None,
         })
         self.assertTrue(positive["targetPresent"])
         for invalid in (

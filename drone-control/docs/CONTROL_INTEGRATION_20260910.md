@@ -44,7 +44,9 @@ Test는 화면에 결과만 덮어씌우거나 기존 타이머 실행기로 우
 4. 순서·방문 상태·모의 이미지·결과가 대시보드에 전달되는지 확인합니다.
 
 음성은 Test에서도 **기존 Azure Voice**를 사용합니다. 마이크 권한과 기존 배포의
-Voice 리소스 접근은 필요합니다. 드론과 이미지 분석 호출은 모의 처리입니다.
+Voice 리소스 접근은 필요합니다. **기본 Test는 드론만 모의 처리하고 VLM은 실제 Azure를 호출**합니다.
+`public/monitors`의 해당 원본 이미지를 촬영 대용으로 전달하며, 분석 시간도 시나리오 시한에 반영합니다.
+자동화에서 외부 호출 없이 계약만 검사하려면 `TRIAGE_MODE=mock`을 명시합니다.
 `/ws?voice=0`은 자동화된 프로토콜 시험용이며, 기존 UI의 음성 사용법을 바꾸지 않습니다.
 
 relay의 `/api/config`에서 다음 값을 확인할 수 있습니다.
@@ -52,6 +54,7 @@ relay의 `/api/config`에서 다음 값을 확인할 수 있습니다.
 ```json
 {
   "runMode": "test",
+  "mode": "azure",
   "droneControlMode": "mock",
   "droneControlUseTools": true,
   "droneControlTransport": "inprocess",
@@ -66,7 +69,8 @@ relay의 `/api/config`에서 다음 값을 확인할 수 있습니다.
 
 기존 배포처럼 `RELAY_HOST=0.0.0.0`이고 `DRONE_RUN_MODE`가 없으면 Test를 기본으로
 선택합니다. 단, 명시적인 기존 `DRONE_CONTROL_MODE=live`는 자동으로 바꾸지 않습니다.
-기존 mock용 remote/triage 설정은 이 Test 선택에서 덮어쓰며 실제 토큰을 사용하지 않습니다.
+기존 mock용 remote 설정은 이 Test 선택에서 덮어쓰며 실제 PC 토큰을 사용하지 않습니다.
+이미지 분석은 `TRIAGE_MODE=azure|mock`으로 별도 선택하며 미지정 시 Azure입니다.
 로컬의 모드 미지정 실행은 기존 설정 방식을 유지합니다.
 
 ## B. 개발 PC에서 같은 화면으로 Test ↔ Real
@@ -76,7 +80,10 @@ relay의 `/api/config`에서 다음 값을 확인할 수 있습니다.
 
 ```powershell
 # Test: 기존 UI + relay만 시작. mock용 Node 서버/PC 서비스는 시작하지 않음.
-.\scripts\start-integrated.ps1 -Mode Test
+.\scripts\start-integrated.ps1 -Mode Test -AnalysisMode Azure
+
+# 외부 AI 호출 없이 계약만 검사할 때 명시적으로 선택
+.\scripts\start-integrated.ps1 -Mode Test -AnalysisMode Mock
 
 # 기존 세션과 실행을 종료한 다음 Real로 새로 시작.
 # 실제 PC 설정은 저장소 밖의 기존 개인 설정 파일을 사용.
@@ -95,8 +102,9 @@ relay의 `/api/config`에서 다음 값을 확인할 수 있습니다.
 
 | 선택 | Tools 대상 | 이미지 분석 | 필요한 실제 준비 |
 |---|---|---|---|
-| Test 기본 | 내장 mock, 추가 포트 없음 | 생성된 MOCK PNG의 결정적 결과 | 드론·실제 토큰 불필요 |
-| Test + `DRONE_TEST_API_URL` | 명시한 loopback 독립 HTTP mock | 같은 모의 분석 | 선택적 Node mock 개발 환경 |
+| Test 기본 | 내장 mock, 추가 포트 없음 | 원본 현장 PNG를 실제 Azure VLM으로 분석 | Azure VLM·Voice 설정, 드론·PC 토큰 불필요 |
+| Test + `TRIAGE_MODE=mock` | 내장 mock, 추가 포트 없음 | 생성된 MOCK PNG의 결정적 결과 | 계약 시험용, VLM 미호출 |
+| Test + `DRONE_TEST_API_URL` + `TRIAGE_MODE=mock` | 명시한 loopback 독립 HTTP mock | 생성된 MOCK PNG의 모의 분석 | 선택적 Node mock 개발 환경 |
 | 로컬 Real | `127.0.0.1:8766` PC Tools | 실제 Azure 이미지 분석 | 실제 nav/site·PC 토큰·APK·연결·지상 조건 |
 | 배포 Real | 기존 원격 PC 커넥터 | 실제 Azure 이미지 분석 | 장치 인증·운영자 인증·커넥터·단일 replica |
 
@@ -389,8 +397,10 @@ HTTP 접수 성공과 실제 도착·완료는 다릅니다.
 표시할 때 `data:image/png;base64,`를 `image_base64` 앞에 붙입니다.
 SHA-256은 base64 문자열이 아닌 PNG 바이트 기준입니다.
 
-mock PNG는 독립 모듈 안에서 생성한 가짜 이미지입니다. 실제 사진·시나리오
-이미지를 가져오지 않습니다. `simulated:true`, `physical_execution:false`,
+독립 Node mock과 `TRIAGE_MODE=mock`의 PNG는 생성한 가짜 이미지입니다.
+내장 Test + Azure는 `public/monitors` 원본을 사용하며 두 번째 프레임은 같은
+고정 이미지의 반복임을 표시합니다. 이는 실제 두 번의 촬영이나 기체 구도 보정 증거가 아닙니다.
+`simulated:true`, `physical_execution:false`,
 `physical_stop_confirmed:false`를 유지합니다.
 real-mode에서도 `physical_execution:true`는 실제 모드라는 뜻이지 조회 요청이
 비행을 실행했다는 뜻이 아닙니다.
@@ -398,6 +408,28 @@ real-mode에서도 `physical_execution:true`는 실제 모드라는 뜻이지 �
 `completed`, 시나리오 점수 완료, Voice 응답 종료를 혼동하지 않습니다.
 실제 현장 비행은 Home6 복귀 뒤 RC 수동 착륙과 신선한 지상 증거가 필요합니다.
 이 mock은 그 상태 전이만 재현하고 실제 착륙 성공을 증명하지 않습니다.
+
+### VLM 프롬프트와 구조 대상 판정
+
+Azure VLM은 촬영 이미지 전체에서 참가자의 검색 조건에 맞는 후보를 찾고,
+같은 후보에게 구조가 필요한 시각적 근거가 있는지 별도로 판단합니다.
+현재 방문의 `monitorId`, 현장명, 신고 내용은 임무 실행기가 함께 전달합니다.
+신고는 맥락이며 이미지에서 확인한 사실이나 의학적 부상 판정을 대신하지 않습니다.
+
+모델 내부 출력은 `matchesPrompt`, `matchesTarget`, `needsRescue`, `description`,
+`box` 다섯 필드입니다. 사용자 조건·대상 외형·구조 필요 근거가 모두 참일 때만
+기존 `targetPresent`로 변환합니다. `needsRescue:false`는 안전하다는 뜻이 아니라
+이미지에서 구조 필요 근거를 확인하지 못했다는 뜻입니다.
+
+좌표는 생성하지 않으며 `box`는 항상 `null`입니다. 외부 Tools·대시보드 필드는
+유지하고, 기존 화면은 대상 확인 상태와 이미지를 표시하되 사각형만 생략합니다.
+관찰 설명은 캡처 근거에 저장되지만 현재 이미지 패널이 본문을 직접 표시하지는 않습니다.
+
+모델 판정은 세 boolean으로 결정하며, `남성` 같은 정상 표현이나 주변 물체에
+대한 부정 표현 때문에 설명문 전체를 거절하지 않습니다. JSON 필드·타입,
+한국어 설명의 길이·형식, 임무·이미지 연결 검사는 유지합니다.
+구조 성공·부상 구조·시간 초과·점수는 기존 분석 반영 시각과 시나리오 규칙으로
+계산합니다. VLM의 대상 발견은 실기체 비행 완료나 구조 성공을 뜻하지 않습니다.
 
 ## 7. 중복 호출·연결 실패·소유권
 

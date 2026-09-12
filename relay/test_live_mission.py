@@ -113,6 +113,10 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.commands("drone_execute_route"), [])
 
     async def test_whole_route_once_waits_for_actual_arrival_and_matching_frames(self):
+        self.vision.results = [
+            {"targetPresent": True, "description": "초록색 티셔츠와 갈색 머리의 남성이 보입니다.", "box": None}
+            for _ in range(3)
+        ]
         first, second = await asyncio.gather(self.runner.launch(), self.runner.launch())
         self.assertTrue(first["ok"] and second["ok"])
         await settle(lambda: len(self.commands("drone_get_mission")) >= 3)
@@ -124,6 +128,12 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
         await settle(lambda: self.session.phase == "complete")
         self.assertEqual([c["monitorId"] for c in self.session.data["captures"]], ["monitor-3", "monitor-1", "monitor-2"])
         self.assertEqual([c["visitIndex"] for c in self.session.data["captures"]], [0, 1, 2])
+        self.assertTrue(all(c["evidence"]["box"] is None for c in self.session.data["captures"]))
+        self.assertEqual(self.vision.scene_contexts, [
+            {"monitor_id": monitor, "label": self.session.person(monitor)["label"],
+             "report": self.session.person(monitor)["clue"]}
+            for monitor in ("monitor-3", "monitor-1", "monitor-2")
+        ])
         self.assertTrue(all(frame.image_bytes == png() for frame, _ in self.vision.calls))
         self.assertEqual(self.session.data["droneStopState"], "not_requested")
         self.backend.mission.update(state="awaiting_rc_landing", physical_stop_confirmed=True)

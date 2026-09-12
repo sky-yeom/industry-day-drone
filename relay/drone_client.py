@@ -97,7 +97,8 @@ class DroneClient:
                 from .contract_mock import create_transport
             else:
                 from contract_mock import create_transport
-            self._transport = create_transport(caller_id)
+            self._transport = create_transport(caller_id, capture_source=(
+                "monitor_fixture" if config.TRIAGE_MODE == "azure" else "synthetic_fixture"))
         elif config.DRONE_CONTROL_TRANSPORT == "remote":
             try:
                 from .device_hub import get_device_hub
@@ -114,6 +115,8 @@ class DroneClient:
     def readiness(self):
         if self._hub is not None:
             return None if self._hub.connected else "원격 PC가 연결되어 있지 않습니다. PC 커넥터를 확인하세요."
+        if self._embedded:
+            return self._transport.readiness()
         return None if self._token or self._test_target else "DRONE_CONTROL_API_TOKEN을 relay와 PC 서비스에 설정해야 합니다."
 
     async def _remote(self, name, envelope):

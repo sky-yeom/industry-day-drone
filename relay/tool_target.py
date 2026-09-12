@@ -59,6 +59,9 @@ def resolve_tool_target(environ: Mapping[str, str] | None = None) -> ToolTarget:
         raise ValueError("DRONE_RUN_MODE must be test or real when set; unset it for legacy behavior.")
     if mode == "test":
         external = "DRONE_TEST_API_URL" in env
+        analysis = env.get("TRIAGE_MODE", "azure").strip().lower()
+        if analysis not in {"azure", "mock"}:
+            raise ValueError("TRIAGE_MODE must be azure or mock; flight Test does not imply mock analysis.")
         return ToolTarget(
             run_mode=mode,
             control_mode="mock",
@@ -66,7 +69,7 @@ def resolve_tool_target(environ: Mapping[str, str] | None = None) -> ToolTarget:
             api_token=env.get("DRONE_TEST_API_TOKEN", "").strip() if external else "",
             transport="local" if external else "inprocess",
             use_tools=True,
-            triage_mode="mock",
+            triage_mode=analysis,
         )
     transport = env.get("DRONE_REAL_TRANSPORT",
                         "remote" if env.get("RELAY_HOST") == "0.0.0.0" else "local").strip().lower()

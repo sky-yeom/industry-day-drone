@@ -28,11 +28,13 @@ NEGATIVE = {
     "description": "바다와 파도만 보이며 초록색 옷을 입고 갈색 머리를 한 사람은 보이지 않습니다.",
     "box": None,
 }
+AZURE_POSITIVE = dict(POSITIVE, box=None)
 
 
-def completion(evidence=POSITIVE, *, finish_reason="stop", refusal=None):
+def completion(evidence=AZURE_POSITIVE, *, finish_reason="stop", refusal=None):
     observation = {
         "matchesPrompt": evidence["targetPresent"], "matchesTarget": evidence["targetPresent"],
+        "needsRescue": evidence["targetPresent"],
         "description": evidence["description"], "box": evidence["box"],
     }
     return {
@@ -60,6 +62,52 @@ def fake_http(body, *, status=200):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_person_nouns_do_not_gate_positive_observations(self):
+        for noun in ("남성", "여성", "소년", "소녀", "아이"):
+            with self.subTest(noun=noun):
+                evidence = dict(AZURE_POSITIVE, description=(
+                    f"중앙 창문에서 초록색 티셔츠와 갈색 머리의 {noun}이 몸을 내밀고 있습니다. "
+                    "창틀을 잡고 있으며 주변에 불길이 보입니다."))
+                self.assertEqual(validate_evidence(evidence), evidence)
+
+    def test_model_observations_require_null_box_but_legacy_evidence_remains_valid(self):
+        for box in ([0.1, 0.1, 0.2, 0.3], [0.47, 0.58, 0.38, 0.64]):
+            with self.subTest(box=box), self.assertRaisesRegex(VisionError, "box=null"):
+                validate_analysis({
+                    "matchesPrompt": True, "matchesTarget": True, "needsRescue": True,
+                    "description": AZURE_POSITIVE["description"], "box": box,
+                })
+        self.assertEqual(validate_evidence(POSITIVE), POSITIVE)
+
+    def test_rescue_need_is_required_in_addition_to_both_appearance_matches(self):
+        for prompt in (False, True):
+            for target in (False, True):
+                for rescue in (False, True):
+                    with self.subTest(prompt=prompt, target=target, rescue=rescue):
+                        result = validate_analysis({
+                            "matchesPrompt": prompt, "matchesTarget": target, "needsRescue": rescue,
+                            "description": "초록색 티셔츠와 갈색 머리의 남성이 잔해 아래에 있습니다.",
+                            "box": None,
+                        })
+                        self.assertEqual(result["targetPresent"], prompt and target and rescue)
+                        self.assertEqual(set(result), {"targetPresent", "description", "box"})
+
+    def test_structured_rescue_verdict_is_not_overridden_by_incidental_negation(self):
+        observation = {
+            "matchesPrompt": True, "matchesTarget": True, "needsRescue": True,
+            "description": "구조 필요 대상: 초록색 티셔츠와 갈색 머리의 남성이 물속에서 손을 들고 있습니다. "
+                           "구명환은 보이지 않으며 물에 잠긴 몸을 지탱하고 있습니다.",
+            "box": None,
+        }
+        self.assertTrue(validate_analysis(observation)["targetPresent"])
+        for invalid in (None, 1, "true"):
+            with self.subTest(needsRescue=invalid), self.assertRaises(VisionError):
+                validate_analysis(dict(observation, needsRescue=invalid))
+        missing = dict(observation)
+        del missing["needsRescue"]
+        with self.assertRaises(VisionError):
+            validate_analysis(missing)
+
     def test_direct_script_imports_without_repository_on_python_path(self):
         result = subprocess.run(
             [
@@ -234,7 +282,7 @@ class AzureTests(unittest.IsolatedAsyncioTestCase):
             session.assert_not_called()
 
     async def test_positive_and_negative_structured_results_upload_exact_pixels(self):
-        for observation in (POSITIVE, NEGATIVE):
+        for observation in (AZURE_POSITIVE, NEGATIVE):
             with self.subTest(present=observation["targetPresent"]):
                 session, response = fake_http(completion(observation))
                 with patch("relay.vision.aiohttp.ClientSession", return_value=session):
@@ -248,6 +296,10 @@ class AzureTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(payload["model"], self.vision.deployment)
                 self.assertTrue(payload["response_format"]["json_schema"]["strict"])
                 self.assertFalse(payload["response_format"]["json_schema"]["schema"]["additionalProperties"])
+                schema = payload["response_format"]["json_schema"]["schema"]
+                self.assertEqual(schema["properties"]["box"]["type"], "null")
+                self.assertEqual(set(schema["required"]),
+                                 {"matchesPrompt", "matchesTarget", "needsRescue", "description", "box"})
                 content = payload["messages"][1]["content"]
                 self.assertIn(self.target, content[0]["text"])
                 self.assertEqual(content[1]["type"], "image_url")
@@ -257,6 +309,31 @@ class AzureTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("mockBox", json.dumps(payload))
                 session.__aexit__.assert_awaited_once()
                 response.__aexit__.assert_awaited_once()
+
+    async def test_current_scene_context_is_sent_without_scoring_or_ground_truth_coordinates(self):
+        person = SCENARIO["people"][0]
+        context = {"monitor_id": person["monitorId"], "label": person["label"], "report": person["clue"]}
+        session, _ = fake_http(completion())
+        with patch("relay.vision.aiohttp.ClientSession", return_value=session):
+            await self.vision.analyze(
+                self.capture, self.target, search_prompt=self.target, scene_context=context)
+        payload = session.post.call_args.kwargs["json"]
+        text = payload["messages"][1]["content"][0]["text"]
+        for value in context.values():
+            self.assertIn(value, text)
+        for excluded in ("deadlineMs", "initiallyInjured", "mockBox", "28000"):
+            self.assertNotIn(excluded, json.dumps(payload, ensure_ascii=False))
+        self.assertIn("box는 발견 여부와 관계없이 항상 null", payload["messages"][0]["content"])
+
+    async def test_invalid_or_mismatched_scene_context_never_reaches_azure(self):
+        valid = {"monitor_id": "monitor-1", "label": "바다 현장", "report": "구조 요청"}
+        for context in ({}, [], dict(valid, monitor_id="monitor-2"),
+                        dict(valid, label=""), dict(valid, report=3), dict(valid, deadlineMs=28000)):
+            with self.subTest(context=context):
+                with patch("relay.vision.aiohttp.ClientSession") as session:
+                    with self.assertRaisesRegex(VisionError, "현장명"):
+                        await self.vision.analyze(self.capture, self.target, scene_context=context)
+                    session.assert_not_called()
 
     async def test_participant_prompt_is_sent_with_the_actual_image(self):
         prompt = "초록색이 아닌 옷을 입은 사람을 찾아 주세요."
@@ -273,7 +350,7 @@ class AzureTests(unittest.IsolatedAsyncioTestCase):
         for matches_prompt, matches_target in ((False, True), (True, False)):
             body = completion(NEGATIVE)
             body["choices"][0]["message"]["content"] = json.dumps({
-                "matchesPrompt": matches_prompt, "matchesTarget": matches_target,
+                "matchesPrompt": matches_prompt, "matchesTarget": matches_target, "needsRescue": True,
                 "description": "사람이 보이지만 요청한 모습 또는 구조 대상의 모습과 일치하지 않습니다.",
                 "box": None,
             })

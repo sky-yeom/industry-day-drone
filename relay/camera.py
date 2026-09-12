@@ -106,7 +106,7 @@ class FixtureCamera:
             raise CaptureError("촬영 파일은 지정된 로컬 현장 폴더 안에 있어야 합니다.")
         return path
 
-    def _read(self, monitor_id: str) -> bytes:
+    def read_image(self, monitor_id: str) -> bytes:
         path = self._path(monitor_id)
         try:
             with path.open("rb") as source:
@@ -119,7 +119,7 @@ class FixtureCamera:
     def readiness(self) -> str | None:
         try:
             for person in SCENARIO["people"]:
-                self._read(person["monitorId"])
+                self.read_image(person["monitorId"])
         except CaptureError as exc:
             return str(exc)
         return None
@@ -128,7 +128,7 @@ class FixtureCamera:
         return Capture(
             id=str(uuid.uuid4()),
             monitor_id=monitor_id,
-            image_bytes=self._read(monitor_id),
+            image_bytes=self.read_image(monitor_id),
             content_type="image/png",
         )
 

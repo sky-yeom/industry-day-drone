@@ -37,7 +37,14 @@ class ToolTargetTests(unittest.TestCase):
             DRONE_CONTROL_TRANSPORT="remote", DRONE_CONTROL_USE_TOOLS="0", TRIAGE_MODE="azure"))
         self.assertEqual((target.run_mode, target.control_mode, target.api_url, target.api_token,
             target.transport, target.use_tools, target.triage_mode),
-            ("test", "mock", EMBEDDED_API_URL, "", "inprocess", True, "mock"))
+            ("test", "mock", EMBEDDED_API_URL, "", "inprocess", True, "azure"))
+
+    def test_test_flight_keeps_azure_analysis_by_default_and_allows_explicit_mock(self):
+        self.assertEqual(resolve_tool_target({"DRONE_RUN_MODE": "test"}).triage_mode, "azure")
+        self.assertEqual(resolve_tool_target({"DRONE_RUN_MODE": "test", "TRIAGE_MODE": "mock"}).triage_mode, "mock")
+        for mode in ("", "auto", "invalid"):
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, "TRIAGE_MODE"):
+               resolve_tool_target({"DRONE_RUN_MODE": "test", "TRIAGE_MODE": mode})
 
     def test_existing_hosted_deployment_defaults_to_embedded_test_without_new_settings(self):
         target = resolve_tool_target({"RELAY_HOST": "0.0.0.0", "TRIAGE_MODE": "azure",
@@ -188,7 +195,7 @@ class ConfigSubprocessTests(unittest.TestCase):
         real = self.snapshot(dict(inherited, DRONE_RUN_MODE="real", DRONE_CONTROL_MODE="mock",
             DRONE_TEST_API_URL="invalid-secret-sentinel", DRONE_TEST_API_TOKEN="test-secret-sentinel", TRIAGE_MODE="mock"))
         for value, mode, control, url, triage in (
-            (test, "test", "mock", EMBEDDED_API_URL, "mock"),
+            (test, "test", "mock", EMBEDDED_API_URL, "azure"),
             (real, "real", "live", REAL_API_URL, "azure"),
         ):
             self.assertEqual((value["DRONE_RUN_MODE"], value["DRONE_CONTROL_MODE"],

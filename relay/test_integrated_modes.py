@@ -1,5 +1,6 @@
 """Same September-12 UI protocol through embedded/HTTP mock and the actual relay."""
 import asyncio
+import base64
 from contextlib import nullcontext
 from copy import deepcopy
 import json
@@ -26,6 +27,8 @@ from relay.live_mission import LiveMissionRunner
 from relay.survey import SurveySession
 from relay.test_server import Browser, Upstream
 from relay.test_mission_runner import FakeCamera, FakeVision
+from relay.test_vision import completion, fake_http
+from relay.camera import FixtureCamera
 from relay.tool_target import resolve_tool_target
 from relay.vision import AzureVision, ContractMockVision, MockVision, VisionError, create_providers
 
@@ -59,9 +62,28 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
         with patch("subprocess.Popen", side_effect=AssertionError("No mock process")):
             await self.run_ws_route(external=False)
 
-    async def run_ws_route(self, *, external):
+    async def test_original_images_and_azure_provider_use_the_same_ws_and_mock_tools_path(self):
+        session, _ = fake_http(completion())
+        with patch.multiple(config,
+                AZURE_VISION_ENDPOINT="https://fixture-resource.openai.azure.com",
+                AZURE_VISION_DEPLOYMENT="fixture-vision",
+                AZURE_VISION_API_KEY="unit-test-key-not-a-secret"), \
+                patch("relay.vision.aiohttp.ClientSession", return_value=session):
+            await self.run_ws_route(external=False, analysis="azure")
+        self.assertEqual(session.post.call_count, 3)
+        camera = FixtureCamera()
+        for call, monitor in zip(session.post.call_args_list, ("monitor-2", "monitor-3", "monitor-1")):
+            payload = call.kwargs["json"]
+            content = payload["messages"][1]["content"]
+            self.assertIn(monitor, content[0]["text"])
+            self.assertEqual(base64.b64decode(content[1]["image_url"]["url"].split(",", 1)[1]),
+                             camera.read_image(monitor))
+            self.assertEqual(payload["response_format"]["json_schema"]["schema"]["properties"]["box"]["type"], "null")
+            self.assertIn("needsRescue", payload["response_format"]["json_schema"]["schema"]["required"])
+
+    async def run_ws_route(self, *, external, analysis="mock"):
         process = None
-        values = {"DRONE_RUN_MODE": "test"}
+        values = {"DRONE_RUN_MODE": "test", "TRIAGE_MODE": analysis}
         if external:
             port = free_port()
             values["DRONE_TEST_API_URL"] = f"http://127.0.0.1:{port}"
@@ -114,7 +136,8 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(info["droneReady"], info["droneError"])
                 self.assertTrue(info["droneControlUseTools"])
                 async with websockets.connect(f"ws://127.0.0.1:{relay_port}/ws?voice=0",
-                                              origin="http://127.0.0.1:13001", proxy=None) as ws:
+                                              origin="http://127.0.0.1:13001", proxy=None,
+                                              max_size=20 * 1024 * 1024) as ws:
                     state = None
                     async def receive():
                         nonlocal state
@@ -155,8 +178,11 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
                             break
                     self.assertEqual(state["droneState"], "completed")
                     self.assertEqual(len(state["captures"]), 3)
-                    self.assertTrue(all(c["mode"] == "mock" and c["imageUrl"].startswith("data:image/png;base64,")
+                    self.assertTrue(all(c["mode"] == analysis and c["imageUrl"].startswith("data:image/png;base64,")
                                         for c in state["captures"]))
+                    if analysis == "azure":
+                        self.assertTrue(all(c["evidence"]["targetPresent"] and c["evidence"]["box"] is None
+                                            for c in state["captures"]))
                     self.assertIsNotNone(state["droneMissionId"])
                     self.assertNotIn("PROFILE_UNAVAILABLE", str(state["error"]))
         finally:
@@ -265,14 +291,14 @@ class LauncherModeTests(unittest.TestCase):
             env = dict(os.environ, TEST_REPO=str(ROOT), TEST_SETTINGS=str(env_path), TEST_PYTHON=sys.executable)
             code = (
                 "$ErrorActionPreference='Stop';$before=[Environment]::GetEnvironmentVariables('Process');"
-                "& (Join-Path $env:TEST_REPO 'scripts\\start-integrated.ps1') -Mode Test -NoWeb -CheckOnly "
+                "& (Join-Path $env:TEST_REPO 'scripts\\start-integrated.ps1') -Mode Test -AnalysisMode Mock -NoWeb -CheckOnly "
                 "-EnvFile $env:TEST_SETTINGS -RelayPython $env:TEST_PYTHON -ControlPython C:\\missing\\python.exe;"
                 "if(-not $?){throw 'Test configuration failed'};"
                 "foreach($k in @('DRONE_RUN_MODE','DRONE_CONTROL_API_TOKEN','VOICE_LIVE_VOICE','PYTHONPATH')){"
                 "if($before[$k] -cne [Environment]::GetEnvironmentVariable($k,'Process')){throw ('Environment leaked: '+$k)}}"
             )
             result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", code],
-                                    cwd=ROOT, env=env, text=True, capture_output=True, timeout=30)
+                                    cwd=ROOT, env=env, text=True, encoding="utf-8", capture_output=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("runMode=test", result.stdout)
             self.assertIn("wireMode=mock", result.stdout)

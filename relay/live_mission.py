@@ -322,7 +322,9 @@ class LiveMissionRunner(MissionRunner):
                     evidence = await self.vision.analyze(frame, person["targetDescription"],
                         search_prompt=self.session.data["userPromptText"],
                         appearance_constraints=self.session.data["appearanceConstraints"],
-                        unsupported_appearance=self.session.data["unsupportedAppearance"])
+                        unsupported_appearance=self.session.data["unsupportedAppearance"],
+                        scene_context={"monitor_id": monitor, "label": person["label"],
+                                       "report": person["clue"]})
                     if not self.session.apply_detection(run_id, frame.id, evidence):
                         break
                     await self._notify()

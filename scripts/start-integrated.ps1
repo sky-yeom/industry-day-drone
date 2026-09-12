@@ -1,5 +1,6 @@
 param(
     [Parameter(Mandatory = $true)][ValidateSet('Test','Real')][string]$Mode,
+    [ValidateSet('Azure','Mock')][string]$AnalysisMode = 'Azure',
     [string]$EnvFile = (Join-Path $env:LOCALAPPDATA 'IndustryDayDrone\config\field-live.env'),
     [switch]$CheckOnly,
     [switch]$NoWeb,
@@ -13,6 +14,7 @@ $root = Split-Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot 'load-local-settings.ps1')
 $modeValue = $Mode.ToLowerInvariant()
 $real = $Mode -eq 'Real'
+if ($real -and $AnalysisMode -eq 'Mock') { throw 'Real flight cannot use mock image analysis.' }
 $toolEndpoint = if ($real) { 'http://127.0.0.1:8766' } else { 'inprocess://drone-tools/v1' }
 if ($RelayPort -in @(8766,9997,9998,9999) -or $WebPort -in @(8766,9997,9998,9999) -or
     (-not $NoWeb -and $WebPort -eq $RelayPort)) {
@@ -63,7 +65,7 @@ $connection['RELAY_LOCAL_DIRECT'] = '1'
 $connection.Remove('DRONE_TEST_API_URL')
 $connection.Remove('DRONE_TEST_API_TOKEN')
 $connection['DRONE_CONTROL_MODE'] = if ($real) { 'live' } else { 'mock' }
-$connection['TRIAGE_MODE'] = if ($real) { 'azure' } else { 'mock' }
+$connection['TRIAGE_MODE'] = $AnalysisMode.ToLowerInvariant()
 $connection['DRONE_CONTROL_ENABLE_LIVE'] = if ($real) { '1' } else { '0' }
 $connection['DRONE_CONTROL_MOCK_CAPTURES'] = '0'
 $connection['DRONE_CONTROL_READ_ONLY'] = '0'
@@ -96,7 +98,7 @@ try {
     }
     $env:PYTHONPATH = (Join-Path $root 'drone-control\pc') + ';' + $root
     $env:NEXT_TELEMETRY_DISABLED = '1'
-    & $RelayPython -B -c "from relay import config; from relay.drone_client import DroneClient; c=DroneClient('preflight'); error=c.readiness(); print('runMode='+config.DRONE_RUN_MODE+'; tools='+c.base_url+'; wireMode='+config.DRONE_CONTROL_MODE); raise SystemExit(error if error else 0)"
+    & $RelayPython -B -c "from relay import config; from relay.drone_client import DroneClient; from relay.vision import create_providers; c=DroneClient('preflight'); error=c.readiness() or create_providers()[1].readiness(); print('runMode='+config.DRONE_RUN_MODE+'; tools='+c.base_url+'; wireMode='+config.DRONE_CONTROL_MODE+'; analysis='+config.TRIAGE_MODE); raise SystemExit(error if error else 0)"
     if ($LASTEXITCODE -ne 0) { throw 'Selected backend target is not configured. No process was started.' }
     if ($real) {
         foreach ($key in @('DRONE_CONTROL_CONFIG_PATH','DRONE_CONTROL_SITE_CONFIG')) {

@@ -21,6 +21,10 @@ import time
 from uuid import uuid4
 import zlib
 
+if __package__:
+    from .camera import CaptureError, FixtureCamera
+else:
+    from camera import CaptureError, FixtureCamera
 
 CONTRACT_VERSION = "1.0.0"
 PROFILE_ID = "contract-mock-v1"
@@ -120,15 +124,24 @@ def _capture(mission_id, visit_index, destination_id, ordinal, timestamp, genera
              + _chunk(b"tEXt", f"Description\0MOCK synthetic fixture {capture_id}".encode("ascii"))
              + _chunk(b"IDAT", zlib.compress(raw))
              + _chunk(b"IEND", b""))
+    return _image_record(image, mission_id, visit_index, destination_id, ordinal, timestamp, generation,
+                         "synthetic_fixture")
+
+
+def _image_record(image, mission_id, visit_index, destination_id, ordinal, timestamp, generation, source):
+    capture_id = f"{mission_id}:{visit_index}:{ordinal}"
+    tag = int(destination_id[-1])
+    width, height = struct.unpack_from(">II", image, 16)
     digest = hashlib.sha256(image).hexdigest()
     return dict(
         capture_id=capture_id, mission_id=mission_id, visit_index=visit_index,
         destination_id=destination_id, monitor_id=f"monitor-{tag}", arrival_confirmed=True,
         image_base64=base64.b64encode(image).decode("ascii"), content_type="image/png",
         captured_at_unix_ms=timestamp, frame_generation=generation,
-        frame_id=visit_index * 2 + ordinal, simulated=True, capture_source="synthetic_fixture",
+        frame_id=visit_index * 2 + ordinal, simulated=True, capture_source=source,
         fixture_sha256=digest, sha256=digest, image_sha256=digest,
-        fixture_variant=f"synthetic-{ordinal}", width=width, height=height,
+        fixture_variant=f"synthetic-{ordinal}" if source == "synthetic_fixture" else f"monitor-{tag}",
+        repeated_fixture=source == "monitor_fixture" and ordinal == 2, width=width, height=height,
         aircraft_exposure_timestamp_available=False, tv_visibility_verified=False,
         framing_mode="simulated_fixture", physical_stop_confirmed=False,
     )
@@ -157,11 +170,15 @@ class ContractMockTransport:
 
     def __init__(self, caller_id, *, scenario="nominal", step_ms=200, landing_ms=500,
                  lease_ms=10000, max_missions=128, max_requests=1024,
-                 clock=time.monotonic, wall_clock=time.time):
+                 clock=time.monotonic, wall_clock=time.time, capture_source="synthetic_fixture"):
         if not _valid_id(caller_id):
             raise ValueError("Invalid mock caller_id")
         if type(scenario) is not str or scenario not in SCENARIOS:
             raise ValueError("Unknown mock scenario")
+        if capture_source not in {"synthetic_fixture", "monitor_fixture"}:
+            raise ValueError("Unknown mock capture source")
+        self._camera = FixtureCamera() if capture_source == "monitor_fixture" else None
+        self.capture_source = capture_source
         for name, value, maximum in (
                 ("step_ms", step_ms, 30000), ("landing_ms", landing_ms, 30000),
                 ("lease_ms", lease_ms, 60000), ("max_missions", max_missions, 128),
@@ -180,6 +197,9 @@ class ContractMockTransport:
         self._runtime = None
         self._run_count = 0
         self._dropped_ack = self._closed = False
+
+    def readiness(self):
+        return self._camera.readiness() if self._camera else None
 
     def _timestamp(self, at):
         return max(1, int((self._wall_epoch + at - self._epoch) * 1000))
@@ -265,8 +285,19 @@ class ContractMockTransport:
                 mission["error_code"] = "CAMERA_UNAVAILABLE"
                 self._relinquish(mission, "failed", at)
             else:
-                capture = _capture(mission["mission_id"], visit_index, visit["destination_id"],
-                                   action - 1, self._timestamp(at), self._run_count)
+                if self._camera:
+                    try:
+                        image = self._camera.read_image(f"monitor-{visit['destination_id'][-1]}")
+                    except CaptureError:
+                        mission["error_code"] = "CAMERA_UNAVAILABLE"
+                        self._relinquish(mission, "failed", at)
+                        self._touch(mission, at)
+                        return
+                    capture = _image_record(image, mission["mission_id"], visit_index, visit["destination_id"],
+                                            action - 1, self._timestamp(at), self._run_count, self.capture_source)
+                else:
+                    capture = _capture(mission["mission_id"], visit_index, visit["destination_id"],
+                                       action - 1, self._timestamp(at), self._run_count)
                 mission["captures"].append(capture)
                 visit["capture_ids"].append(capture["capture_id"])
                 visit["state"] = "captured"
@@ -327,7 +358,8 @@ class ContractMockTransport:
     def _dispatch(self, name, args, request_id, now):
         if name == "drone_get_capabilities":
             return _success(
-                live_ready=False, mock_capture_ready=True, expected_mode_guard=True,
+                live_ready=False, mock_capture_ready=self.readiness() is None, expected_mode_guard=True,
+                capture_source=self.capture_source,
                 readiness_issues=[], adapter="contract-mock", profile_id=PROFILE_ID,
                 site_revision=SITE_REVISION, home_tag_id=6, floor_tag_id=0, target_height_m=1.5,
                 tools=list(_SCHEMAS),

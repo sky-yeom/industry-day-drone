@@ -416,9 +416,10 @@ Azure VLM은 촬영 이미지 전체에서 참가자의 검색 조건에 맞는 
 현재 방문의 `monitorId`, 현장명, 신고 내용은 임무 실행기가 함께 전달합니다.
 신고는 맥락이며 이미지에서 확인한 사실이나 의학적 부상 판정을 대신하지 않습니다.
 
-모델 내부 출력은 `matchesPrompt`, `matchesTarget`, `needsRescue`, `description`,
-`box` 다섯 필드입니다. 사용자 조건·대상 외형·구조 필요 근거가 모두 참일 때만
-기존 `targetPresent`로 변환합니다. `needsRescue:false`는 안전하다는 뜻이 아니라
+모델 내부 출력은 `matchesPrompt`, `assessable`, `needsRescue`, `description`,
+`box` 다섯 필드입니다. 참가자 조건을 판정할 수 있고 조건 일치·구조 필요 근거가 모두 참일 때만
+기존 `targetPresent`로 변환합니다. 별도의 고정 외형 기준은 추가하지 않습니다.
+`assessable:false`이면 설명 수정과 재확인이 필요합니다. `needsRescue:false`는 안전하다는 뜻이 아니라
 이미지에서 구조 필요 근거를 확인하지 못했다는 뜻입니다.
 
 좌표는 생성하지 않으며 `box`는 항상 `null`입니다. 외부 Tools·대시보드 필드는

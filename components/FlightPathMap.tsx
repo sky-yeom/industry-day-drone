@@ -1,9 +1,9 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type Ref } from "react";
 import DroneImagePanel from "@/components/DroneImagePanel";
-import { formatRoute, MONITOR_MAP, MONITORS } from "@/data/monitors";
+import { MONITOR_MAP, MONITORS } from "@/data/monitors";
 import { BOARDING_MIRRORED, MAP_MARKER_ENTRY, MAP_MARKER_HEIGHT, MAP_MARKER_SRC, MAP_MARKER_WIDTH } from "@/lib/gibbyDroneSprite";
 import { OUTCOME_LABELS, type DashboardState } from "@/lib/types";
 
@@ -52,11 +52,13 @@ export function MissionCountdownSummary({ state, elapsedMs, connected }: {
  * column swaps from the clue cards below to the drone-image panel + the
  * 3 rescue timers.
  */
-export default function FlightPathMap({ state, boarded = false, elapsedMs, connected }: {
+export default function FlightPathMap({ state, boarded = false, elapsedMs, connected, departing = false, markerRef }: {
   state: DashboardState;
   boarded?: boolean;
   elapsedMs: number;
   connected: boolean;
+  departing?: boolean;
+  markerRef?: Ref<HTMLDivElement>;
 }) {
   const route = state.confirmedRoute.length ? state.confirmedRoute : state.draftRoute;
   const isConfirmed = state.phase === "confirmed";
@@ -75,8 +77,7 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
   // Gibby's dock overlay visually sits) then flip to the real target
   // position one frame later, so the very first move is an actual CSS
   // transition (flying in from the corner) rather than appearing already
-  // on the pin — same mount-then-flip-a-frame-later pattern used for
-  // .drone-fly-in--docked in GibbyDroneBoarding.
+  // on the pin.
   const [markerArrived, setMarkerArrived] = useState(false);
   useEffect(() => {
     if (!boarded) {
@@ -88,14 +89,14 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
   }, [boarded]);
   const markerPos = markerArrived && droneMarkerMonitor ? droneMarkerMonitor : MAP_MARKER_ENTRY;
 
-  return <section className="flex h-full min-h-0 w-full flex-col gap-3 p-3 sm:p-4">
-    <div className="flex shrink-0 items-center justify-between gap-3 px-1">
+  return <section className={`mission-workspace flex h-full min-h-0 w-full flex-col gap-3 p-3 sm:p-4 ${departing ? "mission-workspace--exiting" : ""}`}
+    inert={departing} aria-hidden={departing || undefined}>
+    <div className="mission-workspace-heading flex shrink-0 items-center justify-between gap-3 px-1">
       <div>
         <div className="flex flex-wrap items-baseline gap-2">
           <p className="text-[10px] font-bold tracking-[0.2em] text-[#091f2c]">실시간 경로 관제</p>
           <h2 className="text-lg font-semibold text-[#091f2c]">비행경로</h2>
         </div>
-        <p className="mt-1 text-xs font-semibold text-[#091f2c]">{route.length ? formatRoute(route) : "첫 번째로 갈 곳을 말해주세요"}</p>
       </div>
       <div className="shrink-0 text-right">
         <span className={`pixel-panel px-3 py-1.5 text-xs font-semibold text-[#091f2c] ${isConfirmed ? "bg-[#0078d4]" : "bg-white"}`}>
@@ -105,7 +106,7 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
     </div>
 
     <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,0.8fr)]">
-      <div className="pixel-frame pixel-rendering relative mx-auto aspect-[3/2] w-full max-w-[820px] overflow-hidden">
+      <div className="mission-map pixel-frame pixel-rendering relative mx-auto aspect-[3/2] w-full max-w-[820px] overflow-hidden">
         <Image src="/gibby/map.png" alt="탐색 지역 지도" fill unoptimized className="object-contain" sizes="(max-width: 1024px) 90vw, 820px" />
         <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="pointer-events-none absolute inset-0 z-10 h-full w-full" aria-hidden="true">
           <defs>
@@ -143,8 +144,9 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
             </div>
           </div>;
         })}
-        {boarded && (
+        {boarded && !departing && (
           <div
+            ref={markerRef}
             aria-label="드론 현재 위치" role="img"
             className="absolute z-30 -translate-x-1/2 -translate-y-1/2 transition-[left,top] duration-[2800ms] ease-in-out"
             style={{ left: `${markerPos.x}%`, top: `${markerPos.y}%` }}
@@ -159,7 +161,7 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
         )}
       </div>
 
-      <div className={`flex min-h-0 flex-col gap-2 ${boarded ? "" : "overflow-y-auto"}`}>
+      <div className={`mission-images flex min-h-0 flex-col gap-2 ${boarded ? "" : "overflow-y-auto"}`}>
         {boarded ? (
           <>
             <div className="pixel-panel shrink-0 bg-white p-3">
@@ -179,6 +181,6 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
       </div>
     </div>
 
-    {state.promptPhase === "confirmed" && <p className="shrink-0 text-[11px] leading-4 text-[#091f2c] [text-shadow:1px_1px_0_#fff]">{state.missionPhase === "briefing" ? "첫 두 방문지를 음성으로 선택하세요. 출발에 동의하면 자동 비행을 시작합니다." : "방문 순서와 이미지 분석 완료 시점에 따라 구조 결과가 달라집니다."}</p>}
+    {state.promptPhase === "confirmed" && state.missionPhase === "briefing" && <p className="mission-workspace-heading shrink-0 text-[11px] leading-4 text-[#091f2c] [text-shadow:1px_1px_0_#fff]">첫 두 방문지를 음성으로 선택하세요. 출발에 동의하면 자동 비행을 시작합니다.</p>}
   </section>;
 }

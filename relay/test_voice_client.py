@@ -11,6 +11,99 @@ ROOT = Path(__file__).resolve().parents[1]
 @unittest.skipUnless(shutil.which("node") and (ROOT / "node_modules/typescript").exists(),
                      "Client contract requires the existing frontend dependencies")
 class VoiceClientTests(unittest.TestCase):
+    def test_worklet_preserves_short_capture_and_discards_interrupted_drains(self):
+        result = subprocess.run(["node", "-e", r"""
+const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
+const processors = {};
+class AudioWorkletProcessor {
+  port = {messages:[], postMessage(message){this.messages.push(message);}};
+}
+vm.runInNewContext(fs.readFileSync("public/audio-worklets.js", "utf8"), {
+  AudioWorkletProcessor, Float32Array, Int16Array,
+  registerProcessor:(name, processor)=>{processors[name]=processor;},
+});
+const capture = new processors["capture-processor"]();
+const input = (length, value)=>capture.process([[new Float32Array(length).fill(value)]]);
+input(100, 0.5);
+capture.port.onmessage({data:{type:"mute",value:true}});
+input(480, 0.5);
+assert.equal(capture.port.messages.length, 0);
+capture.port.onmessage({data:{type:"mute",value:false}});
+input(240, 0.25);
+assert.equal(capture.port.messages.length, 0);
+input(240, 0.25);
+assert.equal(capture.port.messages.length, 1);
+assert.equal(capture.port.messages[0].pcm.length, 480);
+assert.ok(capture.port.messages[0].pcm.every(sample=>sample===8191));
+
+const playback = new processors["playback-processor"]();
+const send = data=>playback.port.onmessage({data});
+send({type:"push",id:"interrupted",pcm:new Int16Array(960).fill(16000)});
+send({type:"drain",id:"interrupted"});
+playback.process([], [[new Float32Array(128)]]);
+send({type:"flush"});
+send({type:"push",id:"current",pcm:new Int16Array(480).fill(8000)});
+send({type:"drain",id:"current"});
+const output = new Float32Array(480);
+playback.process([], [[output]]);
+assert.ok(output.every(sample=>sample===8000/32768));
+assert.deepEqual(playback.port.messages.filter(m=>m.type==="drained").map(m=>m.id), ["current"]);
+assert.deepEqual(playback.port.messages.filter(m=>m.type==="started").map(m=>m.id), ["interrupted","current"]);
+const silence = new Float32Array(128).fill(1);
+playback.process([], [[silence]]);
+assert.ok(silence.every(sample=>sample===0));
+send({type:"push",id:"single-block",pcm:new Int16Array([8000])});
+send({type:"drain",id:"single-block"});
+assert.equal(playback.port.messages.filter(m=>m.id==="single-block").length,0,
+             "queued PCM must not report playback");
+playback.process([], [[new Float32Array(128)]]);
+assert.deepEqual(playback.port.messages.filter(m=>m.id==="single-block").map(m=>m.type), ["started","drained"]);
+
+const held = new processors["playback-processor"]();
+const hold = data=>held.port.onmessage({data});
+const pcm=Int16Array.from({length:960},(_,i)=>i-480);
+hold({type:"push",id:"route",pcm:pcm.slice(0,480)});
+const first=new Float32Array(128);
+held.process([],[[first]]);
+hold({type:"pause",value:true});
+hold({type:"push",id:"route",pcm:pcm.slice(480)});
+hold({type:"drain",id:"route"});
+const paused=new Float32Array(128).fill(1);
+held.process([],[[paused]]);
+assert.ok(paused.every(sample=>sample===0));
+assert.equal(held.port.messages.filter(m=>m.type==="drained").length,0,"a pause is not completion");
+hold({type:"pause",value:false});
+const tail=new Float32Array(832);
+held.process([],[[tail]]);
+assert.deepEqual([...first,...tail],Array.from(pcm,sample=>sample/32768),"noise must not discard the final sentence");
+assert.equal(held.port.messages.filter(m=>m.type==="drained"&&m.id==="route").length,1);
+
+const interrupted = new processors["playback-processor"]();
+const interrupt = data=>interrupted.port.onmessage({data});
+interrupt({type:"push",id:"old",pcm:new Int16Array(480).fill(4000)});
+interrupted.process([],[[new Float32Array(128)]]);
+interrupt({type:"pause",value:true});
+interrupt({type:"drain",id:"old"});
+interrupt({type:"push",id:"new",pcm:new Int16Array(480).fill(9000)});
+interrupt({type:"drain",id:"new"});
+interrupt({type:"discard",ids:["old"]});
+interrupt({type:"pause",value:false});
+const replacement=new Float32Array(480);
+interrupted.process([],[[replacement]]);
+assert.ok(replacement.every(sample=>sample===9000/32768),"a real interruption keeps the newly generated reply");
+assert.deepEqual(interrupted.port.messages.filter(m=>m.type==="drained").map(m=>m.id),["new"]);
+send({type:"push",id:"single-block",pcm:new Int16Array([8000])});
+playback.process([], [[new Float32Array(128)]]);
+assert.equal(playback.port.messages.filter(m=>m.id==="single-block" && m.type==="started").length,1);
+send({type:"push",id:"never-rendered",pcm:new Int16Array([8000])});
+send({type:"drain",id:"never-rendered"});
+send({type:"flush"});
+send({type:"push",id:"empty",pcm:new Int16Array()});
+playback.process([], [[new Float32Array(128)]]);
+assert.equal(playback.port.messages.filter(m=>["never-rendered","empty"].includes(m.id)).length,0);
+"""], cwd=ROOT, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_departure_and_results_playback_lifecycle(self):
         result = subprocess.run(["node", "-e", r"""
 const fs = require("node:fs");
@@ -20,6 +113,8 @@ const ts = require("typescript");
 const nodes = [], sockets = [], contexts = [];
 let stoppedTracks = 0, departures = 0, micRequests = 0;
 const connections = [], states = [];
+const timers = new Map();
+let timerId = 0;
 class Socket {
   static OPEN = 1;
   readyState = 1;
@@ -64,15 +159,20 @@ vm.runInNewContext(code, {
   URL, WebSocket:Socket, AudioContext:Context, AudioWorkletNode:Worklet,
   navigator:{mediaDevices:{getUserMedia:async()=>{micRequests++;return {getTracks:()=>[{stop(){stoppedTracks++;}}]};}}},
   btoa, atob, crypto, Int16Array, Uint8Array,
+  setTimeout:(fn)=>{timers.set(++timerId,fn);return timerId;},
+  clearTimeout:id=>timers.delete(id),
 });
 async function exercise({early=false,fail=false}={}) {
   nodes.length=sockets.length=contexts.length=connections.length=states.length=0;
   stoppedTracks=departures=micRequests=0;
   const noop=()=>{};
+  let reveals=0;
+  const statuses=[];
   const session=new exportsObject.VoiceSession({
-    onStatus:noop,onLevel:noop,onBusy:noop,onTranscript:noop,onTool:noop,
+    onStatus:s=>statuses.push(s),onLevel:noop,onBusy:noop,onTranscript:noop,onTool:noop,
     onTtfa:noop,onDebrief:noop,onError:noop,onRouteState:s=>states.push(s),
     onConnection:c=>connections.push(c),onDeparture:()=>departures++,
+    onResultsReveal:()=>reveals++,
   });
   await session.start();
   const socket=sockets[0], playback=nodes.find(n=>n.name==="playback-processor");
@@ -94,6 +194,7 @@ async function exercise({early=false,fail=false}={}) {
   playback.port.onmessage({data:{type:"drained",id:"unrelated"}});
   assert.equal(departures,0);
   if(early) {
+    session.markResultsReady("run");
     socket.emit({type:"mission.debrief",runId:"run",text:"세 사람을 구조했습니다."});
     assert.equal(socket.sent.filter(m=>m.type==="results.ready").length,0);
   }
@@ -109,10 +210,18 @@ async function exercise({early=false,fail=false}={}) {
   assert.equal(session.sendCommand("retry_mission"),true);
   socket.emit({type:"mission.debrief",runId:"run",text:"세 사람을 구조했습니다."});
   socket.emit({type:"mission.debrief",runId:"run",text:"세 사람을 구조했습니다."});
+  if(!early) {
+    assert.equal(socket.sent.filter(m=>m.type==="results.ready").length,0);
+    session.markResultsReady("stale");
+    assert.equal(socket.sent.filter(m=>m.type==="results.ready").length,0);
+    session.markResultsReady("run");
+  }
+  session.markResultsReady("run");
   await new Promise(setImmediate);
   assert.equal(socket.sent.filter(m=>m.type==="results.ready").length,1);
   assert.equal(socket.closed,false);
   assert.equal(stoppedTracks,1);
+  assert.equal(reveals,0);
   assert.equal(micRequests,1);
   if(fail) {
     socket.emit({type:"mission.debrief.failed",runId:"run",message:"결과 음성 연결 실패"});
@@ -120,10 +229,22 @@ async function exercise({early=false,fail=false}={}) {
     assert.equal(socket.closed,true);
     assert.equal(contexts[0].state,"closed");
     assert.equal(stoppedTracks,1);
+    assert.equal(reveals,1);
+    assert.equal(statuses.at(-1),"error","failed narration remains visible in Home's error banner");
     return;
   }
   socket.emit({type:"mission.debrief.response",runId:"run",responseId:"results"});
-  socket.emit({type:"response.audio.delta",delta:btoa("\0\0")});
+  socket.emit({type:"response.created",response:{id:"results",metadata:{missionDebrief:"true",runId:"run"}}});
+  playback.port.onmessage({data:{type:"state",playing:true}});
+  assert.equal(reveals,0);
+  socket.emit({type:"response.audio.delta",response_id:"results",delta:btoa("\0\0")});
+  assert.equal(playback.port.messages.at(-1).id,"results");
+  assert.equal(reveals,0,"network arrival is not audible playback");
+  playback.port.onmessage({data:{type:"started",id:"departure"}});
+  assert.equal(reveals,0);
+  playback.port.onmessage({data:{type:"started",id:"results"}});
+  playback.port.onmessage({data:{type:"started",id:"results"}});
+  assert.equal(reveals,1);
   socket.emit({type:"response.done",response:{id:"results",status:"completed"}});
   socket.emit({type:"mission.debrief.done",runId:"run",responseId:"results"});
   assert.equal(playback.port.messages.filter(m=>m.type==="drain").length,2);
@@ -136,13 +257,132 @@ async function exercise({early=false,fail=false}={}) {
   assert.equal(stoppedTracks,1);
   assert.equal(departures,1);
   assert.equal(micRequests,1);
+  assert.equal(reveals,1);
+  assert.equal(timers.size,0);
+}
+async function exerciseResultsFallbacks() {
+  const noop=()=>{};
+  for(const mode of ["text","no-audio","timeout","pending-debrief","pending-drain",
+                     "disconnect-before","disconnect-after","error","reset","reset-waiting","retry"]) {
+    nodes.length=sockets.length=contexts.length=0;
+    let reveals=0, debriefs=0, departures=0;
+    const errors=[], statuses=[];
+    const session=new exportsObject.VoiceSession({
+      onStatus:s=>statuses.push(s),onLevel:noop,onBusy:noop,onTranscript:noop,onTool:noop,
+      onTtfa:noop,onDebrief:()=>debriefs++,onError:e=>errors.push(e),onRouteState:noop,
+      onResultsReveal:()=>reveals++,onDeparture:()=>departures++,
+    });
+    await session.start({withVoice:mode!=="text"});
+    const socket=sockets[0], playback=nodes.find(n=>n.name==="playback-processor");
+    socket.emit({type:"route.state",state:{runId:"run",revision:4}});
+    socket.emit({type:"route.state",state:{runId:"stale",revision:9}});
+    socket.emit({type:"mission.debrief",runId:"stale",text:"stale"});
+    assert.equal(debriefs,0);
+    assert.equal(session.currentRunId,"run");
+    socket.emit({type:"route.state",state:{runId:"run",revision:3}});
+    assert.equal(session.routeRevision,4);
+    if(mode==="disconnect-before") {
+      socket.onclose({code:1006});
+      await new Promise(setImmediate);
+      assert.equal(reveals,0);
+      session.markResultsReady("run");
+      assert.equal(reveals,1,"disconnect before debrief must not leave results invisible");
+      await session.stop();
+      continue;
+    }
+    if(mode==="pending-debrief" || mode==="pending-drain") {
+      if(mode==="pending-drain") {
+        socket.emit({type:"mission.launch",runId:"run"});
+        socket.emit({type:"mission.launch.response",runId:"run",responseId:"departure"});
+        socket.emit({type:"mission.launch.done",runId:"run",responseId:"departure"});
+        socket.emit({type:"mission.debrief",runId:"run",text:"early completion"});
+      }
+      session.markResultsReady("run");
+      assert.equal(socket.sent.filter(m=>m.type==="results.ready").length,0);
+      [...timers.values()][0]();
+      assert.equal(reveals,1,"missing debrief or stalled departure drain must report a bounded fallback");
+      assert.equal(errors.length,1);
+      await session.stop();
+      continue;
+    }
+    socket.emit({type:"mission.debrief",runId:"run",text:"aborted before boarding"});
+    assert.equal(departures,0,"preboarding abort does not announce a departure");
+    assert.equal(socket.sent.filter(m=>m.type==="results.ready").length,0);
+    assert.equal(session.microphoneMuted,true);
+    assert.equal(reveals,0);
+    if(mode==="reset") {
+      await session.stop();
+      session.markResultsReady("run");
+      assert.equal(reveals,0);
+      assert.equal(timers.size,0);
+      continue;
+    }
+    session.markResultsReady("run");
+    if(mode==="text") {
+      assert.equal(reveals,1);
+      assert.equal(socket.sent.filter(m=>m.type==="results.ready").length,0);
+    } else {
+      assert.equal(socket.sent.filter(m=>m.type==="results.ready").length,1);
+      assert.equal(reveals,0);
+      if(mode==="reset-waiting") {
+        const oldTimer=[...timers.values()][0], oldPlayback=playback.port.onmessage;
+        const oldSocket=socket.onmessage;
+        await session.stop();
+        await session.start();
+        oldTimer();
+        oldPlayback({data:{type:"started",id:"old-results"}});
+        oldSocket({data:JSON.stringify({type:"mission.debrief",runId:"run",text:"old result"})});
+        assert.equal(reveals,0);
+        assert.equal(session.debriefRunId,null);
+        assert.equal(timers.size,0);
+        await session.stop();
+        continue;
+      } else if(mode==="retry") {
+        socket.emit({type:"mission.debrief.response",runId:"run",responseId:"first"});
+        socket.emit({type:"response.done",response:{id:"first",status:"failed"}});
+        socket.emit({type:"mission.debrief.response",runId:"run",responseId:"retry"});
+        socket.emit({type:"mission.debrief.response",runId:"stale",responseId:"stale"});
+        playback.port.onmessage({data:{type:"started",id:"stale"}});
+        assert.equal(reveals,0);
+        playback.port.onmessage({data:{type:"started",id:"first"}});
+        assert.equal(reveals,1,"already queued result PCM still belongs to this run during retry");
+        socket.emit({type:"mission.debrief.done",runId:"run",responseId:"retry"});
+        assert.equal(playback.port.messages.at(-1).id,"retry");
+        playback.port.onmessage({data:{type:"drained",id:"retry"}});
+      } else if(mode==="no-audio") {
+        socket.emit({type:"mission.debrief.response",runId:"run",responseId:"empty"});
+        socket.emit({type:"mission.debrief.done",runId:"run",responseId:"empty"});
+        assert.equal(reveals,0);
+        playback.port.onmessage({data:{type:"drained",id:"empty"}});
+        assert.equal(errors.length,1,"a silent completed response is an explicit audio failure");
+        assert.equal(statuses.at(-1),"error");
+      } else if(mode==="timeout") {
+        const callback=[...timers.values()][0];
+        callback();
+        assert.equal(errors.length,1);
+        callback();
+        assert.equal(errors.length,1,"stale timeout is inert");
+      } else if(mode==="disconnect-after") {
+        socket.onclose({code:1006});
+      } else if(mode==="error") {
+        socket.emit({type:"error",error:{message:"failed"}});
+      }
+      assert.equal(reveals,1);
+    }
+    await new Promise(setImmediate);
+    session.markResultsReady("run");
+    assert.equal(reveals,1);
+    await session.stop();
+    assert.equal(timers.size,0);
+  }
 }
 async function exerciseCompleteReplies() {
   nodes.length=sockets.length=contexts.length=0;
-  const noop=()=>{}, transcripts=[];
+  const noop=()=>{}, transcripts=[], captions=[];
   const session=new exportsObject.VoiceSession({
     onStatus:noop,onLevel:noop,onBusy:noop,onTranscript:(...args)=>transcripts.push(args),
     onTool:noop,onTtfa:noop,onDebrief:noop,onError:noop,onRouteState:noop,
+    onSpeechText:text=>captions.push(text),
   });
   await session.start();
   const socket=sockets[0], capture=nodes.find(n=>n.name==="capture-processor");
@@ -151,6 +391,9 @@ async function exerciseCompleteReplies() {
   socket.emit({type:"response.created",response:{id:"welcome"}});
   socket.emit({type:"response.audio_transcript.delta",delta:"첫 문장. 마지막 문장."});
   socket.emit({type:"response.audio.delta",delta:btoa("\0\0")});
+  assert.equal(captions.at(-1),"","generated text must not get ahead of playback");
+  playback.port.onmessage({data:{type:"started",id:"welcome"}});
+  assert.equal(captions.at(-1),"첫 문장. 마지막 문장.");
   socket.emit({type:"response.done",response:{id:"welcome",status:"completed"}});
   assert.equal(muted(),true,"generation finishing must not reopen the mic before playback");
   playback.port.onmessage({data:{type:"state",playing:false}});
@@ -162,36 +405,86 @@ async function exerciseCompleteReplies() {
   assert.equal(transcripts.filter(t=>t[0]==="user").length,0);
   playback.port.onmessage({data:{type:"drained",id:"stale"}});
   assert.equal(muted(),true);
+  assert.equal(socket.sent.filter(m=>m.type==="voice.reply_drained").length,0);
   playback.port.onmessage({data:{type:"drained",id:"welcome"}});
+  assert.deepEqual(socket.sent.filter(m=>m.type==="voice.reply_drained"),[
+    {type:"voice.reply_drained",responseId:"welcome",runId:"run"},
+  ]);
   assert.equal(muted(),false);
   capture.port.onmessage({data:{pcm:new Int16Array([1]),peak:0.5}});
   assert.equal(socket.sent.filter(m=>m.type==="audio").length,1);
   assert.deepEqual(transcripts.at(-1),["agent","첫 문장. 마지막 문장.",true]);
 
   socket.emit({type:"response.created",response:{id:"tool-turn"}});
-  assert.equal(muted(),true);
+  assert.equal(muted(),false);
   socket.emit({type:"response.function_call_arguments.done",name:"confirm_prompt"});
   socket.emit({type:"response.done",response:{id:"tool-turn",status:"completed"}});
   playback.port.onmessage({data:{type:"drained",id:"welcome"}});
-  assert.equal(muted(),true,"keep the mic muted across a tool continuation");
+  assert.equal(muted(),false,"a tool continuation must not discard short replies");
   socket.emit({type:"response.created",response:{id:"explanation"}});
   socket.emit({type:"response.output_audio_transcript.delta",delta:"모니터 1 설명. 모니터 2 설명. 모니터 3 설명."});
   socket.emit({type:"response.output_audio.delta",delta:btoa("\0\0")});
+  playback.port.onmessage({data:{type:"started",id:"explanation"}});
   socket.emit({type:"response.done",response:{id:"explanation",status:"completed"}});
-  assert.equal(muted(),true);
+  assert.equal(muted(),false);
   assert.equal(session.sendText("interrupt"),false);
-  socket.emit({type:"input_audio_buffer.speech_started"});
-  assert.equal(playback.port.messages.filter(m=>m.type==="flush").length,0);
+  socket.emit({type:"input_audio_buffer.speech_started",item_id:"noise"});
+  assert.equal(playback.port.messages.at(-1).type,"pause");
+  assert.equal(playback.port.messages.at(-1).value,true);
+  socket.emit({type:"input_audio_buffer.speech_stopped",item_id:"noise"});
+  socket.emit({type:"conversation.item.input_audio_transcription.completed",item_id:"noise",transcript:""});
+  assert.equal(playback.port.messages.at(-1).value,false);
+  assert.equal(playback.port.messages.filter(m=>m.type==="flush"||m.type==="discard").length,0);
+  assert.equal(socket.sent.filter(m=>m.type==="voice.interrupt").length,0);
+  assert.equal(captions.at(-1),"모니터 1 설명. 모니터 2 설명. 모니터 3 설명.");
+  for(const kind of ["failed","timeout"]) {
+    socket.emit({type:"input_audio_buffer.speech_started",item_id:kind});
+    socket.emit({type:"input_audio_buffer.speech_stopped",item_id:kind});
+    if(kind==="failed")socket.emit({type:"conversation.item.input_audio_transcription.failed",item_id:kind});
+    else [...timers.values()][0]();
+    assert.equal(playback.port.messages.at(-1).value,false);
+    assert.equal(playback.port.messages.filter(m=>m.type==="discard").length,0);
+    assert.equal(timers.size,0);
+  }
+  socket.emit({type:"input_audio_buffer.speech_started",item_id:"real-reply"});
+  const clearsBefore=socket.sent.filter(m=>m.type==="input_audio_buffer.clear").length;
+  socket.emit({type:"response.created",response:{id:"confirmation"}});
+  socket.emit({type:"response.audio_transcript.delta",response_id:"confirmation",delta:"이 경로로"});
+  socket.emit({type:"response.audio_transcript.done",response_id:"confirmation",transcript:"이 경로로 출발할까?"});
+  socket.emit({type:"response.output_audio.delta",response_id:"confirmation",delta:btoa("\0\0")});
+  assert.equal(captions.at(-1),"모니터 1 설명. 모니터 2 설명. 모니터 3 설명.","queued speech cannot replace the current bubble");
+  socket.emit({type:"conversation.item.input_audio_transcription.completed",item_id:"real-reply",transcript:"응"});
+  assert.equal(playback.port.messages.filter(m=>m.type==="discard").length,1);
+  assert.deepEqual([...socket.sent.find(m=>m.type==="voice.interrupt").responseIds],["explanation"]);
+  assert.equal(captions.at(-1),"");
+  socket.emit({type:"response.output_audio.delta",response_id:"explanation",delta:btoa("\0\0")});
+  socket.emit({type:"response.done",response:{id:"explanation",status:"cancelled"}});
+  assert.equal(session.responseActive,true,"stale completion must not end the new response");
   playback.port.onmessage({data:{type:"drained",id:"explanation"}});
   assert.equal(muted(),false);
+  assert.equal(socket.sent.filter(m=>m.type==="voice.reply_drained").length,1);
+  assert.equal(socket.sent.filter(m=>m.type==="input_audio_buffer.clear").length,clearsBefore);
+  playback.port.onmessage({data:{type:"started",id:"confirmation"}});
+  assert.equal(captions.at(-1),"이 경로로 출발할까?","the bubble follows the actual new audio, including the final question");
+  socket.emit({type:"response.done",response:{id:"confirmation",status:"completed"}});
+  playback.port.onmessage({data:{type:"drained",id:"confirmation"}});
   assert.equal(session.sendText("next turn"),true);
+  socket.emit({type:"response.created",response:{id:"reset-during-speech"}});
+  socket.emit({type:"response.audio.delta",response_id:"reset-during-speech",delta:btoa("\0\0")});
+  socket.emit({type:"input_audio_buffer.speech_started",item_id:"reset-input"});
+  socket.emit({type:"input_audio_buffer.speech_stopped",item_id:"reset-input"});
+  const oldTimeout=[...timers.values()][0];
   await session.stop();
+  assert.equal(timers.size,0);
+  oldTimeout();
+  assert.equal(session.interruption,null,"stale interruption timeout cannot affect a stopped session");
 }
 (async()=>{
   await exerciseCompleteReplies();
   await exercise();
   await exercise({early:true});
   await exercise({fail:true});
+  await exerciseResultsFallbacks();
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """], cwd=ROOT, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

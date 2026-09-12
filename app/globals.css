@@ -350,14 +350,79 @@ input {
   bottom: 16%;
 }
 
-/* Ground permanently retreats once Gibby boards the drone (see
-   components/PixelGround.tsx's `hidden` prop) — slides straight down out
-   of view rather than fading, consistent with the ground never using
-   opacity transitions elsewhere in this file. */
+/* The outbound exit and the return enter from different sides of the viewport. */
 .pixel-ground--hidden {
   transform: translateY(100%);
   transition: transform 0.9s cubic-bezier(0.4, 0, 1, 1);
   pointer-events: none;
+}
+
+.results-scene {
+  --results-sprite-height: clamp(132px, 32dvh, 360px);
+  --results-sprite-width: calc(var(--results-sprite-height) * 520 / 360);
+  --results-shell-padding: 1rem;
+}
+
+.results-content {
+  padding-bottom: calc(16dvh + var(--results-sprite-height) * 0.64 - var(--results-shell-padding));
+}
+
+.gibby-results-sprite {
+  position: absolute;
+  left: calc(50% - var(--results-sprite-width) / 2);
+  top: calc(84dvh - var(--results-sprite-height));
+  width: var(--results-sprite-width);
+  height: var(--results-sprite-height);
+}
+
+.gibby-results-sprite--flying {
+  transition: left 1.6s cubic-bezier(0.22, 0.61, 0.36, 1),
+    top 1.6s cubic-bezier(0.22, 0.61, 0.36, 1),
+    width 1.6s cubic-bezier(0.22, 0.61, 0.36, 1),
+    height 1.6s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.pixel-ground--returning {
+  animation: results-ground-return 1.25s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  transition: none;
+}
+
+@keyframes results-ground-return {
+  from { transform: translateY(-100dvh); }
+  to { transform: translateY(0); }
+}
+
+.mission-map,
+.mission-images {
+  transition: transform 0.9s cubic-bezier(0.4, 0, 0.6, 1);
+}
+
+.mission-workspace-heading {
+  transition: opacity 0.3s ease-out;
+}
+
+.mission-workspace--exiting .mission-map {
+  transform: translateX(-110vw);
+}
+
+.mission-workspace--exiting .mission-images {
+  transform: translateX(110vw);
+}
+
+.mission-workspace--exiting .mission-workspace-heading {
+  opacity: 0;
+}
+
+@media (min-width: 640px) {
+  .results-scene {
+    --results-shell-padding: 1.5rem;
+  }
+}
+
+@media (max-width: 580px) {
+  .results-scene {
+    --results-sprite-height: min(32dvh, 64vw);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -365,6 +430,16 @@ input {
     transition: none !important;
   }
   .pixel-ground--hidden {
+    transition: none !important;
+  }
+  .pixel-ground--returning {
+    animation: none !important;
+    transform: translateY(0);
+  }
+  .gibby-results-sprite,
+  .mission-map,
+  .mission-images,
+  .mission-workspace-heading {
     transition: none !important;
   }
 }

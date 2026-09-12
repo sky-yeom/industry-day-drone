@@ -11,9 +11,11 @@ import time
 from uuid import uuid4
 
 try:
-    from .appearance import validate_constraints
+    from .appearance import (REVISION_REQUEST, fixture_prompt_constraints,
+                             validate_constraints, validate_search_prompt)
 except ImportError:
-    from appearance import validate_constraints
+    from appearance import (REVISION_REQUEST, fixture_prompt_constraints,
+                            validate_constraints, validate_search_prompt)
 
 SCENARIO = json.loads(
     (Path(__file__).resolve().parents[1] / "data/emergency-triage.json").read_text("utf-8")
@@ -22,7 +24,6 @@ MONITOR_IDS = [p["monitorId"] for p in SCENARIO["people"]]
 LABELS = {person["monitorId"]: person["label"] for person in SCENARIO["people"]}
 TERMINAL = {"complete", "aborted"}
 ACTIVE = {"flying", "capturing", "analyzing"}
-MAX_PROMPT_LENGTH = 2000
 
 
 def names(ids):
@@ -71,6 +72,8 @@ class SurveySession:
         self.clock = clock
         self.scenario = deepcopy(scenario or SCENARIO)
         self.state = RouteState()
+        self.pending_prompt = None
+        self.pending_prompt_revision = 0
         self.data = {
             "runId": run_id or str(uuid4()), "revision": 0, "missionPhase": "briefing",
             "promptPhase": "briefing", "userPromptText": "",
@@ -127,22 +130,42 @@ class SurveySession:
         return result(False, "사람을 찾기 위한 탐색 프롬프트를 먼저 작성하고 확인해야 합니다.",
                       "이미지에서 사람을 어떻게 찾을지 사용자에게 물어볼 것")
 
+    def _prompt_values(self, prompt_text, appearance_constraints=None, unsupported_appearance=None):
+        text = validate_search_prompt(prompt_text)
+        constraints, unsupported = validate_constraints(
+            [] if appearance_constraints is None else appearance_constraints,
+            [] if unsupported_appearance is None else unsupported_appearance)
+        if self.data["mode"] == "mock":
+            if unsupported:
+                raise ValueError(REVISION_REQUEST)
+            fixture_prompt_constraints(text)
+        return {"prompt_text": text, "appearance_constraints": constraints,
+                "unsupported_appearance": unsupported}
+
+    def prepare_prompt(self, prompt_text, appearance_constraints=None, unsupported_appearance=None):
+        if not self._editable():
+            return result(False, "출발한 임무의 탐색 프롬프트는 바꿀 수 없습니다.")
+        try:
+            values = self._prompt_values(prompt_text, appearance_constraints, unsupported_appearance)
+        except ValueError as exc:
+            return result(False, str(exc), "참가자가 실제로 말한 외형 조건만 다시 확인할 것")
+        self.pending_prompt = values
+        self.pending_prompt_revision += 1
+        return result(True, f"확인 대기 중인 참가자 설명: {values['prompt_text']}",
+                      "이 설명만 짧게 되말하고 확인 질문 뒤 새 답변을 기다릴 것")
+
     def confirm_prompt(self, prompt_text, appearance_constraints=None, unsupported_appearance=None):
         if not self._editable():
             return result(False, "출발한 임무의 탐색 프롬프트는 바꿀 수 없습니다.")
-        if not isinstance(prompt_text, str) or not prompt_text.strip():
-            return result(False, "사람을 어떻게 찾을지 탐색 프롬프트를 입력해 주세요.")
-        text = prompt_text.strip()
-        if len(text) > MAX_PROMPT_LENGTH:
-            return result(False, f"탐색 프롬프트는 {MAX_PROMPT_LENGTH}자 이하로 입력해 주세요.")
         try:
-            constraints, unsupported = validate_constraints(
-                [] if appearance_constraints is None else appearance_constraints,
-                [] if unsupported_appearance is None else unsupported_appearance)
+            values = self._prompt_values(prompt_text, appearance_constraints, unsupported_appearance)
         except ValueError as exc:
             return result(False, str(exc), "참가자가 실제로 말한 외형 조건만 다시 확인할 것")
+        text = values["prompt_text"]
         self.data.update(promptPhase="confirmed", userPromptText=text,
-                         appearanceConstraints=constraints, unsupportedAppearance=unsupported)
+                         appearanceConstraints=values["appearance_constraints"],
+                         unsupportedAppearance=values["unsupported_appearance"])
+        self.pending_prompt = None
         self.touch()
         cases = " / ".join(
             f"{LABELS[person['monitorId']]}: {person['clue']}" for person in self.data["people"])
@@ -332,7 +355,7 @@ class SurveySession:
     def debrief(self):
         mode = "모의 분석" if self.data["mode"] == "mock" else "Azure 이미지 분석"
         if self.phase == "aborted":
-            return f"{mode} 훈련을 중단했습니다. 미확인 대상의 결과는 판정하지 않았습니다."
+            return f"이번 {mode} 훈련은 여기서 멈췄어. 아직 확인하지 못한 사람들의 구조 결과는 알 수 없어."
         score = self.data["score"]
         if not score:
             return ""
@@ -342,16 +365,27 @@ class SurveySession:
                 continue
             frames = [frame for frame in self.data["captures"]
                       if frame["monitorId"] == person["monitorId"] and frame["evidence"] is not None]
-            detail = "구조 시한 안에 유효한 이미지 확인을 마치지 못했습니다."
+            detail = "구조할 수 있는 시간 안에 이미지 확인을 마치지 못했어."
             if frames:
                 evidence = frames[-1]["evidence"]
-                detail = ("대상은 확인했지만 분석이 구조 시한 안에 끝나지 않았습니다."
+                detail = ("찾는 사람은 확인했지만, 이미지 분석이 구조 시한 안에 끝나지 않았어."
                           if evidence["targetPresent"] else
-                          f"시한 내 대상을 찾지 못했습니다. 마지막 이미지 관찰: {evidence['description']}")
+                          f"시간 안에 찾는 사람을 확인하지 못했어. 마지막 사진의 관찰 내용은 이거야.\n"
+                          f"\"{evidence['description']}\"")
             observations.append(f"{LABELS[person['monitorId']]}: {detail}")
-        return (f"{mode} 훈련이 끝났습니다. 방문 경로: {names(self.state.confirmedRoute)}. "
-                f"{score['total']}명 중 {score['rescuedCount']}명을 구조했고, "
-                f"그중 {score['injuredCount']}명은 부상 상태입니다. "
-                f"{score['tooLateCount']}명은 구조 시한을 넘겼습니다. "
-                + " ".join(observations) +
-                " 탐지 프롬프트, 이미지 확인, 방문 순서와 실제 이동·분석 시간이 결과에 반영되었습니다. 가상 훈련 결과입니다.")
+        summary = ["작전이 끝났어."]
+        if score["rescuedCount"]:
+            summary.append(f"우리 함께 {score['total']}명 중 {score['rescuedCount']}명을 구조했어.")
+            summary.append(f"그중 {score['injuredCount']}명은 다친 상태야."
+                           if score["injuredCount"] else "구조한 사람 중 다친 사람은 없어.")
+        else:
+            summary.append(f"이번에는 {score['total']}명 중 아무도 구조하지 못했어.")
+        summary.append(f"{score['tooLateCount']}명은 구조할 수 있는 시간을 넘겼어."
+                       if score["tooLateCount"] else "구조 시한은 모두 지켰어.")
+        return "\n\n".join([
+            " ".join(summary),
+            f"우리가 고른 순서는 {names(self.state.confirmedRoute)}였어.",
+            *observations,
+            "어떤 모습을 찾을지, 어디부터 갈지, 이동하고 사진을 확인하는 데 얼마나 걸렸는지가 결과에 반영됐어. "
+            f"이건 {mode}으로 진행한 가상 훈련이야.",
+        ])

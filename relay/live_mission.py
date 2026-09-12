@@ -10,13 +10,13 @@ try:
     from .drone_client import DroneError
     from .mission_runner import MissionRunner
     from .survey import ACTIVE, TERMINAL, result
-    from .vision import VisionError
+    from .vision import PromptRevisionRequired, VisionError
 except ImportError:
     from camera import CaptureError, LiveCaptureCamera
     from drone_client import DroneError
     from mission_runner import MissionRunner
     from survey import ACTIVE, TERMINAL, result
-    from vision import VisionError
+    from vision import PromptRevisionRequired, VisionError
 
 STATES = {"accepted", "preflight", "taking_off", "running", "returning",
     "awaiting_rc_landing", "completed", "stop_requested", "stopped", "failed", "outcome_unknown"}
@@ -205,6 +205,8 @@ class LiveMissionRunner(MissionRunner):
             f"실제 드론 작업을 중단했습니다 ({code}). 자동 재개하지 않습니다. 정지 상태를 확인하고 필요하면 RC로 제어·착륙하세요."))
         if detail:
             self.session.data["error"] += " " + detail
+        if isinstance(exc, PromptRevisionRequired):
+            self.session.data["error"] += " 정지 상태를 확인한 뒤 처음으로 돌아가 새 설명을 확인하세요."
         self.session.touch()
         await self._stop_hardware()
         await self._notify()
@@ -319,7 +321,7 @@ class LiveMissionRunner(MissionRunner):
                         raise DroneError("CAPTURE_REJECTED")
                     self.session.analyzing(frame.id, run_id)
                     await self._notify()
-                    evidence = await self.vision.analyze(frame, person["targetDescription"],
+                    evidence = await self.vision.analyze(frame,
                         search_prompt=self.session.data["userPromptText"],
                         appearance_constraints=self.session.data["appearanceConstraints"],
                         unsupported_appearance=self.session.data["unsupportedAppearance"],

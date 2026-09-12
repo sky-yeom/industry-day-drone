@@ -181,10 +181,10 @@ class ConfigSubprocessTests(unittest.TestCase):
         self.assertFalse(value["has_token"])
         self.assertEqual((value["VOICE_NAME"], value["VOICE_TYPE"], value["MODEL"],
             value["TRANSCRIPTION_MODEL"]), ("shimmer", "openai", "gpt-realtime", "gpt-4o-transcribe"))
-        self.assertEqual(value["VAD_TYPE"], "azure_semantic_vad_multilingual")
+        self.assertEqual(value["VAD_TYPE"], "server_vad")
         self.assertEqual(value["VAD_LANGUAGES"], ["ko"])
         self.assertEqual((value["SILENCE_DURATION_MS"], value["SPEECH_DURATION_MS"],
-            value["PREFIX_PADDING_MS"], value["VAD_THRESHOLD"]), (300, 100, 420, 0.5))
+            value["PREFIX_PADDING_MS"], value["VAD_THRESHOLD"]), (300, 80, 420, 0.5))
 
     def test_process_selection_wins_inherited_flags_and_preserves_voice(self):
         baseline = self.snapshot({})

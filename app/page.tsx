@@ -6,24 +6,24 @@ import GibbyDroneBoarding from "@/components/GibbyDroneBoarding";
 import GibbyIntroSequence from "@/components/GibbyIntroSequence";
 import GibbyMapTransition from "@/components/GibbyMapTransition";
 import GibbyRouteDock from "@/components/GibbyRouteDock";
+import GibbyResultsTransition from "@/components/GibbyResultsTransition";
 import PixelShell from "@/components/PixelShell";
 import ResultsPanel from "@/components/ResultsPanel";
 import { INITIAL_ROUTE_STATE } from "@/data/monitors";
 import { INITIAL_MISSION_STATE, SCENARIO_BRIEFING, TARGET_APPEARANCE } from "@/data/scenario";
 import { fetchRelayConfig, VoiceSession, type RelayConfig, type VoiceStatus } from "@/lib/voiceClient";
 import type { ChatMessage, DashboardState } from "@/lib/types";
+import type { MarkerRect } from "@/lib/gibbyResultsSprite";
 
 const INITIAL_STATE: DashboardState = { ...INITIAL_ROUTE_STATE, ...INITIAL_MISSION_STATE };
-// No tabs anymore: the mission plays out as sequential full-screen pixel
-// steps. "opening" covers the Gibby intro + prompt screen together (see
-// components/GibbyIntroSequence.tsx); "map-intro" is the pocket/map-finding
-// handoff (components/GibbyMapTransition.tsx) that plays once before the
-// route step. "route" now persists for the whole mission (map + right
-// column) — once the mission launches, GibbyDroneBoarding plays in place
-// of GibbyRouteDock and, once boarded, the right column swaps over to the
-// drone-image panel (see components/FlightPathMap.tsx); only "results" is
-// still a separate step, reached automatically at mission end.
-type Step = "opening" | "map-intro" | "route" | "results";
+type Step = "opening" | "map-intro" | "route" | "results-transition" | "results";
+
+interface ReturnScene {
+  runId: string;
+  generation: number;
+  origin: MarkerRect | null;
+  celebrate: boolean;
+}
 
 export default function Home() {
   const [step, setStep] = useState<Step>("opening");
@@ -32,11 +32,21 @@ export default function Home() {
   const [status, setStatus] = useState<VoiceStatus>("idle");
   const [connected, setConnected] = useState(false);
   const [transcript, setTranscript] = useState<ChatMessage[]>([]);
+  const [speechText, setSpeechText] = useState<string | null>(null);
   const [config, setConfig] = useState<RelayConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [debrief, setDebrief] = useState("");
   const [boarded, setBoarded] = useState(false);
+  const [returnScene, setReturnScene] = useState<ReturnScene | null>(null);
+  const [resultsVisible, setResultsVisible] = useState(false);
+  const [sceneError, setSceneError] = useState<string | null>(null);
   const sessionRef = useRef<VoiceSession | null>(null);
+  const markerRef = useRef<HTMLDivElement>(null);
+  const boardedRef = useRef(false);
+  const latestStateRef = useRef(INITIAL_STATE);
+  const pendingReturnRef = useRef<DashboardState | null>(null);
+  const returnSceneRef = useRef<ReturnScene | null>(null);
+  const resultsReadyRef = useRef(false);
   const generationRef = useRef(0);
   const advancedToCapturesRef = useRef(false);
   const advancedToRouteRef = useRef(false);
@@ -44,6 +54,40 @@ export default function Home() {
   const streamingRef = useRef<{ user: string | null; agent: string | null }>({ user: null, agent: null });
   const state = snapshot.state;
   const missionLaunched = state.clockRunning || state.elapsedMs > 0 || ["paused", "complete"].includes(state.missionPhase);
+
+  const beginReturn = useCallback((terminal: DashboardState) => {
+    if (returnSceneRef.current) return;
+    const rect = boardedRef.current ? markerRef.current?.getBoundingClientRect() : null;
+    const origin = rect && rect.width > 0 && rect.height > 0
+      ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : null;
+    if (boardedRef.current && !origin) {
+      setSceneError("드론 표시 위치를 확인하지 못해 귀환 애니메이션 없이 결과를 표시합니다.");
+    }
+    const scene = {
+      runId: terminal.runId, generation: generationRef.current,
+      origin, celebrate: terminal.missionPhase === "complete",
+    };
+    pendingReturnRef.current = null;
+    returnSceneRef.current = scene;
+    setReturnScene(scene);
+    setStep(origin ? "results-transition" : "results");
+  }, []);
+
+  useEffect(() => {
+    boardedRef.current = boarded;
+    if (!boarded || !pendingReturnRef.current) return;
+    const id = requestAnimationFrame(() => {
+      if (pendingReturnRef.current) beginReturn(pendingReturnRef.current);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [boarded, beginReturn]);
+
+  const finishReturn = useCallback((scene: ReturnScene) => {
+    if (scene.generation !== generationRef.current || returnSceneRef.current !== scene || resultsReadyRef.current) return;
+    resultsReadyRef.current = true;
+    setStep("results");
+    sessionRef.current?.markResultsReady(scene.runId);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -78,9 +122,18 @@ export default function Home() {
     setStatus("idle");
     setConnected(false);
     setTranscript([]);
+    setSpeechText(null);
     setError(null);
     setDebrief("");
     setBoarded(false);
+    boardedRef.current = false;
+    latestStateRef.current = INITIAL_STATE;
+    pendingReturnRef.current = null;
+    returnSceneRef.current = null;
+    resultsReadyRef.current = false;
+    setReturnScene(null);
+    setResultsVisible(false);
+    setSceneError(null);
   }, []);
 
   const start = useCallback(() => {
@@ -88,6 +141,7 @@ export default function Home() {
     const generation = ++generationRef.current;
     const current = () => generationRef.current === generation;
     setStatus("connecting");
+    setSpeechText("");
     void fetchRelayConfig().then((value) => { if (current()) setConfig(value); });
     const session = new VoiceSession({
       onStatus: (next, detail) => {
@@ -103,16 +157,27 @@ export default function Home() {
       },
       onLevel: () => {},
       onDebrief: (text) => { if (current()) setDebrief(text); },
+      onResultsReveal: () => { if (current()) setResultsVisible(true); },
+      onSpeechText: (text) => { if (current()) setSpeechText(text); },
       onRouteState: (next) => {
         if (!current()) return;
-        if (!advancedToRouteRef.current && next.promptPhase === "confirmed") {
+        const previous = latestStateRef.current;
+        if (previous.runId && (previous.runId !== next.runId || next.revision < previous.revision)) return;
+        latestStateRef.current = next;
+        const terminal = next.missionPhase === "complete" || next.missionPhase === "aborted";
+        if (!advancedToRouteRef.current && !terminal && next.promptPhase === "confirmed") {
           advancedToRouteRef.current = true;
           setStep("map-intro");
         }
         if (!advancedToResultsRef.current &&
-            (next.missionPhase === "complete" || next.missionPhase === "aborted")) {
+            terminal) {
           advancedToResultsRef.current = true;
-          setStep("results");
+          if (next.missionPhase === "complete" && !boardedRef.current) {
+            pendingReturnRef.current = next;
+            if (!advancedToRouteRef.current) setStep("route");
+          } else {
+            beginReturn(next);
+          }
         }
         const receivedAt = performance.now();
         setSnapshot((previous) => {
@@ -146,7 +211,7 @@ export default function Home() {
     });
     sessionRef.current = session;
     void session.start().catch(() => {});
-  }, []);
+  }, [beginReturn]);
 
   const retryConnection = useCallback(() => {
     reset();
@@ -161,7 +226,7 @@ export default function Home() {
   // Display interpolation only: expiration, rescue and scoring remain relay-owned.
   const elapsedMs = state.elapsedMs + (state.clockRunning ? Math.max(0, now - snapshot.receivedAt) : 0);
   const visionReady = config?.visionReady ?? false;
-  const agentText = [...transcript].reverse().find((message) => message.role === "agent")?.text ?? "";
+  const agentText = speechText ?? [...transcript].reverse().find((message) => message.role === "agent")?.text ?? "";
 
   if (step === "opening") {
     return <GibbyIntroSequence
@@ -179,11 +244,14 @@ export default function Home() {
       targetAlt={TARGET_APPEARANCE.referenceAlt}
       briefing={SCENARIO_BRIEFING}
       onIntroReady={() => sessionRef.current?.sendRouteIntroReady()}
-      onDone={() => setStep("route")}
+      onDone={() => {
+        if (!returnSceneRef.current && latestStateRef.current.runId === state.runId) setStep("route");
+      }}
     />;
   }
 
   const banners = <>
+    {sceneError && <div role="alert" className="pixel-panel bg-[#fff3d6] p-3 text-sm text-[#091f2c]">{sceneError}</div>}
     {(!config || !visionReady) && <div role="alert" className="pixel-panel bg-[#fff3d6] p-3 text-sm leading-6 text-[#7f5a1a]">
       {config?.visionError || (config ? "이미지 분석 서비스가 준비되지 않아 출발할 수 없습니다." : "관제 서버 설정을 확인할 수 없습니다. 릴레이 실행 상태를 확인해 주세요.")}
     </div>}
@@ -200,13 +268,24 @@ export default function Home() {
     </div>}
   </>;
 
-  if (step === "route") return <div className="relative h-dvh w-full">
-    <PixelShell banners={banners} groundHidden={boarded}>
-      <FlightPathMap state={state} boarded={boarded} elapsedMs={elapsedMs} connected={connected} />
+  return <div className="results-scene relative h-dvh w-full overflow-hidden">
+    <PixelShell banners={banners} groundHidden={boarded && !returnScene} groundReturning={Boolean(returnScene?.origin)}>
+      {(step === "route" || step === "results-transition") && <div className="absolute inset-0">
+        <FlightPathMap state={state} boarded={boarded} elapsedMs={elapsedMs} connected={connected}
+          markerRef={markerRef} departing={Boolean(returnScene)} />
+      </div>}
+      {step === "results" && <div className="results-content h-full min-h-0">
+        <ResultsPanel state={state} debrief={debrief} onReset={reset} visible={resultsVisible} />
+      </div>}
     </PixelShell>
-    {missionLaunched && !boarded && <GibbyDroneBoarding onBoarded={() => setBoarded(true)} />}
-    {!missionLaunched && <GibbyRouteDock agentText={agentText} />}
+    {step === "route" && missionLaunched && !boarded && <GibbyDroneBoarding onBoarded={() => {
+      if (!returnSceneRef.current && latestStateRef.current.runId === state.runId) setBoarded(true);
+    }} />}
+    {step === "route" && !missionLaunched && <GibbyRouteDock agentText={agentText} />}
+    {step === "results-transition" && <button type="button" onClick={reset}
+      className="pixel-button absolute right-6 top-6 z-[70] bg-[#ffd23f] px-4 py-2 text-sm font-semibold text-[#091f2c]">처음으로</button>}
+    {returnScene && <GibbyResultsTransition key={returnScene.runId}
+      origin={returnScene.origin} celebrate={returnScene.celebrate}
+      onReady={() => finishReturn(returnScene)} onError={setSceneError} />}
   </div>;
-
-  return <PixelShell banners={banners} groundHidden><ResultsPanel state={state} debrief={debrief} onReset={reset} /></PixelShell>;
 }

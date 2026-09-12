@@ -13,6 +13,8 @@
 import type { DashboardState, DetectionMode } from "@/lib/types";
 
 const SAMPLE_RATE = 24000;
+const RESULTS_START_TIMEOUT_MS = 15000;
+const INTERRUPTION_TRANSCRIPT_TIMEOUT_MS = 5000;
 
 const RELAY_HTTP =
   process.env.NEXT_PUBLIC_RELAY_HTTP ?? "http://127.0.0.1:8080";
@@ -34,6 +36,20 @@ export interface ToolActivity {
   ms?: number;
 }
 
+interface AssistantSpeech {
+  parts: Map<string, string>;
+  completed: boolean;
+  hasAudio: boolean;
+  started: boolean;
+  drainRequested: boolean;
+  ordinary: boolean;
+}
+
+interface InterruptionHold {
+  inputs: Map<string, ReturnType<typeof setTimeout> | null>;
+  responseIds: Set<string>;
+}
+
 export interface VoiceHandlers {
   /**
    * 상태 변화. `detail`은 사용자에게 보여줄 한 줄 설명이며, 상태가 바뀔 때마다
@@ -52,6 +68,9 @@ export interface VoiceHandlers {
   onError: (message: string) => void;
   onConnection?: (connected: boolean) => void;
   onDeparture?: () => void;
+  onResultsReveal?: () => void;
+  /** The caption for the response actually playing, not a queued future reply. */
+  onSpeechText?: (text: string) => void;
 }
 
 export interface RelayConfig {
@@ -82,7 +101,9 @@ export class VoiceSession {
   private running = false;
 
   private partialUser = "";
-  private partialAgent = "";
+  private speech = new Map<string, AssistantSpeech>();
+  private audibleResponseId: string | null = null;
+  private interruption: InterruptionHold | null = null;
   private generation = 0;
   private withVoice = true;
   private debriefRunId: string | null = null;
@@ -96,11 +117,18 @@ export class VoiceSession {
   private missionEnded = false;
   private resultsRequested = false;
   private narratingResults = false;
+  private resultsReadyRunId: string | null = null;
+  private resultsRevealed = false;
+  private resultsFallback = false;
+  private resultsStartTimer: ReturnType<typeof setTimeout> | null = null;
+  private resultsResponseIds = new Set<string>();
+  private routeRevision = -1;
   private rejectConnect: ((reason: Error) => void) | null = null;
   private responseActive = false;
+  private responseId: string | null = null;
+  private interruptedResponses = new Set<string>();
   private toolCallPending = false;
   private replyResponseId: string | null = null;
-  private replyDrainRequested = false;
   private microphoneMuted = true;
   // The mic streams from the moment the graph is wired, which can trigger VAD
   // before the greeting is requested. That collision kills the greeting with
@@ -129,11 +157,21 @@ export class VoiceSession {
     this.missionEnded = false;
     this.resultsRequested = false;
     this.narratingResults = false;
+    this.resultsReadyRunId = null;
+    this.resultsRevealed = false;
+    this.resultsFallback = false;
+    this.resultsResponseIds.clear();
+    this.clearResultsStartTimer();
+    this.routeRevision = -1;
     this.replyResponseId = null;
-    this.replyDrainRequested = false;
+    this.responseId = null;
+    this.interruptedResponses.clear();
     this.microphoneMuted = true;
     this.partialUser = "";
-    this.partialAgent = "";
+    this.speech.clear();
+    this.audibleResponseId = null;
+    this.clearInterruption(false);
+    this.handlers.onSpeechText?.("");
     this.handlers.onStatus("connecting");
 
     try {
@@ -182,25 +220,48 @@ export class VoiceSession {
       this.playbackNode.port.onmessage = (e) => {
         if (generation !== this.generation) return;
         const msg = e.data as { type: string; playing: boolean; id?: string };
+        if (msg.id && this.interruptedResponses.has(msg.id)) return;
+        const speech = msg.id ? this.speech.get(msg.id) : undefined;
         if (msg.type === "state") {
           if (!this.voiceStopped || this.narratingResults) {
-            this.handlers.onStatus(msg.playing || this.replyResponseId || this.narratingResults ? "speaking" : "listening");
+            this.handlers.onStatus(!this.interruption && (msg.playing || this.replyResponseId || this.narratingResults) ? "speaking" : "listening");
           }
+        }
+        if (msg.type === "started" && msg.id && speech) {
+          speech.started = true;
+          this.audibleResponseId = msg.id;
+          this.publishSpeechCaption(msg.id);
+        }
+        if (msg.type === "started" && this.narratingResults && msg.id && this.resultsResponseIds.has(msg.id)) {
+          this.revealResults();
         }
         if (msg.type === "drained" && this.launchDrainRequested && msg.id === this.launchResponseId) {
           void this.finishDeparture();
-        } else if (msg.type === "drained" && msg.id === this.finalResponseId) {
-          void this.stop();
-        } else if (msg.type === "drained" && this.replyDrainRequested && msg.id === this.replyResponseId) {
-          this.replyResponseId = null;
-          this.replyDrainRequested = false;
+        } else if (msg.type === "drained" && this.finalDrainRequested && msg.id === this.finalResponseId) {
+          const missingAudio = !this.resultsRevealed;
+          if (missingAudio) {
+            const message = "결과 음성이 재생되지 않았습니다. 화면의 최종 구조 결과를 확인해 주세요.";
+            this.handlers.onStatus("error", message);
+            this.handlers.onError(message);
+          }
+          this.fallbackResults();
+          void this.closeSession(missingAudio, true);
+        } else if (msg.type === "drained" && speech?.ordinary && speech.drainRequested) {
+          if (speech.started && speech.completed && this.ws?.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({
+              type: "voice.reply_drained", responseId: msg.id, runId: this.currentRunId,
+            }));
+          }
+          if (msg.id === this.replyResponseId) {
+            this.replyResponseId = null;
+          }
           if (!this.responseActive && !this.launchRunId && !this.debriefRunId) {
             this.greetPending = false;
-            this.ws?.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
             this.setMicrophoneMuted(false);
             this.handlers.onStatus("listening");
           }
         }
+        if (msg.type === "drained" && msg.id) this.speech.delete(msg.id);
       };
 
       source.connect(this.captureNode);
@@ -228,6 +289,23 @@ export class VoiceSession {
   }
 
   async stop(keepStatus = false): Promise<void> {
+    await this.closeSession(keepStatus);
+  }
+
+  private async closeSession(keepStatus = false, preserveResults = false): Promise<void> {
+    this.clearResultsStartTimer();
+    this.clearInterruption(false);
+    this.speech.clear();
+    this.audibleResponseId = null;
+    this.handlers.onSpeechText?.("");
+    if (!preserveResults) {
+      this.currentRunId = "";
+      this.resultsReadyRunId = null;
+      this.debriefRunId = null;
+      this.resultsFallback = false;
+      this.resultsRevealed = false;
+      this.resultsResponseIds.clear();
+    }
     ++this.generation;
     this.rejectConnect?.(new Error("세션이 종료되었습니다."));
     this.rejectConnect = null;
@@ -236,7 +314,6 @@ export class VoiceSession {
     this.responseActive = false;
     this.toolCallPending = false;
     this.replyResponseId = null;
-    this.replyDrainRequested = false;
     this.microphoneMuted = true;
     this.handlers.onLevel(0);
     this.handlers.onBusy(false);
@@ -268,8 +345,9 @@ export class VoiceSession {
     if (context && context.state !== "closed") await context.close();
   }
 
-  private async finishDeparture() {
+  private async finishDeparture(announce = true) {
     if (this.voiceStopped) return;
+    this.clearInterruption();
     this.voiceStopped = true;
     this.greetPending = false;
     this.responseActive = false;
@@ -285,16 +363,157 @@ export class VoiceSession {
     this.handlers.onLevel(0);
     this.handlers.onBusy(false);
     this.handlers.onStatus("idle");
-    this.handlers.onDeparture?.();
+    if (announce) this.handlers.onDeparture?.();
     if (this.missionEnded) this.requestResults();
   }
 
   private requestResults() {
-    if (this.resultsRequested || !this.debriefRunId || this.ws?.readyState !== WebSocket.OPEN) return;
+    if (this.resultsReadyRunId !== this.currentRunId || !this.currentRunId) return;
+    if (this.resultsFallback) {
+      this.revealResults();
+      return;
+    }
+    if (this.resultsRequested || this.debriefRunId !== this.currentRunId || !this.voiceStopped) return;
+    if (!this.withVoice || !this.playbackNode || this.ws?.readyState !== WebSocket.OPEN) {
+      this.fallbackResults();
+      void this.closeSession(false, true);
+      return;
+    }
     this.resultsRequested = true;
     this.narratingResults = true;
     this.handlers.onStatus("connecting");
     this.ws.send(JSON.stringify({ type: "results.ready", runId: this.debriefRunId }));
+  }
+
+  markResultsReady(runId: string): void {
+    if (!runId || runId !== this.currentRunId || this.resultsReadyRunId === runId) return;
+    this.resultsReadyRunId = runId;
+    const generation = this.generation;
+    // Also bound waiting for a missing debrief or a stalled departure drain.
+    // A timeout is a reported failure, never permission to overlap narration.
+    this.resultsStartTimer = setTimeout(() => {
+      if (generation !== this.generation || runId !== this.currentRunId || this.resultsRevealed) return;
+      const message = "결과 음성 재생을 시작하지 못했습니다. 화면의 최종 구조 결과를 확인해 주세요.";
+      this.handlers.onStatus("error", message);
+      this.handlers.onError(message);
+      this.fallbackResults();
+      void this.closeSession(true, true);
+    }, RESULTS_START_TIMEOUT_MS);
+    this.requestResults();
+  }
+
+  private clearResultsStartTimer() {
+    if (this.resultsStartTimer !== null) clearTimeout(this.resultsStartTimer);
+    this.resultsStartTimer = null;
+  }
+
+  private revealResults() {
+    if (this.resultsRevealed || !this.currentRunId || this.resultsReadyRunId !== this.currentRunId) return;
+    this.resultsRevealed = true;
+    this.clearResultsStartTimer();
+    this.handlers.onResultsReveal?.();
+  }
+
+  private fallbackResults() {
+    this.resultsFallback = true;
+    this.revealResults();
+  }
+
+  private speechFor(id: string): AssistantSpeech {
+    let speech = this.speech.get(id);
+    if (!speech) {
+      speech = {
+        parts: new Map(), completed: false, hasAudio: false, started: false,
+        drainRequested: false, ordinary: !this.launchRunId && !this.debriefRunId,
+      };
+      this.speech.set(id, speech);
+      if (this.speech.size > 128) {
+        for (const [key, old] of this.speech) {
+          if (old.completed && !old.hasAudio) this.speech.delete(key);
+        }
+      }
+    }
+    return speech;
+  }
+
+  private publishSpeechCaption(id: string) {
+    if (this.audibleResponseId !== id) return;
+    const speech = this.speech.get(id);
+    if (speech) this.handlers.onSpeechText?.([...speech.parts.values()].join(""));
+  }
+
+  private holdForInput(itemId: unknown) {
+    if (typeof itemId !== "string" || !itemId) {
+      console.warn("Voice activity event is missing its input item ID.");
+      return;
+    }
+    const pending = [...this.speech].filter(([, speech]) => speech.ordinary && (speech.hasAudio || !speech.completed));
+    if (!pending.length && !this.interruption) return;
+    this.interruption ??= { inputs: new Map(), responseIds: new Set() };
+    if (!this.interruption.inputs.has(itemId)) this.interruption.inputs.set(itemId, null);
+    for (const [id] of pending) this.interruption.responseIds.add(id);
+    // Pause immediately, but keep the unheard tail until ASR distinguishes a reply from noise.
+    this.playbackNode?.port.postMessage({ type: "pause", value: true });
+  }
+
+  private awaitInputTranscript(itemId: unknown) {
+    if (typeof itemId !== "string" || !this.interruption?.inputs.has(itemId)) return;
+    if (this.interruption.inputs.get(itemId) !== null) return;
+    const generation = this.generation;
+    const timer = setTimeout(() => {
+      if (generation !== this.generation || !this.interruption?.inputs.has(itemId)) return;
+      this.handlers.onError("음성 확인이 지연되어 기비의 안내를 이어서 재생합니다. 안내 뒤에 다시 말해 주세요.");
+      this.resolveInterruption(itemId, false);
+    }, INTERRUPTION_TRANSCRIPT_TIMEOUT_MS);
+    this.interruption.inputs.set(itemId, timer);
+  }
+
+  private clearInterruption(resume = true) {
+    if (!this.interruption) return;
+    for (const timer of this.interruption.inputs.values()) {
+      if (timer !== null) clearTimeout(timer);
+    }
+    this.interruption = null;
+    if (resume) this.playbackNode?.port.postMessage({ type: "pause", value: false });
+  }
+
+  private resolveInterruption(itemId: unknown, genuine: boolean) {
+    const hold = this.interruption;
+    if (typeof itemId !== "string" || !hold?.inputs.has(itemId)) return;
+    const timer = hold.inputs.get(itemId);
+    if (timer != null) clearTimeout(timer);
+    hold.inputs.delete(itemId);
+    if (!genuine) {
+      if (!hold.inputs.size) this.clearInterruption();
+      return;
+    }
+    const ids = [...hold.responseIds];
+    for (const id of ids) {
+      this.interruptedResponses.add(id);
+      this.speech.delete(id);
+    }
+    while (this.interruptedResponses.size > 64) {
+      const oldest = this.interruptedResponses.values().next().value;
+      if (oldest) this.interruptedResponses.delete(oldest);
+    }
+    this.playbackNode?.port.postMessage({ type: "discard", ids });
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: "voice.interrupt", runId: this.currentRunId, responseIds: ids.slice(-64) }));
+    }
+    if (this.audibleResponseId && hold.responseIds.has(this.audibleResponseId)) {
+      this.audibleResponseId = null;
+      this.handlers.onSpeechText?.("");
+    }
+    if (this.replyResponseId && hold.responseIds.has(this.replyResponseId)) {
+      this.replyResponseId = null;
+    }
+    if (this.responseId && hold.responseIds.has(this.responseId)) {
+      this.responseId = null;
+      this.responseActive = false;
+      this.toolCallPending = false;
+      this.handlers.onBusy(false);
+    }
+    this.clearInterruption();
   }
 
   sendText(text: string): boolean {
@@ -341,7 +560,8 @@ export class VoiceSession {
         const why = `릴레이 연결이 끊어졌습니다. (코드 ${ev.code})`;
         this.handlers.onStatus("error", why);
         this.handlers.onError("관제 서버 연결이 끊어졌습니다. 처음부터 다시 시작해 주세요.");
-        void this.stop(true);
+        this.fallbackResults();
+        void this.closeSession(true, true);
       };
       ws.onmessage = (e) => {
         if (generation !== this.generation) return;
@@ -358,7 +578,10 @@ export class VoiceSession {
           this.handlers.onStatus("error", msg.message);
           this.handlers.onError(msg.message);
           reject(new Error(msg.message));
-          if (this.running) void this.stop(true);
+          if (this.running) {
+            this.fallbackResults();
+            void this.closeSession(true, true);
+          }
           return;
         }
         this.handleEvent(msg);
@@ -368,12 +591,14 @@ export class VoiceSession {
 
   private handleEvent(msg: Record<string, unknown>) {
     const type = String(msg.type ?? "");
+    if (typeof msg.response_id === "string" && this.interruptedResponses.has(msg.response_id)) return;
 
     switch (type) {
       case "mission.launch": {
         if (String(msg.runId) !== this.currentRunId) return;
         this.launchRunId = this.currentRunId;
         this.greetPending = false;
+        this.clearInterruption();
         this.setMicrophoneMuted(true);
         return;
       }
@@ -391,27 +616,36 @@ export class VoiceSession {
       case "mission.launch.failed": {
         if (msg.runId !== this.launchRunId) return;
         this.handlers.onError(String(msg.message ?? "출발 음성 안내가 중단되었습니다. 자동 작전은 계속됩니다."));
+        this.playbackNode?.port.postMessage({ type: "flush" });
         void this.finishDeparture();
         return;
       }
       case "mission.debrief": {
+        if (msg.runId !== this.currentRunId || this.debriefRunId === this.currentRunId) return;
         this.missionEnded = true;
-        this.debriefRunId = String(msg.runId ?? this.currentRunId);
+        this.debriefRunId = this.currentRunId;
         this.handlers.onDebrief(String(msg.text ?? ""));
         this.setMicrophoneMuted(true);
-        if (!this.withVoice) void this.stop();
-        else if (this.voiceStopped) this.requestResults();
+        if (!this.launchRunId) {
+          this.playbackNode?.port.postMessage({ type: "flush" });
+          void this.finishDeparture(false);
+        } else if (this.voiceStopped) this.requestResults();
         return;
       }
       case "mission.debrief.failed": {
-        if (msg.runId !== this.debriefRunId) return;
-        this.handlers.onError(String(msg.message ?? "결과 음성 안내를 완료하지 못했습니다."));
-        void this.stop();
+        if (msg.runId !== this.debriefRunId || !this.resultsRequested) return;
+        const message = String(msg.message ?? "결과 음성 안내를 완료하지 못했습니다.");
+        this.handlers.onStatus("error", message);
+        this.handlers.onError(message);
+        this.fallbackResults();
+        void this.closeSession(true, true);
         return;
       }
       case "mission.debrief.response": {
-        if (String(msg.runId ?? this.currentRunId) === this.debriefRunId) {
+        if (this.resultsRequested && msg.runId === this.debriefRunId && typeof msg.responseId === "string") {
+          if (this.finalResponseId !== msg.responseId) this.finalDrainRequested = false;
           this.finalResponseId = String(msg.responseId ?? "");
+          this.resultsResponseIds.add(this.finalResponseId);
           this.setMicrophoneMuted(true);
         }
         return;
@@ -435,17 +669,20 @@ export class VoiceSession {
           if (this.launchResponseId !== response.id) this.launchDrainRequested = false;
           this.launchResponseId = response.id;
         }
-        if (response?.id && this.debriefRunId !== null &&
+        if (response?.id && this.resultsRequested && this.debriefRunId !== null &&
             (metadata?.missionDebrief === true || metadata?.missionDebrief === "true") &&
             metadata.runId === this.debriefRunId) {
+          if (this.finalResponseId !== response.id) this.finalDrainRequested = false;
           this.finalResponseId = response.id;
+          this.resultsResponseIds.add(response.id);
           this.setMicrophoneMuted(true);
         }
         if (response?.id && !this.launchRunId && !this.debriefRunId) {
           this.replyResponseId = response.id;
-          this.replyDrainRequested = false;
         }
-        this.setMicrophoneMuted(true);
+        this.setMicrophoneMuted(this.greetPending || this.launchRunId !== null || this.debriefRunId !== null);
+        this.responseId = response?.id ?? null;
+        if (this.responseId) this.speechFor(this.responseId);
         this.responseActive = true;
         this.handlers.onBusy(true);
         return;
@@ -461,20 +698,30 @@ export class VoiceSession {
       case "response.audio.delta":
       case "response.output_audio.delta": {
         const delta = msg.delta as string | undefined;
+        const id = typeof msg.response_id === "string" ? msg.response_id
+          : this.narratingResults ? this.finalResponseId : this.responseId ?? this.launchResponseId;
+        if (this.voiceStopped && (!this.narratingResults || !id || id !== this.finalResponseId)) return;
         if (delta && this.playbackNode) {
-          this.playbackNode.port.postMessage({ type: "push", pcm: fromBase64(delta) });
+          if (id) this.speechFor(id).hasAudio = true;
+          this.playbackNode.port.postMessage({ type: "push", pcm: fromBase64(delta), id });
         }
         return;
       }
 
       case "input_audio_buffer.speech_started": {
         if (this.microphoneMuted || this.debriefRunId !== null || this.launchRunId !== null) return;
+        this.holdForInput(msg.item_id);
         this.handlers.onStatus("listening");
         // Whisper's transcript lands about a second later, but the agent starts
         // answering in ~460ms. Reserve the user's bubble now or the reply is
         // rendered above the question that prompted it.
         this.partialUser = "";
         this.handlers.onTranscript("user", "…", false);
+        return;
+      }
+
+      case "input_audio_buffer.speech_stopped": {
+        this.awaitInputTranscript(msg.item_id);
         return;
       }
 
@@ -489,6 +736,7 @@ export class VoiceSession {
         // 잡음에서 지어낸 말은 화면에 남기지 않는다. 빈 문자열로 넘기면
         // 미리 잡아둔 자리표시자가 지워진다.
         const clean = looksHallucinated(final) ? "" : final;
+        this.resolveInterruption(msg.item_id, Boolean(clean));
         this.handlers.onTranscript("user", clean, true);
         this.partialUser = "";
         return;
@@ -496,19 +744,40 @@ export class VoiceSession {
       case "conversation.item.input_audio_transcription.failed": {
         // 전사가 실패하면 completed가 오지 않는다. 그대로 두면 "…" 자리표시자가
         // 남고, 다음 발화가 그 낡은 말풍선에 덮어써진다.
+        this.resolveInterruption(msg.item_id, false);
         this.handlers.onTranscript("user", "", true);
         this.partialUser = "";
         return;
       }
 
       case "response.audio_transcript.delta":
-      case "response.output_audio_transcript.delta": {
-        this.partialAgent += (msg.delta as string) ?? "";
-        this.handlers.onTranscript("agent", this.partialAgent, false);
+      case "response.output_audio_transcript.delta":
+      case "response.audio_transcript.done":
+      case "response.output_audio_transcript.done": {
+        const id = typeof msg.response_id === "string" ? msg.response_id : this.responseId;
+        if (!id) {
+          console.warn("Assistant audio transcript is missing its response ID.");
+          return;
+        }
+        const speech = this.speechFor(id);
+        const part = `${msg.item_id ?? "message"}:${msg.content_index ?? 0}`;
+        const text = type.endsWith(".done")
+          ? String(msg.transcript ?? speech.parts.get(part) ?? "")
+          : (speech.parts.get(part) ?? "") + String(msg.delta ?? "");
+        speech.parts.set(part, text);
+        if (id === this.responseId) this.handlers.onTranscript("agent", [...speech.parts.values()].join(""), false);
+        this.publishSpeechCaption(id);
         return;
       }
       case "response.done": {
         const response = msg.response as { id?: string; status?: string } | undefined;
+        if (response?.id && this.interruptedResponses.has(response.id)) return;
+        const speech = response?.id ? this.speechFor(response.id) : undefined;
+        if (speech) {
+          speech.completed = response?.status === "completed";
+          if (speech.completed && speech.ordinary && speech.hasAudio) this.drainReply(response?.id);
+          if (response?.id) this.publishSpeechCaption(response.id);
+        }
         if (this.launchResponseId && response?.id === this.launchResponseId && response.status === "completed") {
           this.drainDeparture();
         }
@@ -519,10 +788,11 @@ export class VoiceSession {
             this.handlers.onError("최종 음성 안내가 중단되어 다시 시도하고 있습니다. 화면의 구조 결과와 최종 설명도 확인할 수 있습니다.");
           }
         }
-        if (this.partialAgent.trim()) {
-          this.handlers.onTranscript("agent", this.partialAgent, true);
+        if (this.responseId && response?.id !== this.responseId) return;
+        const text = speech ? [...speech.parts.values()].join("") : "";
+        if (text.trim()) {
+          this.handlers.onTranscript("agent", text, true);
         }
-        this.partialAgent = "";
         if (this.toolCallPending) {
           this.toolCallPending = false;
         } else {
@@ -559,6 +829,11 @@ export class VoiceSession {
 
       case "route.state": {
         const state = msg.state as DashboardState;
+        if (this.currentRunId && state.runId !== this.currentRunId) return;
+        if (typeof state.revision === "number") {
+          if (state.revision < this.routeRevision) return;
+          this.routeRevision = state.revision;
+        }
         this.currentRunId = state.runId;
         this.handlers.onRouteState(state);
         return;
@@ -582,6 +857,12 @@ export class VoiceSession {
         }
         this.handlers.onBusy(false);
         this.handlers.onError("음성 응답에 오류가 발생했습니다. 화면 조작은 계속 사용할 수 있습니다.");
+        if (this.narratingResults) {
+          this.handlers.onStatus("error", err?.message);
+          this.fallbackResults();
+          void this.closeSession(true, true);
+          return;
+        }
         // Voice Live의 error는 대부분 그 응답 하나만 실패한 것이고 세션은 살아
         // 있다. 여기서 status를 "error"로 바꾸면 마이크가 계속 열려 있는데도
         // 화면은 "세션 시작"으로 돌아가 세션이 끝난 것처럼 보인다.
@@ -595,16 +876,22 @@ export class VoiceSession {
   }
 
   private setMicrophoneMuted(muted: boolean) {
+    const changed = this.microphoneMuted !== muted;
     this.microphoneMuted = muted;
     this.captureNode?.port.postMessage({ type: "mute", value: muted });
+    if (changed && this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: "voice.input_state", muted }));
+    }
     if (muted) this.handlers.onLevel(0);
   }
 
-  private drainReply() {
-    if (!this.replyResponseId || this.replyDrainRequested) return;
-    this.replyDrainRequested = true;
+  private drainReply(id: string | null = this.replyResponseId) {
+    if (!id) return;
+    const speech = this.speechFor(id);
+    if (speech.drainRequested) return;
+    speech.drainRequested = true;
     // Generation can finish seconds before the last queued sentence is audible.
-    this.playbackNode?.port.postMessage({ type: "drain", id: this.replyResponseId });
+    this.playbackNode?.port.postMessage({ type: "drain", id });
   }
 
   private drainFinalResponse() {

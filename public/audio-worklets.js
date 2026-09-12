@@ -13,7 +13,10 @@ class CaptureProcessor extends AudioWorkletProcessor {
     this._n = 0;
     this._muted = false;
     this.port.onmessage = (e) => {
-      if (e.data && e.data.type === 'mute') this._muted = !!e.data.value;
+      if (e.data && e.data.type === 'mute') {
+        this._muted = !!e.data.value;
+        this._n = 0;
+      }
     };
   }
 
@@ -51,15 +54,34 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this._pos = 0;
     this._playing = false;
     this._drainIds = [];
+    this._startedIds = new Set();
+    this._responseId = null;
+    this._paused = false;
     this.port.onmessage = (e) => {
       const msg = e.data;
       if (msg.type === 'push') {
-        this._queue.push(msg.pcm);
+        this._queue.push({ pcm: msg.pcm, id: msg.id });
       } else if (msg.type === 'flush') {
-        // Barge-in: drop everything still queued so the agent stops mid-word.
+        // Used when the entire audio session is being retired.
         this._queue.length = 0;
         this._cur = null;
         this._pos = 0;
+        this._drainIds.length = 0;
+        this._startedIds.clear();
+        this._responseId = null;
+        this._paused = false;
+      } else if (msg.type === 'pause') {
+        this._paused = !!msg.value;
+      } else if (msg.type === 'discard') {
+        const ids = new Set(msg.ids);
+        this._queue = this._queue.filter(chunk => !ids.has(chunk.id));
+        this._drainIds = this._drainIds.filter(id => !ids.has(id));
+        for (const id of ids) this._startedIds.delete(id);
+        if (ids.has(this._responseId)) {
+          this._cur = null;
+          this._responseId = null;
+          this._pos = 0;
+        }
       } else if (msg.type === 'drain') {
         this._drainIds.push(msg.id);
       }
@@ -69,18 +91,32 @@ class PlaybackProcessor extends AudioWorkletProcessor {
   process(_inputs, outputs) {
     const out = outputs[0][0];
     if (!out) return true;
+    if (this._paused) {
+      out.fill(0);
+      if (this._playing) {
+        this._playing = false;
+        this.port.postMessage({ type: 'state', playing: false });
+      }
+      return true;
+    }
 
     let written = 0;
     while (written < out.length) {
       if (this._cur === null) {
         if (this._queue.length === 0) break;
-        this._cur = this._queue.shift();
+        const chunk = this._queue.shift();
+        this._cur = chunk.pcm;
+        this._responseId = chunk.id;
         this._pos = 0;
       }
       const remaining = this._cur.length - this._pos;
       const take = Math.min(remaining, out.length - written);
       for (let i = 0; i < take; i++) {
         out[written + i] = this._cur[this._pos + i] / 0x8000;
+      }
+      if (take > 0 && this._responseId && !this._startedIds.has(this._responseId)) {
+        this._startedIds.add(this._responseId);
+        this.port.postMessage({ type: 'started', id: this._responseId });
       }
       written += take;
       this._pos += take;

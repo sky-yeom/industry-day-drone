@@ -82,18 +82,16 @@ export default function GibbyMapTransition({
 
       <div className="relative z-10 flex h-full min-h-0 w-full flex-col gap-3 px-4 pb-[8dvh] pt-4 sm:px-6 sm:pt-6">
         <div className="shrink-0">
-          <p className={`${pixelFont.className} pixel-title text-sm tracking-[0.14em] text-[#091f2c] sm:text-base`}>실시간 경로 관제</p>
-          <h2 className={`${pixelFont.className} pixel-title mt-2 text-lg text-[#091f2c] sm:text-xl`}>비행경로</h2>
+          <p className="text-sm font-bold tracking-[0.14em] text-[#091f2c] sm:text-base">실시간 경로 관제</p>
+          <h2 className="mt-2 text-lg font-bold text-[#091f2c] sm:text-xl">비행경로</h2>
         </div>
 
         {/* Old prompt content fades away as soon as the transition starts. */}
         <div className={`grid min-h-0 max-w-[860px] flex-1 grid-cols-1 gap-3 transition-opacity duration-700 sm:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] sm:items-center ${fadingOut ? "pointer-events-none opacity-0" : "opacity-100"}`}>
           <div className="flex min-h-0 flex-col items-center justify-center gap-4 py-2">
-            <div className="pixel-frame pixel-rendering relative mt-6 w-full max-w-48">
-              <span className={`${pixelFont.className} pixel-frame-header--danger text-[10px]`}>위험!</span>
-              <div className="relative aspect-[3/4] w-full overflow-hidden bg-[#eee8f7]">
-                <Image src={targetImage} alt={targetAlt} fill sizes="(max-width: 768px) 60vw, 220px" className="object-contain" />
-              </div>
+            <div className="pixel-panel pixel-rendering relative mt-6 w-full max-w-48">
+              <span className={`${pixelFont.className} pixel-frame-header--danger text-[10px]`}>구조 필요</span>
+              <Image src={targetImage} alt={targetAlt} width={1536} height={1536} sizes="184px" className="block h-auto w-full" />
             </div>
           </div>
           <div className="pixel-panel flex h-64 shrink-0 flex-col justify-center overflow-y-auto p-5 sm:h-72">

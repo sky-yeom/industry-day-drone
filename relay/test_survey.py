@@ -306,7 +306,8 @@ class SurveyTests(unittest.TestCase):
         expected = {"phase", "draftRoute", "confirmedRoute", "runId", "revision", "missionPhase",
                     "mode", "elapsedMs", "clockRunning", "activeMonitorId", "people", "captures",
                     "score", "error", "promptPhase", "userPromptText",
-                    "appearanceConstraints", "unsupportedAppearance"}
+                    "appearanceConstraints", "unsupportedAppearance", "droneControlMode", "droneStopState",
+                    "droneErrorCode", "droneState", "activeVisitIndex", "droneMissionId"}
         self.assertEqual(set(snapshot), expected)
         snapshot["people"][0]["outcome"] = "rescued"
         self.assertIsNone(s.person("monitor-1")["outcome"])

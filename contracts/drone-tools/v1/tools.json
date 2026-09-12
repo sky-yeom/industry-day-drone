@@ -1,0 +1,75 @@
+[
+  {
+    "type": "function",
+    "name": "drone_get_capabilities",
+    "description": "Read execution mode, profile/site revision, registered destinations and exact supported ordered sequences. Does not plan a route.",
+    "strict": true,
+    "parameters": { "type": "object", "properties": {}, "required": [], "additionalProperties": false }
+  },
+  {
+    "type": "function",
+    "name": "drone_get_status",
+    "description": "Read mission occupancy and current physical status evidence with explicit unknown values.",
+    "strict": true,
+    "parameters": { "type": "object", "properties": {}, "required": [], "additionalProperties": false }
+  },
+  {
+    "type": "function",
+    "name": "drone_execute_route",
+    "description": "Request one mission using an externally selected exact supported ordered sequence. Acceptance is not physical completion; never invent a new request ID to retry an uncertain write.",
+    "strict": true,
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "profile_id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9_-]+$" },
+        "site_revision": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9_-]+$" },
+        "destination_ids": {
+          "type": "array", "minItems": 1, "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9_-]+$" }
+        }
+      },
+      "required": ["profile_id", "site_revision", "destination_ids"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "type": "function",
+    "name": "drone_get_mission",
+    "description": "Read the original mission status, ordered visits and arrival/capture evidence.",
+    "strict": true,
+    "parameters": {
+      "type": "object",
+      "properties": { "mission_id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9_-]+$" } },
+      "required": ["mission_id"], "additionalProperties": false
+    }
+  },
+  {
+    "type": "function",
+    "name": "drone_stop_mission",
+    "description": "Request mission cancellation. stop_requested is not physical stop or landing confirmation.",
+    "strict": true,
+    "parameters": {
+      "type": "object",
+      "properties": { "mission_id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9_-]+$" } },
+      "required": ["mission_id"], "additionalProperties": false
+    }
+  },
+  {
+    "type": "function",
+    "name": "drone_get_sensor_snapshot",
+    "description": "Read raw range and health observations; missing or unresolved range values are not free space or object classifications.",
+    "strict": true,
+    "parameters": { "type": "object", "properties": {}, "required": [], "additionalProperties": false }
+  },
+  {
+    "type": "function",
+    "name": "drone_get_captures",
+    "description": "Read captures attributed to the mission and ordered visit. Live captures must contain actual image bytes; mock captures are explicitly simulated or absent.",
+    "strict": true,
+    "parameters": {
+      "type": "object",
+      "properties": { "mission_id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9_-]+$" } },
+      "required": ["mission_id"], "additionalProperties": false
+    }
+  }
+]

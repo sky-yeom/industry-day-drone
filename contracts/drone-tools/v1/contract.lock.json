@@ -1,0 +1,9 @@
+{
+  "version": "1.0.0",
+  "schema_version": 1,
+  "sha256": {
+    "tools.json": "f7ce6c82fc61032b46e5f231ae74d36b7d49ae5d37d794a432b3581aa251fd90",
+    "contract.schema.json": "7746dc5485647d035ff27aeee3973114411b288935e35a38664d8b2ab9193d0d",
+    "types.d.ts": "077cf113a1430909519581b79e77abf1a9b9635b91360d755ad25383cc6457af"
+  }
+}

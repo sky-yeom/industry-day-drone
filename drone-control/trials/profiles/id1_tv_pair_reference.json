@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "tag_id": 1,
+  "arrival_center_x_fraction": [0.85, 0.95],
+  "roi_tag_bounds": {
+    "x_min": -5.090921,
+    "x_max": 1.406036,
+    "y_min": -1.011650,
+    "y_max": 2.623666
+  },
+  "margin_fraction": 0.03,
+  "coordinate_space": "undistorted_tag_plane_TL_TR_BR_BL",
+  "source": "user_reference_screenshot_20260910",
+  "source_viewport_px": [396, 108, 1728, 972],
+  "source_decoded_size_px": [1920, 1080],
+  "reference_kind": "predicted_planar_footprint_mock_left_of_ID1",
+  "physical_metric_pose_used": false,
+  "tv_visibility_verified": false,
+  "policy_validation": "unvalidated_field_trial"
+}

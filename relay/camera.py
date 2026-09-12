@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+import hashlib
 import json
 from pathlib import Path
 import struct
@@ -32,6 +33,10 @@ class Capture:
     monitor_id: str
     image_bytes: bytes
     content_type: str
+    mission_id: str | None = None
+    visit_index: int | None = None
+    destination_id: str | None = None
+    captured_at_unix_ms: int | None = None
 
     @property
     def image_url(self) -> str:
@@ -126,3 +131,32 @@ class FixtureCamera:
             image_bytes=self._read(monitor_id),
             content_type="image/png",
         )
+
+
+class LiveCaptureCamera:
+    """Accept only bounded, attributed PC capture bytes; never load fixture images."""
+
+    @staticmethod
+    def from_record(record, *, mission_id, visit_index, destination_id, monitor_id):
+        if (type(record) is not dict or record.get("mission_id") != mission_id
+                or type(record.get("visit_index")) is not int or record["visit_index"] != visit_index
+                or record.get("destination_id") != destination_id or record.get("arrival_confirmed") is not True
+                or type(record.get("capture_id")) is not str or not 1 <= len(record["capture_id"]) <= 128
+                or record.get("content_type") != "image/png"
+                or type(record.get("captured_at_unix_ms")) is not int or record["captured_at_unix_ms"] <= 0):
+            raise CaptureError("촬영 결과의 임무·방문·도착 근거를 확인하지 못했습니다.")
+        encoded = record.get("image_base64")
+        if type(encoded) is not str or len(encoded) > 4 * ((config.VISION_MAX_IMAGE_BYTES + 2) // 3):
+            raise CaptureError("실제 촬영 이미지가 없거나 허용 크기를 초과했습니다.")
+        try:
+            image = base64.b64decode(encoded, validate=True)
+        except (ValueError, TypeError) as exc:
+            raise CaptureError("실제 촬영 이미지의 인코딩을 확인하지 못했습니다.") from exc
+        validate_image(image, "image/png")
+        if record.get("sha256") != hashlib.sha256(image).hexdigest():
+            raise CaptureError("촬영 이미지 무결성 확인에 실패했습니다.")
+        return Capture(record["capture_id"], monitor_id, image, "image/png",
+            mission_id, visit_index, destination_id, record["captured_at_unix_ms"])
+
+    async def capture(self, monitor_id):
+        raise CaptureError("실제 비행은 해당 방문의 PC 촬영 증거를 기다려야 합니다.")

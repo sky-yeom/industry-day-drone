@@ -1,0 +1,51 @@
+{
+  "status": "ROUTE_COMPLETE_ESTIMATED",
+  "route_completed_estimated": true,
+  "rc_handover_confirmed": true,
+  "landing_confirmed": true,
+  "automatic_landing_commanded": false,
+  "counted_trial": false,
+  "phase": "DONE",
+  "estimated_right_m": -0.09831615552893752,
+  "estimated_forward_m": 0.015044485886374075,
+  "position_source": "sdk_velocity_integration",
+  "position_is_estimated": true,
+  "log_path": "C:\\dev\\publish\\industry-day-drone-feat-drone-control\\drone-control\\pc\\logs\\coex\\20260909T094707-b1c3076f.jsonl",
+  "session_id": "20260909T094707-b1c3076f",
+  "battery_start_percent": 75,
+  "battery_end_control_percent": 74,
+  "leftmost_estimated_right_m": -0.9185133731258586,
+  "control_steps": 261,
+  "ack_count": 335,
+  "sensors": {
+    "fc_height_m_range": [
+      0.1,
+      1.7
+    ],
+    "horizontal_mission_height_m_range": [
+      1.6,
+      1.7
+    ],
+    "downward_raw_mm_range": [
+      320,
+      60000
+    ],
+    "upward_raw_mm_range": [
+      60000,
+      60000
+    ],
+    "oa_callback_age_ms_range": [
+      6,
+      2746
+    ],
+    "horizontal_raw_counts": {
+      "all": 111600,
+      "value_60000": 111600,
+      "positive_below_60000": 0
+    },
+    "value_60000_note": "raw value only; does not establish 60m clearance or sensor normality"
+  },
+  "prior_aborted_session": "20260909T094511-87577037",
+  "clock_fix": "all COEX control/receipt/query deadlines use perf_counter (QPC)",
+  "postfix_offline_tests_passed": 57
+}

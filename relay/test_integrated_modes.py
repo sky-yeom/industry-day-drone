@@ -25,7 +25,7 @@ from relay import config, server, tools
 from relay.drone_client import DroneClient
 from relay.live_mission import LiveMissionRunner
 from relay.survey import SurveySession
-from relay.test_server import Browser, Upstream
+from relay.test_server import Browser, Upstream, participant_turn, spoken_reply
 from relay.test_mission_runner import FakeCamera, FakeVision
 from relay.test_vision import completion, fake_http
 from relay.camera import FixtureCamera
@@ -48,7 +48,7 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(create_providers("mock")[1], ContractMockVision)
             frame = await FakeCamera().capture("monitor-1")
             with self.assertRaises(VisionError):
-                await ContractMockVision().analyze(frame, "test person")
+                await ContractMockVision().analyze(frame, search_prompt="초록색 티셔츠를 입은 사람")
         with patch.object(config, "DRONE_RUN_MODE", "real"):
             self.assertIsInstance(create_providers("azure")[1], AzureVision)
         with patch.object(config, "DRONE_RUN_MODE", None):
@@ -161,7 +161,7 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
                             if event["type"] == "tool.finished" and event["id"] == rid:
                                 self.assertTrue(event["result"]["ok"], event)
                                 return
-                    await command("confirm_prompt", {"prompt_text": "contract fixture",
+                    await command("confirm_prompt", {"prompt_text": "초록색 티셔츠를 입은 사람",
                                                       "appearance_constraints": [], "unsupported_appearance": []})
                     await ws.send(json.dumps({"type": "route_intro.ready"}))
                     await command("select_stop", {"monitor": "monitor-2"})
@@ -206,15 +206,19 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
                 bridge = server.Bridge(browser, session, (FakeCamera(), FakeVision()))
                 self.assertIsInstance(bridge.runner, LiveMissionRunner)
                 self.assertEqual(bridge.runner.expected_mode, wire_mode)
-                self.assertEqual(server.build_session()["session"]["instructions"], tools.SYSTEM_PROMPT)
+                self.assertEqual(server.build_session()["session"]["instructions"],
+                                 tools.voice_context()["instructions"])
                 upstream = Upstream()
                 bridge.upstream = upstream
                 bridge.runner.close = AsyncMock()
                 try:
+                    participant_turn(bridge, "사람을 찾아줘")
+                    self.assertTrue(session.prepare_prompt("사람을 찾아줘", [], [])["ok"])
+                    spoken_reply(bridge)
                     await bridge.handle_tool_call({
                         "name": "confirm_prompt", "call_id": "prompt",
-                        "arguments": json.dumps({"prompt_text": "description", "appearance_constraints": [],
-                                                 "unsupported_appearance": []})})
+                        "arguments": "{}"},
+                        turn=participant_turn(bridge, "응"))
                     self.assertTrue(bridge._route_intro_pending)
                     self.assertFalse(any(e["type"] == "response.create" for e in upstream.sent))
                     browser.incoming.put_nowait(json.dumps({"type": "route_intro.ready"}))

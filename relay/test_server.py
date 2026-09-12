@@ -63,6 +63,31 @@ class Upstream:
         return json.dumps(self.incoming.pop(0))
 
 
+def participant_turn(bridge, text):
+    item_id = f"participant-{len(bridge.voice_turns.turns)}"
+    bridge.voice_turns.stop(item_id, bridge.session)
+    bridge.voice_turns.transcribe(item_id, text)
+    bridge.sync_prompt_correction()
+    return bridge.voice_turns.latest
+
+
+def spoken_reply(bridge, *, route_readback=False):
+    response_id = f"reply-{len(bridge.voice_turns.responses)}"
+    bridge.voice_turns.bind_response(response_id)
+    if route_readback:
+        bridge.voice_turns.begin_route_readback(response_id, bridge.session)
+    elif bridge.session.pending_prompt:
+        bridge.voice_turns.begin_prompt_readback(response_id, bridge.session.pending_prompt_revision)
+        bridge.voice_turns.hear_response(response_id)
+    bridge.voice_turns.finish_response({
+        "id": response_id, "status": "completed",
+        "output": [{"type": "message", "role": "assistant",
+                    "content": [{"type": "audio", "transcript": "확인 질문"}]}],
+    }, bridge.session)
+    if route_readback:
+        bridge.voice_turns.finish_route_playback(response_id, bridge.session)
+
+
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.browser = Browser()
@@ -89,6 +114,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         vad = server.build_session()["session"]["turn_detection"]
         self.assertFalse(vad["interrupt_response"])
         self.assertTrue(vad["create_response"])
+        self.assertNotIn("remove_filler_words", vad)
         upstream = Upstream()
         self.bridge.upstream = upstream
         await self.bridge.greet()
@@ -100,11 +126,33 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(f"읽을 문장: {tools.GREETING}", response["instructions"])
         self.assertIn("정확히 그대로", response["instructions"])
         self.assertNotIn("상황을 한 문장으로만 안내하세요", response["instructions"])
-        self.assertIn(SCENARIO["targetAppearance"]["description"], tools.SYSTEM_PROMPT)
+        self.assertNotIn(SCENARIO["targetAppearance"]["description"], response["instructions"])
+        self.assertNotIn("초록색 티셔츠 입은 사람 찾으면", response["instructions"])
+        self.assertIn("특징의 종류, 예시, 추천 답변을 말하지 않습니다", response["instructions"])
         self.assertEqual(response["tool_choice"], "none")
         self.assertEqual(self.session.data["promptPhase"], "briefing")
         self.assertEqual(self.session.data["userPromptText"], "")
         self.assertEqual(self.session.state.draftRoute, [])
+
+    async def test_voice_confirms_saved_draft_without_replacement_arguments(self):
+        definitions = {tool["name"]: tool for tool in tools.TOOLS}
+        self.assertEqual(definitions["confirm_prompt"]["parameters"]["properties"], {})
+        self.assertIn("prompt_text", definitions["prepare_prompt"]["parameters"]["required"])
+
+    async def test_vad_options_match_selected_provider_contract(self):
+        with patch.object(server.config, "VAD_TYPE", "server_vad"):
+            vad = server.build_session()["session"]["turn_detection"]
+            self.assertNotIn("speech_duration_ms", vad)
+            self.assertNotIn("languages", vad)
+            self.assertFalse(vad["interrupt_response"])
+            self.assertTrue(vad["create_response"])
+        with patch.object(server.config, "VAD_TYPE", "azure_semantic_vad_multilingual"):
+            vad = server.build_session()["session"]["turn_detection"]
+            self.assertFalse(vad["remove_filler_words"])
+            self.assertFalse(vad["interrupt_response"])
+            self.assertTrue(vad["create_response"])
+            self.assertEqual(vad["languages"], ["ko"])
+            self.assertEqual(vad["speech_duration_ms"], server.config.SPEECH_DURATION_MS)
 
     async def test_narration_override_keeps_prompt_confirmation_rules(self):
         self.bridge.upstream = Upstream()
@@ -114,6 +162,27 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("사용자의 프롬프트를 대신 만들거나 미리 채우지 않습니다", instructions)
         self.assertIn("정답으로 고치거나 빠진 특징을 채우지 않습니다", instructions)
 
+    async def test_confirm_prompt_preserves_participant_words_without_target_defaults(self):
+        self.session.data["mode"] = "azure"
+        for text, constraints, unsupported in (
+            ("안경 쓴 사람", [], ["안경 쓴 사람"]),
+            ("빨간 옷", [{"attribute": "shirtColor", "operator": "include",
+                        "values": ["red"]}], []),
+        ):
+            with self.subTest(text=text):
+                outcome = await self.bridge.run_tool("confirm_prompt", {
+                    "prompt_text": text,
+                    "appearance_constraints": constraints,
+                    "unsupported_appearance": unsupported,
+                })
+                self.assertTrue(outcome["ok"])
+                snapshot = self.session.snapshot()
+                self.assertEqual(snapshot["userPromptText"], text)
+                self.assertEqual(snapshot["appearanceConstraints"], constraints)
+                self.assertEqual(snapshot["unsupportedAppearance"], unsupported)
+                self.assertIn(text, outcome["facts"])
+                self.assertNotIn(SCENARIO["targetAppearance"]["description"], outcome["facts"])
+
     async def test_departure_closes_voice_but_mission_and_text_results_continue(self):
         ready(self.session)
         self.session.scenario.update(travelMs=0, captureMs=0)
@@ -122,7 +191,10 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.bridge.upstream = upstream
         self.bridge._response_active = True
         self.bridge._pending_tools = 1
-        await self.bridge.handle_tool_call({"name": "launch_mission", "call_id": "launch", "arguments": "{}"})
+        spoken_reply(self.bridge, route_readback=True)
+        await self.bridge.handle_tool_call(
+            {"name": "launch_mission", "call_id": "launch", "arguments": "{}"},
+            turn=participant_turn(self.bridge, "응"))
         await settle(lambda: len(self.vision.calls) == 1)
         self.assertTrue(any(e["type"] == "mission.launch" for e in self.browser.events))
         self.assertFalse(any(e["type"] == "response.create" for e in upstream.sent))
@@ -156,7 +228,10 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         upstream = Upstream()
         self.bridge.upstream = upstream
         self.bridge._pending_tools = 1
-        await self.bridge.handle_tool_call({"name": "launch_mission", "call_id": "launch", "arguments": "{}"})
+        spoken_reply(self.bridge, route_readback=True)
+        await self.bridge.handle_tool_call(
+            {"name": "launch_mission", "call_id": "launch", "arguments": "{}"},
+            turn=participant_turn(self.bridge, "출발해"))
         for attempt in range(2):
             response = {"id": f"departure-{attempt}", "metadata": upstream.sent[-1]["response"]["metadata"]}
             upstream.incoming = [
@@ -269,9 +344,10 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.bridge._pending_tools = 1
         await self.bridge.handle_tool_call({
             "name": "select_stop", "call_id": "voice-call",
-            "arguments": '{"monitor":"monitor-3"}'})
+            "arguments": '{"monitor":"monitor-3"}'}, turn=participant_turn(self.bridge, "불난 집"))
         self.assertFalse(any(e["type"] == "response.create" for e in upstream.sent))
-        self.assertEqual(upstream.sent[0]["item"]["call_id"], "voice-call")
+        output = next(event for event in upstream.sent if event["type"] == "conversation.item.create")
+        self.assertEqual(output["item"]["call_id"], "voice-call")
         upstream.incoming = [{"type": "response.done", "response": {"id": "previous", "status": "completed"}}]
         await self.bridge.pump_upstream()
         self.assertEqual(sum(e["type"] == "response.create" for e in upstream.sent), 1)
@@ -279,24 +355,33 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(next(e["id"] for e in self.browser.events if e["type"] == "tool.finished"), "voice-call")
 
     async def test_final_debrief_correlates_only_its_completed_response(self):
-        upstream = Upstream()
-        self.bridge.upstream = upstream
+        original = Upstream()
+        self.bridge.upstream = original
         self.bridge._response_active = True
         self.session.abort_mission()
         await self.bridge.runner._notify()
-        self.assertFalse(upstream.sent)
-        upstream.incoming = [{"type": "response.done", "response": {"id": "previous", "status": "completed"}}]
-        await self.bridge.pump_upstream()
-        request = upstream.sent[-1]
-        self.assertEqual(request["response"]["metadata"]["runId"], self.session.run_id)
-        self.assertEqual(request["response"]["tool_choice"], "none")
+        self.assertFalse(original.sent)
+        self.assertTrue(original.closed)
+        self.assertTrue(self.bridge._voice_stopped)
+        self.assertIsNone(self.bridge._results_task)
         self.assertFalse(any(e["type"] == "mission.debrief.done" for e in self.browser.events))
-        response = {"id": "final", "metadata": request["response"]["metadata"]}
-        upstream.incoming = [
+        response = {"id": "final", "metadata": {"missionDebrief": "true", "runId": self.session.run_id}}
+        upstream = Upstream([
             {"type": "response.created", "response": response},
+            {"type": "response.done", "response": {"id": "unrelated", "status": "completed"}},
             {"type": "response.audio.delta", "delta": "audio"},
-            {"type": "response.done", "response": response | {"status": "completed"}}]
-        await self.bridge.pump_upstream()
+            {"type": "response.done", "response": response | {"status": "completed"}}])
+        connection = AsyncMock()
+        connection.__aenter__.return_value = upstream
+        token = SimpleNamespace(get_token=AsyncMock(return_value=SimpleNamespace(token="test-token")))
+        with patch.object(server, "credential", return_value=token), \
+                patch.object(server.websockets, "connect", return_value=connection):
+            await self.bridge.start_result_audio(self.session.run_id)
+            await self.bridge.start_result_audio(self.session.run_id)
+            await self.bridge._results_task
+        request = next(e["response"] for e in upstream.sent if e["type"] == "response.create")
+        self.assertEqual(request["metadata"]["runId"], self.session.run_id)
+        self.assertEqual(request["tool_choice"], "none")
         debrief_events = [e for e in self.browser.events if e["type"].startswith("mission.debrief")]
         self.assertEqual([e["type"] for e in debrief_events],
                          ["mission.debrief", "mission.debrief.response", "mission.debrief.done"])
@@ -320,20 +405,230 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         await self.bridge.pump_upstream()
         self.assertEqual(len(upstream.sent), 1)
 
-    async def test_cancelled_debrief_retries_and_never_signals_audio_done(self):
+    async def test_vad_does_not_cancel_generation_automatically(self):
+        self.bridge.upstream = Upstream([
+            {"type": "response.created", "response": {"id": "route-question"}},
+            {"type": "input_audio_buffer.speech_started", "item_id": "noise"},
+            {"type": "input_audio_buffer.speech_stopped", "item_id": "noise"},
+        ])
+        await self.bridge.pump_upstream()
+        self.assertEqual(self.bridge._active_response_id, "route-question")
+        self.assertTrue(self.bridge._native_response_pending)
+        self.assertFalse(self.bridge.upstream.sent)
+        self.assertTrue(any(e["type"] == "input_audio_buffer.speech_started" for e in self.browser.events))
+
+    async def test_interrupt_retains_generation_and_does_not_mutate_consent(self):
+        ready(self.session)
+        participant_turn(self.bridge, "출발해")
+        upstream = Upstream([{"type": "response.created", "response": {"id": "route-question"}}])
+        self.bridge.upstream = upstream
+        await self.bridge.pump_upstream()
+        snapshot = self.session.snapshot()
+        turn = self.bridge.voice_turns.latest
+        self.browser.incoming.put_nowait(json.dumps({
+            "type": "voice.interrupt", "runId": self.session.run_id,
+            "responseIds": ["already-finished", "route-question"]}))
+        self.browser.incoming.put_nowait(None)
+        with self.assertRaises(WebSocketDisconnect):
+            await self.bridge.pump_browser()
+        self.assertFalse(upstream.sent, "provider cancellation can incorrectly cancel a newer response")
+        self.assertEqual(self.session.snapshot(), snapshot)
+        self.assertFalse(turn.consumed)
+        self.assertEqual(self.bridge._active_response_id, "route-question")
+        self.assertTrue(self.bridge._response_active, "wait for provider completion, not browser assertions")
+        self.assertFalse(self.bridge._response_requested)
+
+    async def test_interrupt_rejects_finished_response_and_never_cancels_new_native_reply(self):
+        upstream = Upstream([{"type": "response.created", "response": {"id": "old"}}])
+        self.bridge.upstream = upstream
+        await self.bridge.pump_upstream()
+        msg = {"runId": self.session.run_id, "responseIds": ["old"]}
+        upstream.incoming = [{"type": "response.done", "response": {"id": "old", "status": "completed"}}]
+        await self.bridge.pump_upstream()
+        with self.assertLogs("relay", level="WARNING"):
+            await self.bridge.interrupt_voice(msg)
+        upstream.incoming = [{"type": "response.created", "response": {"id": "new-native"}}]
+        await self.bridge.pump_upstream()
+        with self.assertLogs("relay", level="WARNING"):
+            await self.bridge.interrupt_voice(msg)
+        self.assertFalse(upstream.sent)
+        self.assertEqual(self.bridge._active_response_id, "new-native")
+        self.assertTrue(self.bridge._response_active)
+
+    async def test_interrupt_rejects_malformed_stale_and_output_only_requests(self):
+        self.bridge.upstream = Upstream()
+        self.bridge._active_response_id = "active"
+        self.bridge._response_active = True
+        snapshot = self.session.snapshot()
+        valid = {"runId": self.session.run_id, "responseIds": ["active"]}
+        malformed = [
+            {}, valid | {"runId": None}, valid | {"runId": "stale"},
+            valid | {"responseIds": None}, valid | {"responseIds": "active"},
+            valid | {"responseIds": []}, valid | {"responseIds": ["active"] * 65},
+            valid | {"responseIds": [""]}, valid | {"responseIds": [" "]},
+            valid | {"responseIds": ["active", 1]},
+        ]
+        for msg in malformed:
+            with self.subTest(msg=msg), self.assertLogs("relay", level="WARNING"):
+                await self.bridge.interrupt_voice(msg)
+        for flag in ("_launch_pending", "_departure_voice_finished", "_voice_stopped", "_closing"):
+            setattr(self.bridge, flag, True)
+            with self.subTest(flag=flag), self.assertLogs("relay", level="WARNING"):
+                await self.bridge.interrupt_voice(valid)
+            setattr(self.bridge, flag, False)
+        self.browser.incoming.put_nowait(json.dumps({"type": "response.cancel", "response_id": "active"}))
+        self.browser.incoming.put_nowait(None)
+        with self.assertLogs("relay", level="WARNING"), self.assertRaises(WebSocketDisconnect):
+            await self.bridge.pump_browser()
+        self.assertFalse(self.bridge.upstream.sent)
+        self.assertEqual(self.session.snapshot(), snapshot)
+        await self.bridge.interrupt_voice(valid | {"responseIds": ["active"] * 64})
+        self.assertFalse(self.bridge.upstream.sent)
+
+    async def test_native_collision_recovers_once_after_completion_or_matched_cancellation(self):
+        for status in ("completed", "cancelled"):
+            with self.subTest(status=status):
+                upstream = Upstream([
+                    {"type": "response.created", "response": {"id": "old"}},
+                    {"type": "input_audio_buffer.speech_started", "item_id": "participant"},
+                    {"type": "input_audio_buffer.speech_stopped", "item_id": "participant"},
+                    {"type": "error", "error": {"code": "conversation_already_has_active_response"}},
+                ])
+                self.bridge.upstream = upstream
+                self.bridge._last_response = {"response": {"instructions": "obsolete route readback"}}
+                self.bridge._response_requested = False
+                with self.assertLogs("relay", level="ERROR"):
+                    await self.bridge.pump_upstream()
+                self.assertFalse(self.bridge._native_response_pending)
+                self.assertTrue(self.bridge._native_response_retry)
+                self.assertFalse(upstream.sent)
+                self.assertFalse(self.bridge.voice_turns.latest.ready.is_set(), "recovery need not wait for ASR")
+                if status == "cancelled":
+                    await self.bridge.interrupt_voice({"runId": self.session.run_id, "responseIds": ["old"]})
+                    self.assertFalse(upstream.sent)
+                upstream.incoming = [{"type": "response.done", "response": {"id": "old", "status": status}}]
+                await self.bridge.pump_upstream()
+                requests = [e for e in upstream.sent if e["type"] == "response.create"]
+                self.assertEqual(len(requests), 1)
+                self.assertEqual(requests[0]["response"]["tool_choice"], "auto")
+                self.assertEqual(requests[0]["response"]["metadata"]["participantItemId"], "participant")
+                self.assertNotIn("instructions", requests[0]["response"])
+                self.assertFalse(self.bridge._native_response_retry)
+                upstream.incoming = [
+                    {"type": "response.created", "response": {"id": "reply"}},
+                    {"type": "response.done", "response": {"id": "reply", "status": "completed"}},
+                ]
+                await self.bridge.pump_upstream()
+                await self.bridge.flush_response()
+                self.assertEqual(sum(e["type"] == "response.create" for e in upstream.sent), 1)
+        self.assertFalse(any(e["type"] == "error" for e in self.browser.events),
+                         "recoverable native collisions must not end browser playback")
+
+    async def test_native_collision_after_old_done_recovers_without_asr(self):
+        self.bridge.upstream = Upstream([
+            {"type": "response.created", "response": {"id": "old"}},
+            {"type": "input_audio_buffer.speech_stopped", "item_id": "participant"},
+            {"type": "response.done", "response": {"id": "old", "status": "completed"}},
+            {"type": "error", "error": {"code": "conversation_already_has_active_response"}},
+        ])
+        with self.assertLogs("relay", level="ERROR"):
+            await self.bridge.pump_upstream()
+        self.assertFalse(self.bridge._native_response_pending)
+        self.assertFalse(self.bridge._native_response_retry)
+        self.assertEqual(sum(e["type"] == "response.create" for e in self.bridge.upstream.sent), 1)
+
+    async def test_overlapping_native_turn_recovers_even_without_provider_error(self):
+        self.bridge.upstream = Upstream([
+            {"type": "response.created", "response": {"id": "old"}},
+            {"type": "input_audio_buffer.speech_started", "item_id": "participant"},
+            {"type": "input_audio_buffer.speech_stopped", "item_id": "participant"},
+            {"type": "response.done", "response": {"id": "old", "status": "completed"}},
+        ])
+        await self.bridge.pump_upstream()
+        requests = [event for event in self.bridge.upstream.sent if event["type"] == "response.create"]
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0]["response"]["metadata"]["nativeTurnRetry"], "true")
+        self.assertFalse(self.bridge._native_response_pending)
+        self.bridge.upstream.incoming = [
+            {"type": "response.created", "response": {"id": "native"}},
+            {"type": "error", "error": {"code": "conversation_already_has_active_response"}},
+            {"type": "response.done", "response": {"id": "native", "status": "completed"}},
+        ]
+        with self.assertLogs("relay", level="ERROR"):
+            await self.bridge.pump_upstream()
+        self.assertEqual(sum(event["type"] == "response.create" for event in self.bridge.upstream.sent), 1)
+
+    async def test_native_reply_creation_satisfies_pending_collision_retry(self):
+        self.bridge.upstream = Upstream([
+            {"type": "response.created", "response": {"id": "old"}},
+            {"type": "input_audio_buffer.speech_stopped", "item_id": "participant"},
+            {"type": "error", "error": {"code": "conversation_already_has_active_response"}},
+            {"type": "response.created", "response": {"id": "native"}},
+            {"type": "response.done", "response": {"id": "old", "status": "cancelled"}},
+            {"type": "response.done", "response": {"id": "native", "status": "completed"}},
+        ])
+        with self.assertLogs("relay", level="ERROR"):
+            await self.bridge.pump_upstream()
+        self.assertFalse(self.bridge._native_response_pending)
+        self.assertFalse(self.bridge._native_response_retry)
+        self.assertFalse(self.bridge.upstream.sent)
+
+    async def test_native_collision_preserves_pending_prompt_readback_and_tool_barrier(self):
+        self.session.prepare_prompt(**PROMPT_ARGS)
+        self.bridge._prompt_readback_pending = True
+        self.bridge._pending_tools = 1
+        collision = {"type": "error", "error": {"code": "conversation_already_has_active_response"}}
+        self.bridge.upstream = Upstream([
+            {"type": "response.created", "response": {"id": "old"}},
+            {"type": "input_audio_buffer.speech_stopped", "item_id": "participant"},
+            collision, collision,
+            {"type": "response.done", "response": {"id": "old", "status": "completed"}},
+        ])
+        with self.assertLogs("relay", level="ERROR"):
+            await self.bridge.pump_upstream()
+        self.assertFalse(self.bridge.upstream.sent)
+        self.assertTrue(self.bridge._native_response_retry)
+        self.bridge._pending_tools = 0
+        await self.bridge.flush_response()
+        response = self.bridge.upstream.sent[0]["response"]
+        self.assertEqual(response["tool_choice"], "none")
+        self.assertEqual(response["metadata"]["promptReadback"], str(self.session.pending_prompt_revision))
+        self.assertIsNotNone(self.session.pending_prompt)
+        self.assertFalse(self.bridge._native_response_retry)
+        await self.bridge.flush_response()
+        self.assertEqual(len(self.bridge.upstream.sent), 1)
+
+    async def test_early_debrief_waits_for_departure_and_rejects_stale_results(self):
         upstream = Upstream()
         self.bridge.upstream = upstream
+        self.bridge._launch_pending = True
         self.session.abort_mission()
         await self.bridge.runner._notify()
-        response = {"id": "cancelled-final", "metadata": upstream.sent[-1]["response"]["metadata"]}
-        upstream.incoming = [
-            {"type": "response.created", "response": response},
-            {"type": "response.done", "response": response | {"status": "cancelled"}},
-        ]
-        await self.bridge.pump_upstream()
+        self.assertFalse(upstream.closed)
+        self.assertFalse(upstream.sent)
+        self.assertFalse(self.bridge._debrief_pending)
+        await self.bridge.start_result_audio(self.session.run_id)
+        self.assertIsNone(self.bridge._results_task)
+        text = self.bridge._result_text
+        await self.bridge.publish_mission({"type": "mission.debrief", "runId": "stale", "text": "old result"})
+        self.assertEqual(self.bridge._result_text, text)
         self.assertFalse(any(e["type"] == "mission.debrief.done" for e in self.browser.events))
-        self.assertEqual(sum(e["type"] == "response.create" for e in upstream.sent), 2)
-        self.assertEqual(upstream.sent[-1]["response"]["metadata"]["missionDebrief"], "true")
+
+    async def test_result_reconnect_waits_for_original_pump_retirement(self):
+        self.session.abort_mission()
+        self.bridge.upstream = Upstream()
+        await self.bridge.runner._notify()
+        retired = asyncio.Event()
+        self.bridge._original_pump = asyncio.create_task(retired.wait())
+        token = SimpleNamespace(get_token=AsyncMock(side_effect=OSError("unavailable")))
+        with patch.object(server, "credential", return_value=token):
+            await self.bridge.start_result_audio(self.session.run_id)
+            await asyncio.sleep(0)
+            token.get_token.assert_not_awaited()
+            retired.set()
+            with self.assertLogs("relay", level="ERROR"):
+                await self.bridge._results_task
+        token.get_token.assert_awaited_once()
 
     async def test_browser_cannot_reconfigure_or_fabricate_upstream_results(self):
         self.bridge.upstream = Upstream()
@@ -407,9 +702,12 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_route_intro_holds_agent_turn_until_client_ready_signal(self):
         upstream = Upstream()
         self.bridge.upstream = upstream
+        participant_turn(self.bridge, SEARCH_PROMPT)
+        self.session.prepare_prompt(**PROMPT_ARGS)
+        spoken_reply(self.bridge)
         await self.bridge.handle_tool_call({
             "name": "confirm_prompt", "call_id": "prompt-1",
-            "arguments": json.dumps(PROMPT_ARGS)})
+            "arguments": "{}"}, turn=participant_turn(self.bridge, "좋아"))
         self.assertTrue(self.bridge._route_intro_pending)
         self.assertFalse(any(e["type"] == "response.create" for e in upstream.sent))
         self.browser.incoming.put_nowait(json.dumps({"type": "route_intro.ready"}))

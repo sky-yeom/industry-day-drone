@@ -36,9 +36,9 @@ class FakeVision:
     def readiness(self):
         return self.error
 
-    async def analyze(self, frame, target, *, search_prompt="", appearance_constraints=None,
+    async def analyze(self, frame, *, search_prompt, appearance_constraints=None,
                       unsupported_appearance=None, scene_context=None):
-        self.calls.append((frame, target))
+        self.calls.append((frame, search_prompt))
         self.search_prompts.append(search_prompt)
         self.appearance_constraints.append((appearance_constraints, unsupported_appearance))
         self.scene_contexts.append(scene_context)
@@ -97,7 +97,8 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
     async def test_auto_complete_and_idempotent_launch_exact_capture(self):
         participant_instruction = "제가 쓴 지시: 화면 구석까지 살피고 사람이 보이는 위치를 알려 주세요."
         requested = [{"attribute": "hairColor", "operator": "include", "values": ["brown"]}]
-        self.session.confirm_prompt(participant_instruction, requested, [])
+        self.session.data["mode"] = "azure"
+        self.assertTrue(self.session.confirm_prompt(participant_instruction, requested, [])["ok"])
         first, second = await asyncio.gather(self.runner.launch(), self.runner.launch())
         self.assertTrue(first["ok"] and second["ok"])
         await settle(lambda: self.session.phase == "complete")
@@ -111,13 +112,15 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
              "report": self.session.person(monitor)["clue"]}
             for monitor in self.camera.calls
         ])
-        for frame, target in self.vision.calls:
+        for frame, prompt in self.vision.calls:
             displayed = next(c for c in self.session.data["captures"] if c["id"] == frame.id)
             self.assertEqual(displayed["imageUrl"], frame.image_url)
-            self.assertEqual(target, self.session.person(frame.monitor_id)["targetDescription"])
+            self.assertEqual(prompt, participant_instruction)
         await settle(lambda: any(e["type"] == "mission.debrief" for e in self.events))
         debrief = next(i for i, e in enumerate(self.events) if e["type"] == "mission.debrief")
         self.assertEqual(self.events[debrief - 1]["state"]["missionPhase"], "complete")
+        self.assertEqual(self.events[debrief]["text"], self.session.debrief())
+        self.assertIn("우리 함께 3명 중 3명을 구조했어.", self.events[debrief]["text"])
         self.assertEqual(sum(e["type"] == "mission.debrief" for e in self.events), 1)
 
     async def test_negative_once_recaptured_then_unresolved_until_expiry(self):
@@ -188,16 +191,28 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.data["score"]["rescuedCount"], 0)
         self.assertEqual(self.session.data["score"]["tooLateCount"], 3)
         self.assertIn("요청한 외형 조건", self.session.debrief())
-        self.assertIn("마지막 이미지 관찰", self.session.debrief())
+        self.assertIn("마지막 사진의 관찰 내용", self.session.debrief())
+
+    async def test_unassessable_request_aborts_safely_for_fresh_confirmation(self):
+        from relay.appearance import REVISION_REQUEST
+        from relay.vision import PromptRevisionRequired
+        self.vision.results = [PromptRevisionRequired(REVISION_REQUEST)]
+        await self.runner.launch()
+        await settle(lambda: self.session.phase == "aborted")
+        self.assertIn(REVISION_REQUEST, self.session.data["error"])
+        self.assertIn("처음으로", self.session.data["error"])
+        self.assertFalse(self.session.data["clockRunning"])
+        self.assertTrue(all(person["outcome"] is None for person in self.session.data["people"]))
+        self.assertFalse((await self.runner.retry())["ok"])
 
     async def test_normal_work_and_negative_recapture_time_all_count(self):
         self.session.scenario.update(travelMs=7000, captureMs=1000)
         self.vision.results = [NEGATIVE, POSITIVE, POSITIVE, POSITIVE]
         analyze = self.vision.analyze
 
-        async def timed_analysis(frame, target, **kwargs):
+        async def timed_analysis(frame, **kwargs):
             self.clock.advance(2000)
-            return await analyze(frame, target, **kwargs)
+            return await analyze(frame, **kwargs)
 
         async def timed_sleep(seconds):
             if seconds == self.runner.tick_seconds:
@@ -281,7 +296,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
     async def test_provider_result_after_cancellation_is_discarded(self):
         started = asyncio.Event()
 
-        async def late_analysis(frame, target, **kwargs):
+        async def late_analysis(frame, **kwargs):
             started.set()
             try:
                 await asyncio.Event().wait()

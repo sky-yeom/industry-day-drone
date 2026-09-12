@@ -58,6 +58,5 @@ export default function DroneImagePanel({ captures }: { captures: CapturedImage[
       <button type="button" onClick={() => setSelectedId(null)} className="pixel-button bg-white px-3 py-1.5 text-[#091f2c]" aria-pressed={selectedId === null}>최신 촬영</button>
       <button type="button" disabled={index >= captures.length - 1} onClick={() => setSelectedId(captures[index + 1].id)} className="pixel-button bg-white px-3 py-1.5 text-[#091f2c] disabled:opacity-30">다음 촬영</button>
     </nav>}
-    <p className="shrink-0 text-[10px] leading-4 text-[#091f2c] [text-shadow:1px_1px_0_#fff]">{current?.mode === "azure" ? "Azure 이미지 분석" : "모의 이미지 분석"} · 화면과 분석에 동일한 촬영 이미지를 사용합니다.</p>
   </section>;
 }

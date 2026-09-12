@@ -5,8 +5,10 @@ import logging
 
 try:
     from .survey import ACTIVE, TERMINAL
+    from .vision import PromptRevisionRequired, VisionError
 except ImportError:
     from survey import ACTIVE, TERMINAL
+    from vision import PromptRevisionRequired, VisionError
 
 log = logging.getLogger("relay.mission")
 
@@ -92,10 +94,19 @@ class MissionRunner:
                 return await operation()
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except PromptRevisionRequired as exc:
+                log.warning("mission description requires revision")
+                self.session.abort_mission()
+                self.session.data["error"] = (
+                    f"{exc} 작전을 중단했습니다. 결과 화면의 '처음으로'를 눌러 새 설명을 확인해 주세요.")
+                self.session.touch()
+                await self._notify()
+                return None
+            except Exception as exc:
                 log.exception("mission %s failed", label)
                 self._retry.clear()
-                self.session.pause(f"{label} 중 오류가 발생했습니다. 연결과 설정을 확인한 뒤 재시도하거나 임무를 중단하세요.")
+                self.session.pause(str(exc) if isinstance(exc, VisionError) else
+                    f"{label} 중 오류가 발생했습니다. 연결과 설정을 확인한 뒤 재시도하거나 임무를 중단하세요.")
                 await self._notify(self.session.data["error"])
                 if self.session.phase in TERMINAL:
                     return None
@@ -139,7 +150,7 @@ class MissionRunner:
 
                     async def analyze_frame():
                         evidence = await self.vision.analyze(
-                            capture, person["targetDescription"],
+                            capture,
                             search_prompt=self.session.data["userPromptText"],
                             appearance_constraints=self.session.data["appearanceConstraints"],
                             unsupported_appearance=self.session.data["unsupportedAppearance"],

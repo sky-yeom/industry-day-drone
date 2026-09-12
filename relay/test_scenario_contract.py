@@ -1,10 +1,12 @@
 """Shared scenario and actual image fixtures used by both runtimes."""
 
 import json
+import hashlib
 from pathlib import Path
 import struct
 import unittest
-import xml.etree.ElementTree as ET
+from relay.fixture_observations import FIXTURE_OBSERVATIONS
+from relay.vision import validate_evidence
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,47 +46,31 @@ class ScenarioContractTests(unittest.TestCase):
         self.assertGreaterEqual(2 * stop_cost, by_monitor["monitor-3"]["deadlineMs"])
         self.assertGreaterEqual(3 * stop_cost, by_monitor["monitor-1"]["deadlineMs"])
 
-    def test_shared_appearance_and_reference_match_each_scene(self):
-        appearance = SCENARIO["targetAppearance"]
-        self.assertEqual(appearance["shirtColor"], "green")
-        self.assertEqual(appearance["hairColor"], "brown")
-        self.assertEqual(appearance["garment"], "t-shirt")
-        self.assertIn("갈색", appearance["description"])
-        for name in ("monitor-1", "monitor-2", "monitor-3", "reference-person"):
-            svg = (ROOT / "public" / "monitors" / f"{name}.svg").read_text("utf-8")
-            self.assertIn('fill="#4bb98a"', svg)
-            self.assertIn('fill="#6b4634"', svg)
-        reference = (ROOT / "public" / appearance["referenceImage"].lstrip("/")).read_bytes()
+    def test_reference_photo_is_retained_without_constraining_detection(self):
+        reference = (ROOT / "public" / SCENARIO["targetAppearance"]["referenceImage"].lstrip("/")).read_bytes()
         self.assertEqual(reference[:8], b"\x89PNG\r\n\x1a\n")
-        self.assertEqual(struct.unpack(">II", reference[16:24]), (400, 400))
+        self.assertNotIn(hashlib.sha256(reference).hexdigest(), FIXTURE_OBSERVATIONS)
 
-    def test_real_raster_images_and_normalized_mock_boxes(self):
+    def test_current_raster_images_have_pinned_per_person_observations(self):
         for person in SCENARIO["people"]:
             with self.subTest(monitor=person["monitorId"]):
                 path = ROOT / "public" / person["image"].lstrip("/")
                 image = path.read_bytes()
                 self.assertEqual(image[:8], b"\x89PNG\r\n\x1a\n")
-                self.assertEqual(struct.unpack(">II", image[16:24]), (640, 400))
-                self.assertLess(len(image), 1024 * 1024)
-                ET.parse(path.with_suffix(".svg"))
-                x, y, width, height = person["mockBox"]
-                self.assertGreaterEqual(x, 0)
-                self.assertGreaterEqual(y, 0)
-                self.assertGreater(width, 0)
-                self.assertGreater(height, 0)
-                self.assertLessEqual(x + width, 1)
-                self.assertLessEqual(y + height, 1)
+                self.assertTrue(all(0 < n <= 4096 for n in struct.unpack(">II", image[16:24])))
+                observations = FIXTURE_OBSERVATIONS[hashlib.sha256(image).hexdigest()]
+                self.assertEqual(len(observations), 3)
+                self.assertGreater(len({item["appearance"]["shirtColor"] for item in observations}), 1)
+                for observation in observations:
+                    validate_evidence({"targetPresent": True, "description": observation["description"],
+                                       "box": observation["box"]})
 
-    def test_negative_images_are_distinct_from_rescue_frames(self):
+    def test_monitor_images_are_distinct(self):
         positive = {
             (ROOT / "public" / person["image"].lstrip("/")).read_bytes()
             for person in SCENARIO["people"]
         }
         self.assertEqual(len(positive), 3)
-        for name in ("empty-scene", "wrong-target", "wrong-hair"):
-            image = (ROOT / "public" / "monitors" / f"{name}.png").read_bytes()
-            self.assertEqual(image[:8], b"\x89PNG\r\n\x1a\n")
-            self.assertNotIn(image, positive)
 
 
 if __name__ == "__main__":

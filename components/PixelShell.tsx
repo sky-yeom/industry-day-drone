@@ -8,14 +8,16 @@ import PixelGround from "@/components/PixelGround";
  * Results steps (no tab bar — page.tsx swaps which step is mounted). Banners
  * (error/status) render above the step's own content, all pixel-styled.
  */
-export default function PixelShell({ banners, children, groundHidden }: { banners?: ReactNode; children: ReactNode; groundHidden?: boolean }) {
+export default function PixelShell({ banners, children, groundHidden, groundReturning }: {
+  banners?: ReactNode; children: ReactNode; groundHidden?: boolean; groundReturning?: boolean;
+}) {
   return (
     <main className="relative flex h-dvh w-full flex-col overflow-hidden">
       <div aria-hidden className="pixel-scene-sky absolute inset-0" />
-      <PixelGround hidden={groundHidden} />
+      <PixelGround hidden={groundHidden} returning={groundReturning} />
       <div className="relative z-10 flex h-full min-h-0 flex-col gap-3 p-4 sm:p-6">
         {banners}
-        <div className="min-h-0 flex-1">{children}</div>
+        <div className="relative min-h-0 flex-1">{children}</div>
       </div>
     </main>
   );

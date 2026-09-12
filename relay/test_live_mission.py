@@ -112,6 +112,29 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("HTTP 401", self.session.data["error"])
         self.assertEqual(self.commands("drone_execute_route"), [])
 
+    async def test_unassessable_request_keeps_revision_message_without_dispatching(self):
+        from relay.appearance import REVISION_REQUEST
+        from relay.vision import PromptRevisionRequired
+        await self.runner._fail(PromptRevisionRequired(REVISION_REQUEST))
+        self.assertIn(REVISION_REQUEST, self.session.data["error"])
+        self.assertIn("정지 상태를 확인한 뒤", self.session.data["error"])
+        self.assertEqual(self.commands("drone_execute_route"), [])
+
+    async def test_unassessable_active_analysis_requests_stop_without_claiming_landing(self):
+        from relay.appearance import REVISION_REQUEST
+        from relay.vision import PromptRevisionRequired
+        self.backend.arrived = True
+        self.vision.results = [PromptRevisionRequired(REVISION_REQUEST)]
+        self.assertTrue((await self.runner.launch())["ok"])
+        await settle(lambda: self.runner._work.done())
+        self.assertEqual(self.session.phase, "aborted")
+        self.assertEqual(len(self.commands("drone_execute_route")), 1)
+        self.assertEqual(len(self.commands("drone_stop_mission")), 1)
+        self.assertEqual(self.session.data["droneStopState"], "stop_requested")
+        self.assertIn(REVISION_REQUEST, self.session.data["error"])
+        self.assertIn("정지 상태를 확인한 뒤", self.session.data["error"])
+        self.assertTrue(all(person["outcome"] is None for person in self.session.data["people"]))
+
     async def test_whole_route_once_waits_for_actual_arrival_and_matching_frames(self):
         self.vision.results = [
             {"targetPresent": True, "description": "초록색 티셔츠와 갈색 머리의 남성이 보입니다.", "box": None}

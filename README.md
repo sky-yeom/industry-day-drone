@@ -11,8 +11,8 @@ Industry Day 데모: 세 사람의 위급함을 판단하고 드론의 방문 �
 ## 시나리오와 구조 조건
 
 프롬프트 화면에서는 세 건의 긴급 신고와 한 대의 드론이라는 전체 상황을 듣고,
-참고 인물 사진을 보고 찾을 사람의 외형을 말합니다. 세 현장의 대상자는 서로
-다른 사람이지만 모두 **초록색 티셔츠와 갈색 머리**라는 특징을 공유합니다.
+참고 인물 사진은 그대로 보이며, Gibby는 특징을 제안하지 않고 어떤 사람을
+찾아야 할지 묻습니다. 참가자가 확인한 설명만 탐지 조건으로 사용합니다.
 참가자의 말을 되읽어 확인한 뒤 비행 경로 화면에서 각 현장의 긴급도를 비교합니다.
 
 | 지점 | 상황 | 긴급도 |
@@ -32,10 +32,13 @@ Industry Day 데모: 세 사람의 위급함을 판단하고 드론의 방문 �
 중에도 시간이 흐르며, 촬영이 빨라도 분석 완료가 늦으면 구조 시한을 놓칩니다.
 시한과 정확히 같은 순간에 완료된 탐지도 시한 초과입니다.
 
-확정한 외형 설명도 탐지 조건입니다. "녹색 옷"이나 "갈색 머리"처럼 일부 특징만
-말해도 맞으면 탐지할 수 있지만, 빨간 티셔츠·금발·"초록색이 아닌 옷"처럼
-명시한 특징이 다르면 대상자를 발견한 것으로 처리하지 않습니다.
-틀린 설명을 대신 고치거나 빠진 정답 특징을 덧붙이지 않습니다.
+참가자가 확인한 원문이 유일한 외형 검색 기준입니다. 참고 사진과 다른 사람이라도
+그 설명을 만족하면 탐지할 수 있고, 참고 사진과 닮아도 설명을 만족하지 않으면
+탐지 성공으로 처리하지 않습니다. 설명을 사진에 맞춰 고치거나 빠진 특징을
+덧붙이지 않습니다. 이미지에서 판단할 수 없는 조건은 예시나 힌트 없이
+설명을 다시 요청하며, 인종이나 민족을 이미지에서 추론하지 않습니다.
+Azure 분석은 같은 후보에게 구조가 필요하다는 시각적 근거도 확인합니다.
+현장 신고는 맥락으로만 사용하며, 이미지 전체를 분석하고 박스 좌표는 생성하지 않습니다.
 
 | 결과 | 판정 |
 | --- | --- |
@@ -68,12 +71,20 @@ Industry Day 데모: 세 사람의 위급함을 판단하고 드론의 방문 �
 모드와 별개입니다. 참가자 체험은 음성 세션으로 시작하며, 모의 탐지에서도
 마이크 권한과 Voice Live 인증이 필요합니다.
 
-모의 모드는 Voice Live가 발화에서 추출한 상의 색·종류와 머리색 조건을
-사용합니다. 생략한 특징은 제한하지 않고, 부정·선택 조건도 보존합니다.
-안경 등 지원하지 않는 추가 외형 조건은 버리지 않고 모의 탐지에서 미확인으로
-처리합니다. 실제 컴퓨터 비전이나 신원 인식은 아닙니다.
-Azure 모드에서는 실제 픽셀의 같은 후보가 참가자의 원래 설명과 구조 대상의
-공통 외형을 **모두** 만족해야 탐지가 인정됩니다.
+모의 모드는 이미지별로 명시한 관찰 정보와 참가자의 조건을 비교합니다.
+생략한 특징은 제한하지 않고, 부정·선택 조건도 보존합니다. 알 수 없는 이미지나
+특징을 일치한다고 가정하지 않습니다. 실제 컴퓨터 비전이나 신원 인식은 아닙니다.
+Azure 모드에서는 실제 픽셀의 같은 후보가 참가자가 확인한 원문 전체를
+만족해야 탐지가 인정됩니다. 구조화된 세 항목 밖의 시각 조건도 원문으로
+전달하며, 별도의 고정 대상 조건을 추가하지 않습니다.
+
+Known unassessable requests are rejected before description confirmation.
+Mock mode also rejects criteria outside its fixture grammar before route
+selection; it does not silently discard them. If image analysis later reports
+that the confirmed criteria cannot be assessed, the mission aborts instead of
+retrying unchanged criteria. Return with **처음으로** to describe and confirm again.
+For live hardware, confirm the stopped state and follow the existing RC/landing
+instructions before starting another mission.
 
 실제 드론 연결은 추후 작업입니다. `relay/camera.py`의 캡처 어댑터를 실제
 장치의 이미지 수신 방식에 연결하면 됩니다. 프레임은 지점·캡처 ID와 연결되어야
@@ -186,17 +197,31 @@ npm run dev
 > 참고 사진을 보고 외형 설명 → 설명 확인에 동의 → "불이 난 집부터 가자."
 > → "바다에 빠진 사람을 다음으로." → 경로를 듣고 "출발해."
 
-화면은 **프롬프트 → 비행 경로 → 드론 이미지 → 결과** 순서로 자동 전환되며,
-언제든 탭을 클릭하거나 화살표 키로 살펴볼 수 있습니다. 탭 이동은 임무를
-변경하거나 출발시키지 않습니다. 음성 전사와 답변은 오른쪽 음성 시각화 아래에
-표시됩니다. 브리핑은 한 페이지에 표시하고, 확정된 프롬프트 영역은 입력 전에도
-빈 상태로 유지합니다. 각 탭은 화면 높이에 맞춰 표시하고, 긴 프롬프트·최종 설명은
-이전/다음 페이지로 읽습니다. 경로 화면에는 현장 이미지와 상황만 표시하며
-구조 시한·남은 시간·경과 시간은 숨깁니다. 출발 전 음성 안내도 정확한 시간을
-알려주지 않습니다. 시간은 **출발한 뒤 드론 이미지 탭에서만** 확인할 수 있고,
-탭을 미리 열어도 카운트다운은 나타나지 않습니다. 촬영 기록은 이전/다음 촬영으로 확인합니다.
-음성 시각화와 마이크 버튼은 겹치지 않게 분리하고 대화 영역은 패널 하단에 둡니다.
-작전이 끝나면 결과 화면의 **처음으로** 버튼으로 시작 화면에 돌아갈 수 있습니다.
+The experience progresses from prompt confirmation to a persistent flight-path
+screen. Gibby holds the final `drone-board-4` pose at the corner for 800ms before
+moving onto the map. After Gibby boards, the map stays visible alongside capture images and
+rescue timers. Capture history remains accessible through the previous/next
+capture controls.
+
+At mission completion, the map and image panels leave in opposite directions.
+Gibby flies back, dismounts, and celebrates while the ground returns from above.
+Results narration waits for that sequence to finish; all result cards appear
+when playback begins. Gibby has no speech bubble on this screen, and the drone
+stays parked beside him. An aborted mission skips the celebration, or skips the
+whole return if Gibby has not boarded. Text-only and failed-audio sessions still
+show the results after the scene is ready.
+Both the written explanation and spoken summary use Gibby's friendly Korean
+speech while preserving the recorded outcomes and quoted image observations.
+
+The final explanation and confirmed-prompt cards share the larger content-fitted
+height, capped by the available space. Longer text uses previous/next pages rather
+than scrolling. The operation summary stays in a full-width banner above the
+person cards, with the operation status and rescue count on separate lines.
+Use **처음으로** to return to the start screen.
+
+The return/celebration assets are registered crops from `UI-images/drone riding.png`
+and `UI-images/sprite sheet.png`. Regenerate them with
+`node scripts/extract-results-sprites.mjs`.
 
 ### Azure 멀티모달 이미지 분석
 
@@ -258,28 +283,52 @@ node --input-type=module -e 'import sharp from "sharp"; for (const name of ["mon
 
 기본 음성은 `gpt-realtime` + `shimmer`의 네이티브 speech-to-speech입니다.
 음성 응답을 생성할 때 별도 전사가 끝나기를 기다리지 않습니다.
-`gpt-4o-transcribe`의 전사는 대화 로그용 보조 경로입니다.
+`gpt-4o-transcribe`의 전사는 대화 로그와 상태 변경 전 참가자 입력 검증에 쓰입니다.
 
-Korean turn detection uses `azure_semantic_vad_multilingual`, with server echo
-cancellation and noise suppression. Automatic interruption is disabled so
-assistant chat replies are spoken completely. The microphone stays muted
-through each reply, including tool continuations, and reopens only after its
-audio playback queue drains—not when generation finishes. Replies still stream
-natively without waiting for transcription. The X button can explicitly stop
-the session. Tune these settings for the venue:
+Turn detection uses `server_vad`, with server echo cancellation and noise
+suppression. In a live-provider comparison, semantic VAD dropped short synthetic
+Korean replies that acoustic VAD detected; lowering the semantic threshold did
+not recover them. This does not establish recognition quality for a live
+microphone or a noisy venue.
+
+After the opening greeting, the microphone stays open during ordinary replies
+and confirmation questions. Participant speech interrupts queued playback without
+clearing the new input. Native responses do not wait for transcription, but state
+changes require fresh participant input. Gibby saves a description, reads it back,
+and confirms that exact draft only after a separate affirmative reply. Corrections
+require another readback; silence never confirms or launches the mission.
+If a native reply omits its confirmation tool call, the relay can still confirm
+the saved draft after that reply finishes, using the same fresh-input safeguards.
+Native tool availability follows the actual relay stage, so route tools are not
+offered while a description is awaiting confirmation. Departure consent is armed
+only after the browser acknowledges playback of the complete route readback.
+Speech bubbles follow the response that is actually playing, including its final
+audio transcript, rather than showing a future reply while it is still queued.
+Possible interruptions pause playback without deleting its unheard tail. Empty
+or failed transcriptions resume it; recognized participant speech discards only
+the interrupted responses and preserves any newly generated reply. Native
+response generation stays enabled. Interruption removes only the old response's
+queued playback; it never sends a provider-wide cancellation that could cut off
+a newer reply. Overlapping native turns are recovered after generation finishes.
+The X button stops the session. Tune these settings for the venue:
 
 ```bash
+export VOICE_LIVE_VAD_TYPE="server_vad"
 export VOICE_LIVE_VAD_THRESHOLD="0.5"
 export VOICE_LIVE_SILENCE_MS="300"
-export VOICE_LIVE_SPEECH_DURATION_MS="100"
 ```
+
+`VOICE_LIVE_VAD_TYPE="azure_semantic_vad_multilingual"` remains available.
+Only semantic VAD uses `VOICE_LIVE_SPEECH_DURATION_MS` (default `80`) and disables
+filler removal. `VOICE_LIVE_DIAGNOSTICS=1` enables bounded event-ID, microphone-state
+and rejection-code logs without raw audio or transcripts.
 
 도구는 `facts`와 `ask`를 반환하고 음성 모델은 사실을 자연스러운 한국어로
 요약합니다. 모호한 발화 때문에 경로를 임의 선택하거나 초기화하지 않습니다.
 자동 임무는 음성 모델이 매번 도구를 호출해 주지 않아도 계속 진행됩니다.
 첫 인사는 아래 고정 문장을 그대로 읽고 참가자의 답을 기다립니다:
 
-> 안녕하세요. 지금 긴급 구조 요청이 세 건 들어와 있고, 드론 한 대로 모두 찾아내야 합니다. 화면의 참고 사진을 보고, 드론이 어떤 사람을 찾아야 하는지 직접 설명해 주시겠어요?
+> 안녕! 난 Gibby라고해! 지금 긴급 구조 요청이 세 건 들어왔는데, 사람들 구조하기 위해 너의 도움이 필요해! 어떤 사람을 찾아야 할지 알려줄래?
 
 첫 인사의 요약·의역이나 추가 안내는 허용하지 않습니다. 응답별 안내를
 추가할 때에도 세션의 대화 규칙을 유지하며, 에이전트가 참가자의 프롬프트를

@@ -1,8 +1,10 @@
+from copy import deepcopy
 import itertools
 from types import SimpleNamespace
 import unittest
 
 from relay.survey import MONITOR_IDS, SCENARIO, SurveySession, validate_evidence
+from relay.appearance import REVISION_REQUEST
 
 
 POSITIVE = {"targetPresent": True, "description": "초록색 티셔츠를 입고 갈색 머리를 한 대상자가 보입니다.", "box": [0.1, 0.1, 0.2, 0.3]}
@@ -108,21 +110,45 @@ class SurveyTests(unittest.TestCase):
         self.assertEqual(s.elapsed_ms(), 0)
         for invalid in ("", "   ", None, 42, "가" * 2001):
             self.assertFalse(s.confirm_prompt(invalid)["ok"])
-        self.assertTrue(s.confirm_prompt("  참여자가 직접 쓴 지시  ")["ok"])
-        self.assertEqual(s.data["userPromptText"], "참여자가 직접 쓴 지시")
+        self.assertTrue(s.confirm_prompt("  사람을 찾아줘  ")["ok"])
+        self.assertEqual(s.data["userPromptText"], "사람을 찾아줘")
         self.assertEqual(s.data["promptPhase"], "confirmed")
         self.assertTrue(all(p["outcome"] is None for p in s.data["people"]))
         s.confirm_route()
         s.launch_mission()
         self.assertFalse(s.confirm_prompt("출발 후 변경")["ok"])
-        self.assertEqual(s.data["userPromptText"], "참여자가 직접 쓴 지시")
+        self.assertEqual(s.data["userPromptText"], "사람을 찾아줘")
+
+    def test_unassessable_descriptions_require_neutral_revision_before_confirmation(self):
+        for mode in ("mock", "azure"):
+            for method in ("prepare_prompt", "confirm_prompt"):
+                session = SurveySession(mode=mode)
+                outcome = getattr(session, method)("백인")
+                self.assertFalse(outcome["ok"])
+                self.assertEqual(outcome["facts"], REVISION_REQUEST)
+                self.assertIsNone(session.pending_prompt)
+                self.assertEqual(session.data["promptPhase"], "briefing")
+                self.assertFalse(session.select_stop("monitor-1")["ok"])
+
+    def test_mock_rejects_unannotated_conditions_before_route_but_azure_keeps_visual_text(self):
+        mock, azure = SurveySession(), SurveySession(mode="azure")
+        self.assertFalse(mock.prepare_prompt("안경 쓴 사람", [], ["안경"])["ok"])
+        self.assertFalse(mock.confirm_prompt("초록색 옷과 안경을 쓴 사람")["ok"])
+        self.assertTrue(azure.prepare_prompt("안경 쓴 사람", [], ["안경"])["ok"])
+        self.assertEqual(azure.pending_prompt["prompt_text"], "안경 쓴 사람")
+        self.assertTrue(mock.prepare_prompt("빨간 옷")["ok"])
 
     def test_cases_disclosed_in_successful_prompt_confirmation_only(self):
         from relay import tools
 
         self.assertEqual(tools.GREETING,
                          "안녕! 난 Gibby라고해! 지금 긴급 구조 요청이 세 건 들어왔는데, 사람들 구조하기 위해 너의 도움이 필요해! "
-                         "화면의 참고 사진을 보고, 어떤 사람을 찾아야 하는지 얘기해줄수있어?")
+                         "어떤 사람을 찾아야 할지 알려줄래?")
+        self.assertEqual(tools.OPENING_QUESTION, "어떤 사람을 찾아야 할지 알려줄래?")
+        self.assertIn("네가 확인한 설명으로", SCENARIO["briefing"][1])
+        for hint in ("머리", "티셔츠", "초록", "갈색", "같은 외형"):
+            self.assertNotIn(hint, tools.GREETING)
+            self.assertNotIn(hint, " ".join(SCENARIO["briefing"]))
         rejected = self.session.confirm_prompt("")
         confirmed = self.session.confirm_prompt(SEARCH_PROMPT)
         for person in SCENARIO["people"]:
@@ -152,6 +178,39 @@ class SurveyTests(unittest.TestCase):
         self.assertEqual(s.elapsed_ms(), 0)
         self.assertEqual(s.phase, "ready")
         self.assertIn("설정", s.snapshot()["error"])
+
+    def test_debrief_uses_gibby_tone_without_changing_results(self):
+        for mode in ("mock", "azure"):
+            for rescued, injured, late in ((3, 1, 0), (3, 0, 0), (2, 1, 1), (0, 0, 3)):
+                with self.subTest(mode=mode, rescued=rescued, injured=injured):
+                    session = SurveySession(mode=mode)
+                    ready(session)
+                    session.data.update(missionPhase="complete", score={
+                        "total": 3, "rescuedCount": rescued, "injuredCount": injured, "tooLateCount": late,
+                    })
+                    before = deepcopy(session.data)
+                    text = session.debrief()
+                    self.assertIn(f"3명 중 {rescued}명을 구조했어." if rescued
+                                  else "3명 중 아무도 구조하지 못했어.", text)
+                    if injured:
+                        self.assertIn(f"그중 {injured}명은 다친 상태야.", text)
+                    elif rescued:
+                        self.assertIn("구조한 사람 중 다친 사람은 없어.", text)
+                    self.assertIn(f"{late}명은 구조할 수 있는 시간을 넘겼어." if late
+                                  else "구조 시한은 모두 지켰어.", text)
+                    self.assertIn("모의 분석" if mode == "mock" else "Azure 이미지 분석", text)
+                    self.assertIn("가상 훈련이야.", text)
+                    self.assertIn("우리가 고른 순서는", text)
+                    self.assertNotRegex(text, r"했습니다|입니다|되었습니다")
+                    self.assertEqual(session.data, before)
+
+    def test_aborted_debrief_stays_friendly_without_inventing_outcomes(self):
+        session = SurveySession()
+        session.abort_mission()
+        text = session.debrief()
+        self.assertIn("훈련은 여기서 멈췄어.", text)
+        self.assertIn("아직 확인하지 못한 사람들의 구조 결과는 알 수 없어.", text)
+        self.assertNotIn("구조했어", text)
 
     def test_all_six_route_permutations(self):
         outcomes = {}
@@ -250,6 +309,8 @@ class SurveyTests(unittest.TestCase):
         self.clock.advance(27000)
         s.expire()
         self.assertEqual(s.data["score"]["tooLateCount"], 3)
+        self.assertIn(NEGATIVE["description"], s.debrief())
+        self.assertIn("마지막 사진의 관찰 내용은 이거야.", s.debrief())
 
     def test_pause_excludes_only_error_wait_and_abort_has_no_fake_outcomes(self):
         s = self.session

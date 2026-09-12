@@ -5,13 +5,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { BOARDING_FRAMES, BOARDING_MIRRORED, LAST_BOARDING_FRAME } from "@/lib/gibbyDroneSprite";
 import { ANCHOR_W, LAST_FRAME as LAST_MAP_FRAME, gibbyFrameStyle } from "@/lib/gibbyMapSprite";
 
-// How long the drone takes to fly up from below the viewport to Gibby's
-// dock (matches .drone-fly-in's own transition duration in globals.css —
-// kept here too so the timeout that advances the phase lines up with the
-// CSS transition actually finishing).
-const FLY_IN_MS = 800;
+const PRE_BOARD_MS = 800;
 // How long each "getting on" frame holds before advancing to the next.
 const BOARD_FRAME_MS = 380;
+const SEATED_HOLD_MS = 800;
 // Same per-frame timing GibbyMapTransition.tsx uses for the forward
 // unroll animation (kept as a local duplicate rather than exported/shared,
 // matching this file's existing pattern of small standalone timing
@@ -19,7 +16,7 @@ const BOARD_FRAME_MS = 380;
 const MAP_FRAME_MS = 400;
 const MAP_UNROLL_EXTRA_MS = 220;
 
-type Phase = "closing-map" | "flying-in" | "boarding" | "seated";
+type Phase = "closing-map" | "preparing" | "boarding" | "seated";
 
 /**
  * Route screen -> live map marker handoff: replaces GibbyRouteDock the
@@ -32,14 +29,13 @@ type Phase = "closing-map" | "flying-in" | "boarding" | "seated";
  *    lib/gibbyMapSprite.ts's map-unroll sheet (same pose GibbyRouteDock
  *    freezes on) — this plays that same sprite in reverse (7 -> 0),
  *    putting the map away, before the drone even appears.
- * 2. `flying-in`: a small drone flies up from below the viewport to
- *    Gibby's dock corner.
+ * 2. `preparing`: hold the combined artwork briefly before boarding.
  * 3. `boarding`: Gibby plays through the 4-frame "getting on drone"
  *    sequence (public/gibby/drone-board-1..4.png, cropped from
  *    UI-images/drone riding.png), mirrored (see BOARDING_MIRRORED) since
  *    the reference art faces right but he's docked at the screen's right
  *    edge with the map to his left.
- * 4. `seated`: the instant the last boarding frame is reached, `onBoarded`
+ * 4. `seated`: hold drone-board-4 at the corner before `onBoarded`
  *    fires and this component stops being rendered by the parent — from
  *    that point on there is no dock overlay at all; the same seated
  *    Gibby-on-drone sprite shrinks down and flies onto the map instead
@@ -53,13 +49,15 @@ export default function GibbyDroneBoarding({ onBoarded }: {
   const [phase, setPhase] = useState<Phase>("closing-map");
   const [mapFrame, setMapFrame] = useState(LAST_MAP_FRAME);
   const [frame, setFrame] = useState(0);
-  const [droneArrived, setDroneArrived] = useState(false);
   const boardedFired = useRef(false);
+  const onBoardedRef = useRef(onBoarded);
+
+  useEffect(() => { onBoardedRef.current = onBoarded; }, [onBoarded]);
 
   useEffect(() => {
     if (phase !== "closing-map") return;
     if (mapFrame <= 0) {
-      const id = window.setTimeout(() => setPhase("flying-in"), 0);
+      const id = window.setTimeout(() => setPhase("preparing"), 0);
       return () => window.clearTimeout(id);
     }
     const extra = mapFrame === 4 || mapFrame === 5 ? MAP_UNROLL_EXTRA_MS : 0;
@@ -67,18 +65,9 @@ export default function GibbyDroneBoarding({ onBoarded }: {
     return () => window.clearTimeout(id);
   }, [phase, mapFrame]);
 
-  // Mount in the "below viewport" position first, then flip to "docked" a
-  // frame later so the bottom-offset change is an actual CSS transition
-  // instead of both classes landing together on the very first paint.
   useEffect(() => {
-    if (phase !== "flying-in") return;
-    const id = requestAnimationFrame(() => setDroneArrived(true));
-    return () => cancelAnimationFrame(id);
-  }, [phase]);
-
-  useEffect(() => {
-    if (phase !== "flying-in") return;
-    const id = window.setTimeout(() => setPhase("boarding"), FLY_IN_MS);
+    if (phase !== "preparing") return;
+    const id = window.setTimeout(() => setPhase("boarding"), PRE_BOARD_MS);
     return () => window.clearTimeout(id);
   }, [phase]);
 
@@ -95,18 +84,19 @@ export default function GibbyDroneBoarding({ onBoarded }: {
   const handleBoarded = useCallback(() => {
     if (boardedFired.current) return;
     boardedFired.current = true;
-    onBoarded();
-  }, [onBoarded]);
+    onBoardedRef.current();
+  }, []);
 
   useEffect(() => {
-    if (phase === "seated") handleBoarded();
+    if (phase !== "seated") return;
+    const id = window.setTimeout(handleBoarded, SEATED_HOLD_MS);
+    return () => window.clearTimeout(id);
   }, [phase, handleBoarded]);
-
-  if (phase === "seated") return null;
 
   if (phase === "closing-map") {
     return (
       <div
+        data-boarding-phase={phase}
         className="absolute bottom-[16%] left-[calc(94%-145px)] z-20 flex items-end justify-center"
         style={{ width: ANCHOR_W }}
       >
@@ -115,28 +105,16 @@ export default function GibbyDroneBoarding({ onBoarded }: {
     );
   }
 
-  const shownFrame = phase === "flying-in" ? 0 : frame;
-  const sprite = BOARDING_FRAMES[shownFrame];
+  const sprite = BOARDING_FRAMES[frame];
   const mirrorStyle = BOARDING_MIRRORED ? { transform: "scaleX(-1)" } : undefined;
 
   return (
-    <>
-      {/* Gibby (idle -> "getting on" sequence), same dock spot
-          GibbyRouteDock/the closing-map phase used. */}
-      <div className="absolute bottom-[16%] left-[calc(94%-145px)] z-20 flex w-[300px] items-end justify-center">
-        <div className="pixel-rendering" style={{ width: sprite.width, height: sprite.height, ...mirrorStyle }}>
-          <Image src={sprite.src} alt="" width={sprite.width} height={sprite.height} unoptimized
-            className="pixel-rendering h-full w-full object-contain" />
-        </div>
+    <div data-boarding-phase={phase}
+      className="absolute bottom-[16%] left-[min(calc(94%-145px),calc(100%-300px))] z-20 flex w-[300px] items-end justify-center">
+      <div className="pixel-rendering" style={{ width: sprite.width, height: sprite.height, ...mirrorStyle }}>
+        <Image src={sprite.src} alt="" width={sprite.width} height={sprite.height} unoptimized loading="eager"
+          className="pixel-rendering h-full w-full object-contain" />
       </div>
-
-      {/* The standalone drone flying in from below, only shown before it
-          merges into the combined "getting on drone" artwork. */}
-      {phase === "flying-in" && (
-        <div className={`drone-fly-in absolute left-[calc(94%-165px)] z-10 h-16 w-16 ${droneArrived ? "drone-fly-in--docked" : ""}`}>
-          <Image src="/gibby/drone.png" alt="" width={64} height={64} unoptimized className="pixel-rendering h-full w-full object-contain" />
-        </div>
-      )}
-    </>
+    </div>
   );
 }

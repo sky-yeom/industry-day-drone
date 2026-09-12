@@ -13,7 +13,7 @@ import type { BriefingBullet } from "@/lib/types";
 const pixelFont = Press_Start_2P({ weight: "400", subsets: ["latin"] });
 
 const GIBBY_TITLE = "코드레드";
-const GIBBY_LINE = "비상 신고가 세 건이나 들어왔어요!\n얼른 가서 사람들을 구해줘요!";
+const GIBBY_LINE = "긴급 구조 요청이 세 건이나 들어왔어!\n우리 얼른 사람들을 구하러 가자!";
 
 // How long Gibby smiles (row 1, frame 2 of the sprite sheet) before he
 // resets back to a neutral idle pose and then sets off walking.
@@ -138,8 +138,10 @@ export default function GibbyIntroSequence({
       {showIdleCard && (
         <div className="relative z-10 flex flex-1 items-center justify-center p-5">
           <div className="pixel-bubble pixel-bubble--gibby relative w-full max-w-3xl px-8 pb-20 pt-10 sm:px-14 sm:pb-24 sm:pt-12">
-            <h2 className={`${pixelFont.className} pixel-title text-xl text-[#463668] sm:text-2xl`}>{GIBBY_TITLE}</h2>
-            <p className="mt-5 whitespace-pre-line text-base leading-8 text-[#091f2c] sm:text-lg sm:leading-9">{GIBBY_LINE}</p>
+            <div className="ml-[20px]">
+              <h2 className={`${pixelFont.className} pixel-title text-2xl text-[#463668] sm:text-3xl`}>{GIBBY_TITLE}</h2>
+              <p className="mt-5 whitespace-pre-line text-xl leading-8 text-[#091f2c] sm:text-2xl sm:leading-9">{GIBBY_LINE}</p>
+            </div>
             <button
               type="button"
               onClick={handleGo}

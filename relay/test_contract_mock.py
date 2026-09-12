@@ -67,7 +67,8 @@ class ContractMockTests(unittest.IsolatedAsyncioTestCase):
             frame = LiveCaptureCamera.from_record(capture, mission_id=mid,
                 visit_index=capture["visit_index"], destination_id=capture["destination_id"],
                 monitor_id=capture["monitor_id"])
-            self.assertTrue((await ContractMockVision().analyze(frame, "test person"))["targetPresent"])
+            self.assertTrue((await ContractMockVision().analyze(
+                frame, search_prompt="초록색 티셔츠를 입은 사람"))["targetPresent"])
         stopped = await self.call("drone_stop_mission", dict(mission_id=mid))
         self.assertFalse(stopped["physical_stop_confirmed"])
         self.assertEqual(stopped["mission"]["state"], "completed")

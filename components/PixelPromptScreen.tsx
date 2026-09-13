@@ -3,6 +3,8 @@
 import Image from "next/image";
 import { Press_Start_2P } from "next/font/google";
 import type { BriefingBullet } from "@/lib/types";
+import type { VoiceStatus } from "@/lib/voiceClient";
+import VoiceTurnIndicator from "@/components/VoiceTurnIndicator";
 
 const pixelFont = Press_Start_2P({ weight: "400", subsets: ["latin"] });
 
@@ -22,17 +24,29 @@ export default function PixelPromptScreen({
   targetImage,
   targetAlt,
   briefing,
+  voiceStatus,
+  error,
+  onRetry,
 }: {
   targetImage: string;
   targetAlt: string;
   briefing: BriefingBullet[];
+  voiceStatus?: VoiceStatus;
+  error?: string | null;
+  onRetry?: () => void;
 }) {
   return (
     <div className="relative z-10 flex h-full min-h-0 w-full flex-col justify-center gap-3 px-4 pb-[8dvh] pt-4 sm:px-6 sm:pt-6">
       <div className="flex shrink-0 flex-wrap items-baseline gap-x-3 gap-y-1">
         <p className="text-sm font-bold tracking-[0.14em] text-[#091f2c] sm:text-base">임무 브리핑</p>
         <h2 className="text-lg font-bold text-[#091f2c] sm:text-xl">프롬프트</h2>
+        {voiceStatus && <VoiceTurnIndicator status={voiceStatus} />}
       </div>
+      {error && <div role="alert" className="shrink-0 text-sm text-[#091f2c]">
+        {error}
+        {voiceStatus === "error" && onRetry && <button type="button" onClick={onRetry}
+          className="pixel-button ml-3 bg-white px-2 py-1 text-xs">연결 다시 시도</button>}
+      </div>}
 
       <div className="grid min-h-0 max-w-[860px] flex-1 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] sm:items-center">
         <div className="flex min-h-0 flex-col items-center justify-center gap-4 py-2">

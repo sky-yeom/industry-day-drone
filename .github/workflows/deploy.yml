@@ -1,15 +1,19 @@
 name: Deploy to Azure Container Apps
 
-# Pushing to main rebuilds both images and updates the two Container Apps
-# in place (idd-relay, idd-web) so the live site always tracks main.
+# Cloud hosting is retired. Only an explicitly opted-in manual run can
+# rebuild images and update existing apps; this workflow cannot recreate them.
 # Terraform (infra/*.tf) stays the source of truth for the surrounding
 # infra (env, ACR, role assignments) but is not run here — it's applied
 # manually when that structure changes, since this workflow has no
-# access to Terraform state. See infra/README or repo README for that.
+# access to Terraform state. See the repo README for that.
 on:
-  push:
-    branches: [main]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      deploy_cloud_apps:
+        description: "Explicitly opt in to updating the retired cloud apps (must already exist)"
+        type: boolean
+        required: true
+        default: false
 
 permissions:
   id-token: write # required for OIDC federated login, no client secret stored
@@ -24,6 +28,7 @@ env:
 
 jobs:
   deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_cloud_apps == true }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -21,13 +21,7 @@ export default function GibbyRouteDock({ agentText }: { agentText: string }) {
         <div aria-hidden className="pixel-rendering shrink-0" style={gibbyFrameStyle(LAST_FRAME)} />
       </div>
       {typed && (
-        // Capped with min(): on short viewports, `16%+146px` pushes the
-        // bubble up far enough to overlap the info cards in the right
-        // column of FlightPathMap. Capping the offset (and keeping that
-        // cap fairly low) means the bubble never climbs far above the
-        // ground band, keeping it clear of those cards at any realistic
-        // viewport height, while still sitting near Gibby on tall ones.
-        <div className="absolute bottom-[min(calc(16%+146px),150px)] z-20 right-[calc(6%+161px)]">
+        <div className="absolute bottom-[min(calc(16%+196px),200px)] z-20 right-[calc(6%+161px)]">
           <div className="pixel-bubble pixel-bubble--right relative max-w-[260px] px-4 py-3 text-sm leading-6 text-[#091f2c] sm:max-w-xs">
             {typed}
           </div>

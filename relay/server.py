@@ -238,11 +238,20 @@ async def configure_voice(upstream, session):
 
 
 class Bridge:
-    def __init__(self, browser, session, providers=None):
+    INPUT_TIMEOUT_SECONDS = 6
+
+    def __init__(self, browser, session, providers=None, *, strict_turn_taking=False):
         self.browser, self.session = browser, session
         self.upstream = None
-        self._speech_stopped_at = None
-        self._ttfa_pending = False
+        self.strict_turn_taking = strict_turn_taking
+        self._input_window = None
+        self._input_open = False
+        self._input_has_audio = False
+        self._accepted_item_id = None
+        self._capture_item_id = None
+        self._input_timeout_task = None
+        self._turn_response_ids = []
+        self._generating_response_ids = set()
         self._pending_tools = 0
         self._tool_tasks = set()
         self._browser_lock = asyncio.Lock()
@@ -278,6 +287,14 @@ class Bridge:
         self._completed_commands = {}
         self._closing = False
         self._route_intro_pending = False
+        self._route_intro_id = None
+        self._route_intro_response_id = None
+        self._route_intro_ready = False
+        self._route_intro_attempts = 0
+        self._route_intro_retry = False
+        self._route_intro_failure_reported = False
+        self._response_failure_task = None
+        self._route_intro_facts = ""
         self.voice_turns = VoiceTurns()
         self._response_tools_allowed = False
         self._route_readback_pending = False
@@ -306,7 +323,171 @@ class Bridge:
     def trace_voice(self, event, **fields):
         if config.VOICE_DIAGNOSTICS and self._voice_diagnostics_remaining:
             self._voice_diagnostics_remaining -= 1
-            log.info("voice.flow %s", json.dumps({"event": event, **fields}, ensure_ascii=False))
+            log.info("voice.flow %s", json.dumps({
+                "event": event, "run_id": self.session.run_id,
+                "received_at_ms": round(time.perf_counter() * 1000, 3), **fields}, ensure_ascii=False))
+
+    def input_eligible(self):
+        turn = self.voice_turns.turns.get(self._accepted_item_id)
+        return (self.strict_turn_taking and self.upstream is not None
+                and not self._closing and not self.departure_started and self._results_task is None
+                and self.session.phase in {"briefing", "ready"}
+                and not self._response_active and not self._generating_response_ids
+                and not self._native_response_pending and not self._native_response_retry
+                and not self._pending_tools and not self._command_lock.locked() and not self._response_requested
+                and not self._user_speaking and not self._route_intro_pending
+                and (turn is None or turn.ready.is_set()))
+
+    async def invalidate_input(self):
+        window = self._input_window
+        self._input_window = None
+        self._input_open = False
+        self._input_has_audio = False
+        if self.strict_turn_taking and window:
+            await self.send_browser({
+                "type": "voice.input.closed", "runId": self.session.run_id, "windowId": window})
+
+    async def offer_input(self):
+        if self.input_eligible() and self._input_window is None:
+            self._input_window = uuid4().hex
+            await self.send_browser({
+                "type": "voice.input.ready", "runId": self.session.run_id,
+                "windowId": self._input_window, "responseIds": list(self._turn_response_ids)})
+
+    async def open_input(self, msg):
+        if (not self.input_eligible() or msg.get("runId") != self.session.run_id
+                or not self._input_window or msg.get("windowId") != self._input_window):
+            log.warning("Rejected stale or ineligible voice.input.open")
+            await self.reject_input_open(msg)
+            return
+        if self._input_open:
+            return
+        # The preceding accepted utterance and its ASR are terminal here.
+        # Never clear on speech_stopped: its transcript may still be pending.
+        window = self._input_window
+        await self.upstream.send(json.dumps({"type": "input_audio_buffer.clear"}))
+        if window == self._input_window and self.input_eligible():
+            self._capture_item_id = None
+            self._input_open = True
+        else:
+            await self.reject_input_open(msg)
+
+    async def reject_input_open(self, msg):
+        requested_window = msg.get("windowId")
+        valid_window = isinstance(requested_window, str) and 0 < len(requested_window) <= 128
+        window = requested_window if valid_window else self._input_window or ""
+        if window == self._input_window:
+            await self.invalidate_input()
+        else:
+            await self.send_browser({
+                "type": "voice.input.closed", "runId": self.session.run_id, "windowId": window})
+        if (not self.strict_turn_taking or not valid_window
+                or not isinstance(msg.get("runId"), str) or not msg["runId"]):
+            await self.send_browser({
+                "type": "relay.error", "code": "VOICE_INPUT_PROTOCOL_INVALID",
+                "message": "음성 입력 창 요청에는 after-playback-v1의 runId와 windowId가 필요합니다."})
+        else:
+            await self.offer_input()
+
+    def trace_playback(self, msg):
+        if not config.VOICE_DIAGNOSTICS or msg.get("runId") != self.session.run_id:
+            return
+        response_id, event = msg.get("responseId"), msg.get("event")
+        if (not isinstance(response_id, str) or response_id not in self.voice_turns.responses
+                or not isinstance(event, str) or event not in {"received", "started", "drained", "route_ready"}):
+            return
+        timings = {
+            name: value for name in ("ms", "contextTime", "performanceTime", "baseLatency", "outputLatency")
+            if type(value := msg.get(name)) in (int, float) and -1e12 <= value <= 1e12
+        }
+        turn = self.voice_turns.responses[response_id]
+        self.trace_voice("playback", response_id=response_id, playback_event=event,
+                         item_id=turn.item_id if turn else None, **timings)
+
+    async def recover_input(self, item_id):
+        await asyncio.sleep(self.INPUT_TIMEOUT_SECONDS)
+        if self._closing or self.departure_started or item_id != self._accepted_item_id:
+            return
+        turn = self.voice_turns.turns.get(item_id)
+        if turn and not turn.ready.is_set():
+            self.voice_turns.transcribe(item_id, "")
+            self.trace_voice("transcript_timeout", item_id=item_id)
+            await self.report_input_failure(item_id)
+            self.sync_prompt_correction()
+        if self._native_response_pending:
+            self._native_response_pending = False
+            self._response_requested = True
+            self._response_tools_allowed = False
+            self.trace_voice("native_response_timeout", item_id=item_id)
+        await self.flush_response()
+        await self.offer_input()
+
+    async def report_input_failure(self, item_id):
+        turn = self.voice_turns.turns.get(item_id)
+        if turn and turn.input_failure_reported:
+            return
+        if turn:
+            turn.input_failure_reported = True
+        await self.send_browser({
+            "type": "voice.input.failed", "runId": self.session.run_id, "itemId": item_id,
+            "message": "참가자의 말을 확인하지 못했습니다. 안내가 끝나면 다시 말해 주세요."})
+
+    def retire_route_intro(self):
+        if self._response_failure_task and self._response_failure_task is not asyncio.current_task():
+            self._response_failure_task.cancel()
+        self._route_intro_pending = False
+        self._route_intro_id = None
+        self._route_intro_response_id = None
+        self._route_intro_retry = False
+
+    async def wait_for_failed_response(self, response_id, intro_id=None):
+        await asyncio.sleep(15)
+        if (self._closing or (intro_id is not None and intro_id != self._route_intro_id)
+                or response_id not in self._generating_response_ids):
+            return
+        self._closing = True
+        self._response_requested = False
+        self.retire_route_intro()
+        await self.invalidate_input()
+        await self.send_browser({
+            "type": "relay.error",
+            "code": "ROUTE_INTRO_RESPONSE_STALLED" if intro_id else "VOICE_RESPONSE_STALLED",
+            "message": "음성 응답이 종료되지 않았습니다. 연결을 다시 시도해 주세요."})
+        # There is no safe response.cancel on this provider. Retire the broken
+        # connection instead of opening capture or overlapping another response.
+        await self.upstream.close()
+
+    async def fail_route_intro(self, message):
+        if not self._route_intro_id or self._route_intro_failure_reported:
+            return
+        self._route_intro_failure_reported = True
+        retrying = self._route_intro_attempts < 2
+        self._route_intro_retry = retrying
+        self._route_intro_pending = retrying
+        self._response_requested = retrying
+        await self.send_browser({
+            "type": "route_intro.failed", "runId": self.session.run_id,
+            "introId": self._route_intro_id, "responseId": self._route_intro_response_id,
+            "message": message, "retrying": retrying})
+
+    async def route_intro_message(self, msg):
+        if (not self._route_intro_id or msg.get("runId") != self.session.run_id
+                or msg.get("introId") != self._route_intro_id or self.departure_started
+                or self._closing or self.session.phase != "briefing"):
+            log.warning("Rejected stale route intro acknowledgement")
+            return
+        if msg["type"] == "route_intro.ready":
+            self._route_intro_ready = True
+        elif (msg.get("reason") == "buffer_limit" and self._route_intro_response_id
+              and msg.get("responseId") == self._route_intro_response_id):
+            if not self._route_intro_retry:
+                await self.invalidate_input()
+                await self.fail_route_intro("경로 안내 음성이 버퍼 한도를 초과했습니다.")
+        else:
+            log.warning("Rejected unmatched route intro retry")
+            return
+        await self.flush_response()
+        await self.offer_input()
 
     def sync_prompt_correction(self):
         if self.voice_turns.rejected_prompt_revision == self.session.pending_prompt_revision:
@@ -348,11 +529,12 @@ class Bridge:
             outcome = await self.run_tool(
                 "confirm_prompt", {}, f"input-confirm:{turn.item_id}", from_voice=True, turn=turn)
             if outcome["ok"]:
-                self._narration.append(outcome["facts"] + " " + outcome["ask"])
+                self._response_requested = True
         finally:
             self._pending_tools = max(0, self._pending_tools - 1)
-        if not outcome["ok"] and turn is self.voice_turns.latest:
+        if turn is self.voice_turns.latest:
             await self.request_response()
+        await self.offer_input()
 
     @property
     def departure_started(self):
@@ -363,6 +545,8 @@ class Bridge:
             return
         self._departure_voice_finished = True
         self._voice_stopped = True
+        self.retire_route_intro()
+        await self.invalidate_input()
         self._response_requested = False
         self._native_response_retry = False
         self._narration.clear()
@@ -377,6 +561,8 @@ class Bridge:
         if event.get("runId", self.session.run_id) != self.session.run_id:
             return
         if event["type"] == "mission.debrief":
+            self.retire_route_intro()
+            await self.invalidate_input()
             self._result_text = event["text"]
             # An abort before launch must retire the conversational session too.
             # Results are spoken only by the output-only results.ready session.
@@ -443,14 +629,19 @@ class Bridge:
             self._narration.append(instructions)
         self._response_tools_allowed = allow_tools
         self._response_requested = True
+        await self.invalidate_input()
         await self.flush_response()
 
     async def flush_response(self):
         async with self._response_lock:
             if (self.upstream is None or self._closing or self._voice_stopped or self._response_active
+                    or (self.strict_turn_taking and self._generating_response_ids)
                     or self._native_response_pending or self._pending_tools
                     or self._user_speaking or not (self._response_requested or self._native_response_retry)):
                 return
+            if self._route_intro_pending and self._route_intro_retry and not self._route_intro_ready:
+                return
+            await self.invalidate_input()
             response = {"type": "response.create", "response": {
                 "tool_choice": "auto" if self._response_tools_allowed or self._native_response_retry else "none",
                 "metadata": {"participantItemId": self.voice_turns.latest.item_id if self.voice_turns.latest else ""},
@@ -486,6 +677,21 @@ class Bridge:
                     + "\n이번 응답에서는 아래 전체 경로를 빠짐없이 읽고 '이 경로로 출발할까?'라고 물어보세요. "
                     "아직 출발하지 않았습니다. 질문 뒤에는 말을 멈추고 참가자의 새 답변을 기다리세요.\n"
                     + self._route_readback_facts,
+                }
+            if self._route_intro_pending and self._route_intro_id and self.session.phase == "briefing":
+                self._route_intro_attempts += 1
+                self._route_intro_response_id = None
+                self._route_intro_pending = False
+                self._route_intro_retry = False
+                self._route_intro_failure_reported = False
+                response["response"] = {
+                    "tool_choice": "none",
+                    "metadata": {"runId": self.session.run_id, "routeIntro": self._route_intro_id},
+                    "instructions": tools.voice_context(self.session)["instructions"]
+                    + "\n이번 응답에서는 아래 세 현장의 신고 내용을 모두 설명한 뒤 첫 목적지만 물어보세요. "
+                    "참가자의 외형 설명을 다시 읽거나 특징 힌트, 우선순위, 추천 경로를 덧붙이지 마세요. "
+                    "목적지를 대신 고르거나 도구를 호출하지 말고 답변을 기다리세요.\n"
+                    + self._route_intro_facts,
                 }
             if self._debrief_pending:
                 self._debrief_attempts += 1
@@ -527,10 +733,51 @@ class Bridge:
             etype = event.get("type", "")
             if self.departure_started and etype.startswith("input_audio_buffer."):
                 continue
+            item_id = event.get("item_id")
+            if self.strict_turn_taking:
+                if etype == "input_audio_buffer.speech_started":
+                    if (not self._input_open or not self._input_has_audio
+                            or not isinstance(item_id, str) or not item_id
+                            or self._capture_item_id is not None
+                            or item_id in self.voice_turns.turns):
+                        self.trace_voice("input_rejected", provider_event=etype, item_id=item_id)
+                        continue
+                    self._accepted_item_id = self._capture_item_id = item_id
+                    self._turn_response_ids.clear()
+                    if self._route_intro_id and not self._route_intro_pending:
+                        self.retire_route_intro()
+                elif etype in {"input_audio_buffer.speech_stopped", "input_audio_buffer.committed"}:
+                    if item_id != self._capture_item_id or item_id is None:
+                        self.trace_voice("input_rejected", provider_event=etype, item_id=item_id)
+                        continue
+                    if not self._user_speaking:
+                        continue
+                elif etype.startswith("conversation.item.input_audio_transcription."):
+                    if item_id not in self.voice_turns.turns:
+                        self.trace_voice("input_rejected", provider_event=etype, item_id=item_id)
+                        continue
             if etype == "error":
-                log.error("Voice Live error: %s", event.get("error"))
+                log.error("Voice Live error code: %s", (event.get("error") or {}).get("code"))
                 if self._results_task is not None:
                     raise OSError("Voice Live rejected result narration")
+                if (self._route_intro_id and self._route_intro_attempts
+                        and ((self._route_intro_response_id is not None
+                              and self._active_response_id == self._route_intro_response_id)
+                             or (self._response_active and self._active_response_id is None
+                                 and (self._last_response or {}).get("response", {}).get("metadata", {})
+                                 .get("routeIntro") == self._route_intro_id))
+                        and (event.get("error") or {}).get("code") != "conversation_already_has_active_response"):
+                    await self.fail_route_intro("경로 안내 음성을 생성하지 못했습니다.")
+                    # Without a created response, the rejected create is terminal.
+                    # Otherwise wait for response.done; never cancel generation.
+                    if self._active_response_id is None:
+                        self._response_active = False
+                        await self.flush_response()
+                        await self.offer_input()
+                    elif self._response_failure_task is None or self._response_failure_task.done():
+                        self._response_failure_task = asyncio.create_task(self.wait_for_failed_response(
+                            self._route_intro_response_id, self._route_intro_id))
+                    continue
                 if (event.get("error") or {}).get("code") == "conversation_already_has_active_response":
                     if self._native_response_pending:
                         # VAD tried to answer while the un-interrupted old reply
@@ -545,7 +792,7 @@ class Bridge:
                         self._native_response_retry = False
                     elif not self._native_response_retry:
                         self._response_requested = True
-                        if self._last_response:
+                        if self._last_response and not self.strict_turn_taking:
                             instructions = self._last_response.get("response", {}).get("instructions")
                             if instructions and not self._narration:
                                 self._narration = [instructions]
@@ -553,15 +800,48 @@ class Bridge:
                     # This collision is recovered internally; it is not a
                     # failure or playback-drain signal for the browser.
                     continue
+                if self.strict_turn_taking and not self.departure_started:
+                    if self._active_response_id is None:
+                        # A rejected create has no live generation to drain.
+                        self._response_active = False
+                        self._native_response_pending = False
+                        self._native_response_retry = False
+                    elif self._response_failure_task is None or self._response_failure_task.done():
+                        self._response_failure_task = asyncio.create_task(
+                            self.wait_for_failed_response(self._active_response_id))
+                    await self.send_browser(event)
+                    await self.flush_response()
+                    await self.offer_input()
+                    continue
             if etype == "response.created":
+                admitted_response = (self._native_response_pending or self._native_response_retry
+                                     or (self._response_active and self._active_response_id is None))
+                await self.invalidate_input()
                 self._response_active = True
                 self._native_response_pending = False
                 self._native_response_retry = False
                 self._blocked_native_response_id = None
                 response = event.get("response") or {}
                 self._active_response_id = response.get("id")
+                if self._active_response_id:
+                    self._generating_response_ids.add(self._active_response_id)
+                    if self._active_response_id not in self._turn_response_ids:
+                        self._turn_response_ids.append(self._active_response_id)
                 metadata = response.get("metadata") or {}
-                self.voice_turns.bind_response(response.get("id"), metadata.get("participantItemId"))
+                if self.strict_turn_taking and not admitted_response:
+                    self.voice_turns.bind_response(response.get("id"), inherit=False)
+                    self.trace_voice("unsolicited_response", response_id=response.get("id"))
+                else:
+                    self.voice_turns.bind_response(response.get("id"), metadata.get("participantItemId"))
+                turn = self.voice_turns.mark_response(response.get("id"), "created")
+                self.trace_voice("response_created", response_id=response.get("id"),
+                                 item_id=turn.item_id if turn else None)
+                if (metadata.get("routeIntro") == self._route_intro_id and self._route_intro_id
+                        and metadata.get("runId") == self.session.run_id):
+                    self._route_intro_response_id = response.get("id")
+                    await self.send_browser({
+                        "type": "route_intro.response", "runId": self.session.run_id,
+                        "introId": self._route_intro_id, "responseId": response.get("id")})
                 if (metadata.get("promptReadback") == str(self.session.pending_prompt_revision)
                         and metadata.get("runId") == self.session.run_id and self.session.pending_prompt):
                     self._prompt_readback_pending = False
@@ -585,23 +865,37 @@ class Bridge:
                         "responseId": self._debrief_response_id})
             elif etype == "input_audio_buffer.speech_started":
                 self.voice_turns.begin(event.get("item_id"), self.session)
+                self.voice_turns.mark_item(item_id, "speech_started")
                 self._user_speaking = True
                 self._response_requested = False
                 self._native_response_retry = False
                 self._blocked_native_response_id = None
                 self._narration.clear()
                 self.trace_voice("speech_started", item_id=event.get("item_id"),
+                                 audio_start_ms=event.get("audio_start_ms"),
                                  pending_revision=self.voice_turns.audible_prompt_revision)
-            elif etype == "input_audio_buffer.speech_stopped":
+            elif (etype == "input_audio_buffer.speech_stopped"
+                  or (self.strict_turn_taking and etype == "input_audio_buffer.committed")):
                 self.voice_turns.stop(event.get("item_id"), self.session)
+                self.voice_turns.mark_item(item_id, "speech_stopped")
                 self._user_speaking = False
                 # VAD creates the next response itself; do not race its native turn.
                 self._native_response_pending = True
                 self._blocked_native_response_id = self._active_response_id
-                self._speech_stopped_at = time.perf_counter()
-                self._ttfa_pending = True
+                self.trace_voice("speech_stopped", item_id=item_id,
+                                 provider_event=etype, audio_end_ms=event.get("audio_end_ms"),
+                                 timing_basis="event_receipt")
+                if self.strict_turn_taking:
+                    await self.invalidate_input()
+                    if self._input_timeout_task:
+                        self._input_timeout_task.cancel()
+                    self._input_timeout_task = asyncio.create_task(self.recover_input(item_id))
             elif etype == "response.done":
                 finished_id = (event.get("response") or {}).get("id")
+                self._generating_response_ids.discard(finished_id)
+                if not self._generating_response_ids and self._response_failure_task:
+                    self._response_failure_task.cancel()
+                    self._response_failure_task = None
                 if (self._native_response_pending and finished_id
                         and finished_id == self._blocked_native_response_id):
                     # With automatic interruption disabled, Voice Live can
@@ -613,15 +907,24 @@ class Bridge:
                     self._response_active = False
                     self._active_response_id = None
                 self.voice_turns.finish_response(event.get("response") or {}, self.session)
+                turn = self.voice_turns.mark_response(finished_id, "done")
+                self.trace_voice("response_done", response_id=finished_id,
+                                 item_id=turn.item_id if turn else None,
+                                 status=(event.get("response") or {}).get("status"))
             elif etype == "input_audio_buffer.committed":
                 self.voice_turns.stop(event.get("item_id"), self.session)
             elif etype == "conversation.item.input_audio_transcription.completed":
                 self.voice_turns.transcribe(event.get("item_id"), event.get("transcript"))
                 self.trace_voice("transcript", item_id=event.get("item_id"),
                                  nonempty=bool((event.get("transcript") or "").strip()))
+                if (self.strict_turn_taking and item_id == self._accepted_item_id
+                        and not self.voice_turns.turns[item_id].text):
+                    await self.report_input_failure(item_id)
             elif etype == "conversation.item.input_audio_transcription.failed":
                 self.voice_turns.transcribe(event.get("item_id"), "")
                 self.trace_voice("transcript_failed", item_id=event.get("item_id"))
+                if self.strict_turn_taking and item_id == self._accepted_item_id:
+                    await self.report_input_failure(item_id)
             self.sync_prompt_correction()
             if etype in {"response.done", "conversation.item.input_audio_transcription.completed"}:
                 self.schedule_input_confirmation()
@@ -630,19 +933,31 @@ class Bridge:
                 await self.sync_voice_context()
                 await self.flush_response()
             if etype in {"response.audio.delta", "response.output_audio.delta"}:
+                response_id = event.get("response_id")
+                first_audio = "first_audio" not in self.voice_turns.response_timestamps.get(response_id, {})
                 self.voice_turns.hear_response(event.get("response_id"))
-            if etype in {"response.audio.delta", "response.output_audio.delta"} and self._ttfa_pending:
-                self._ttfa_pending = False
-                await self.send_browser({
-                    "type": "metrics.ttfa",
-                    "ms": int((time.perf_counter() - self._speech_stopped_at) * 1000)})
+                latency = self.voice_turns.first_audio_latency(response_id)
+                turn = self.voice_turns.responses.get(response_id)
+                if first_audio:
+                    self.trace_voice("response_first_audio", response_id=response_id,
+                                     item_id=turn.item_id if turn else None)
+                if latency is not None:
+                    turn, ms = latency
+                    await self.send_browser({
+                        "type": "metrics.ttfa", "runId": self.session.run_id,
+                        "responseId": response_id, "itemId": turn.item_id,
+                        "timingBasis": "speech_stopped_event_receipt", "ms": ms})
             if etype == "response.function_call_arguments.done":
                 if self.departure_started:
                     log.warning("Ignoring a voice tool call after departure")
                     continue
                 await self.send_browser(event)
                 self._pending_tools += 1
+                await self.invalidate_input()
                 turn = self.voice_turns.responses.get(event.get("response_id"))
+                self.trace_voice("tool_call_received", response_id=event.get("response_id"),
+                                 item_id=turn.item_id if turn else None,
+                                 call_id=event.get("call_id"), name=event.get("name"))
                 task = asyncio.create_task(self.handle_tool_call(event, turn=turn))
                 self._tool_tasks.add(task)
                 task.add_done_callback(self._tool_tasks.discard)
@@ -650,6 +965,10 @@ class Bridge:
             await self.send_browser(event)
             if etype == "response.done":
                 response = event.get("response") or {}
+                if (self._route_intro_id and self._route_intro_response_id
+                        and response.get("id") == self._route_intro_response_id):
+                    if response.get("status") != "completed":
+                        await self.fail_route_intro("경로 안내 음성을 완료하지 못했습니다.")
                 if self._launch_response_id and response.get("id") == self._launch_response_id:
                     if response.get("status") == "completed":
                         await self.send_browser({
@@ -678,10 +997,15 @@ class Bridge:
                         self._narration = [self.session.debrief()]
                         self._response_requested = True
                 await self.flush_response()
+            await self.offer_input()
 
-    async def run_tool(self, name, args, activity_id=None, *, from_voice=False, turn=None):
+    async def run_tool(self, name, args, activity_id=None, *, from_voice=False, turn=None, response_id=None):
         activity_id = activity_id if isinstance(activity_id, str) and activity_id else str(uuid4())
         async with self._command_lock:
+            await self.invalidate_input()
+            self.voice_turns.mark_item(turn.item_id if turn else None, "tool_started")
+            self.trace_voice("tool_started", name=name, call_id=activity_id,
+                             item_id=turn.item_id if turn else None, response_id=response_id)
             await self.send_browser({"type": "tool.started", "id": activity_id, "name": name, "args": args})
             started = time.perf_counter()
             prior = self._completed_commands.get(activity_id)
@@ -704,17 +1028,30 @@ class Bridge:
                         outcome = await tools.dispatch(self.session, self.runner, name, effective_args)
                         if from_voice and outcome["ok"]:
                             self.voice_turns.commit(turn, name)
-                            self.trace_voice("accepted", name=name, item_id=turn.item_id if turn else None)
+                            self.voice_turns.mark_item(turn.item_id if turn else None, "tool_accepted")
+                            self.trace_voice("tool_accepted", name=name, call_id=activity_id,
+                                             item_id=turn.item_id if turn else None, response_id=response_id)
                 except Exception:
                     log.exception("tool execution failed")
                     outcome = {"ok": False, "facts": "명령 실행 중 오류가 발생했습니다.", "ask": ""}
                 self._completed_commands[activity_id] = (name, args, outcome)
                 if len(self._completed_commands) > 256:
                     del self._completed_commands[next(iter(self._completed_commands))]
-            if name == "confirm_prompt" and outcome["ok"]:
+            if name == "confirm_prompt" and outcome["ok"] and prior is None:
                 if from_voice:
                     self._prompt_confirmation = (turn, outcome)
                 self._route_intro_pending = True
+                self._route_intro_id = uuid4().hex
+                self._route_intro_response_id = None
+                self._route_intro_attempts = 0
+                self._route_intro_ready = False
+                self._route_intro_retry = False
+                self._route_intro_failure_reported = False
+                self._route_intro_facts = outcome["facts"] + " " + outcome["ask"]
+                if self.upstream:
+                    await self.send_browser({
+                        "type": "route_intro.pending", "runId": self.session.run_id,
+                        "introId": self._route_intro_id})
                 self._prompt_readback_pending = False
                 self.voice_turns.prepare_prompt()
             if name == "prepare_prompt" and outcome["ok"]:
@@ -734,6 +1071,7 @@ class Bridge:
                 self._route_readback_facts = self.session.get_state()["facts"]
                 self._route_readback_pending = True
             if name == "launch_mission" and outcome["ok"] and self.upstream and not self.departure_started:
+                self.retire_route_intro()
                 self._launch_pending = True
                 self._narration.clear()
                 self._response_requested = True
@@ -744,11 +1082,17 @@ class Bridge:
                 turn_detection = build_session()["session"]["turn_detection"] | {
                     "create_response": False, "interrupt_response": False}
                 await self.upstream.send(json.dumps({"type": "session.update", "session": {"turn_detection": turn_detection}}))
-                await self.upstream.send(json.dumps({"type": "input_audio_buffer.clear"}))
+                if not self.strict_turn_taking:
+                    await self.upstream.send(json.dumps({"type": "input_audio_buffer.clear"}))
             await self.sync_voice_context()
             await self.send_browser({
                 "type": "tool.finished", "id": activity_id, "name": name, "result": outcome,
                 "ms": int((time.perf_counter() - started) * 1000)})
+            self.voice_turns.mark_item(turn.item_id if turn else None, "tool_completed")
+            self.trace_voice("tool_completed", name=name, call_id=activity_id,
+                             item_id=turn.item_id if turn else None, ok=outcome["ok"],
+                             response_id=response_id,
+                             duration_ms=int((time.perf_counter() - started) * 1000))
             await self.push_state()
             return outcome
 
@@ -764,10 +1108,12 @@ class Bridge:
                     and self._prompt_confirmation[0] is turn):
                 outcome = self._prompt_confirmation[1]
             else:
-                outcome = await self.run_tool(name, args, call_id, from_voice=True, turn=turn)
+                outcome = await self.run_tool(name, args, call_id, from_voice=True, turn=turn,
+                                              response_id=event.get("response_id"))
             if outcome["ok"] and name == "select_stop" and len(self.session.state.draftRoute) == 3:
                 # Preparing the completed route is automatic; departure still needs a new reply.
-                outcome = await self.run_tool("confirm_route", {}, f"{call_id}:confirm-route")
+                outcome = await self.run_tool("confirm_route", {}, f"{call_id}:confirm-route",
+                                              turn=turn, response_id=event.get("response_id"))
             if self.upstream and not self._voice_stopped:
                 async with self._tool_lock:
                     await self.upstream.send(json.dumps({
@@ -777,10 +1123,9 @@ class Bridge:
         finally:
             self._pending_tools = max(0, self._pending_tools - 1)
         self.schedule_input_confirmation()
-        # Hold the agent's next turn until the client confirms Gibby's map
-        # animation reached its last frame (see "route_intro.ready" below).
-        if not self._route_intro_pending and (turn is None or turn is self.voice_turns.latest):
+        if turn is None or turn is self.voice_turns.latest:
             await self.request_response()
+        await self.offer_input()
 
     async def interrupt_voice(self, msg):
         response_ids = msg.get("responseIds")
@@ -815,10 +1160,17 @@ class Bridge:
             mtype = msg.get("type", "")
             if mtype == "command":
                 await self.run_tool(msg.get("name", ""), msg.get("args", {}), msg.get("requestId"))
+                if self._route_intro_pending:
+                    await self.request_response()
+                await self.offer_input()
             elif mtype == "voice.input_state" and type(msg.get("muted")) is bool:
                 self.trace_voice("microphone", muted=msg["muted"])
+            elif mtype == "voice.playback.metrics":
+                self.trace_playback(msg)
             elif mtype == "voice.reply_drained" and msg.get("runId") == self.session.run_id:
                 self.voice_turns.finish_route_playback(msg.get("responseId"), self.session)
+            elif mtype == "voice.input.open":
+                await self.open_input(msg)
             elif mtype == "voice.interrupt":
                 await self.interrupt_voice(msg)
             elif mtype == "response.cancel":
@@ -826,14 +1178,27 @@ class Bridge:
             elif mtype == "results.ready":
                 await self.start_result_audio(msg.get("runId"))
             elif mtype == "audio" and self.upstream and not self.departure_started:
+                if self.strict_turn_taking:
+                    if (not self._input_open or not self._input_window
+                            or msg.get("windowId") != self._input_window):
+                        self.trace_voice("audio_rejected", reason="closed_or_stale_window")
+                        continue
+                    self._input_has_audio = True
                 await self.upstream.send(json.dumps({
                     "type": "input_audio_buffer.append", "audio": msg.get("data", "")}))
             elif mtype == "text" and self.upstream and not self.departure_started:
+                if self.strict_turn_taking and not self._input_open:
+                    log.warning("Rejected text during closed voice input window")
+                    continue
                 text = msg.get("text", "")
                 if not isinstance(text, str) or not text.strip():
                     await self.send_browser({"type": "relay.error", "message": "빈 참가자 메시지는 보낼 수 없습니다."})
                     continue
                 item_id = uuid4().hex
+                if self.strict_turn_taking:
+                    await self.invalidate_input()
+                    self._accepted_item_id = item_id
+                    self._turn_response_ids.clear()
                 self.voice_turns.stop(item_id, self.session)
                 self.voice_turns.transcribe(item_id, text)
                 self.sync_prompt_correction()
@@ -845,13 +1210,14 @@ class Bridge:
                 await self.request_response(allow_tools=True)
             elif mtype == "greet":
                 await self.greet()
-            elif mtype == "route_intro.ready":
-                if self._route_intro_pending:
-                    self._route_intro_pending = False
-                    await self.request_response()
+            elif mtype in {"route_intro.ready", "route_intro.retry"}:
+                await self.route_intro_message(msg)
             # Browser events cannot replace instructions/tools or fabricate outputs.
             elif mtype in {"input_audio_buffer.clear", "conversation.item.truncate"} and self.upstream and not self.departure_started:
-                await self.upstream.send(json.dumps(msg))
+                if self.strict_turn_taking:
+                    log.warning("Rejected browser input mutation during strict voice session")
+                else:
+                    await self.upstream.send(json.dumps(msg))
 
     async def greet(self):
         if self.upstream and not self._greet_requested:
@@ -875,6 +1241,13 @@ class Bridge:
 
     async def close(self):
         self._closing = True
+        self.retire_route_intro()
+        await self.invalidate_input()
+        if self._input_timeout_task:
+            self._input_timeout_task.cancel()
+            await asyncio.gather(self._input_timeout_task, return_exceptions=True)
+        if self._response_failure_task:
+            await asyncio.gather(self._response_failure_task, return_exceptions=True)
         if self._results_task is not None:
             self._results_task.cancel()
             await asyncio.gather(self._results_task, return_exceptions=True)
@@ -895,7 +1268,7 @@ async def ws_endpoint(browser: WebSocket):
         await browser.accept()
     session = SurveySession(mode=config.TRIAGE_MODE, drone_control_mode=config.DRONE_CONTROL_MODE)
     try:
-        bridge = Bridge(browser, session)
+        bridge = Bridge(browser, session, strict_turn_taking=browser.query_params.get("voice", "1") != "0")
     except DroneError as exc:
         await browser.send_json({"type": "relay.error", "code": exc.code,
                                  "message": "드론 도구 연결 설정을 확인하세요. 모의 성공으로 대체하지 않습니다."})
@@ -907,10 +1280,17 @@ async def ws_endpoint(browser: WebSocket):
         if browser.query_params.get("voice", "1") == "0":
             await bridge.send_browser({
                 "type": "relay.ready", "model": None, "voice": None,
-                "region": config.REGION, "mode": config.TRIAGE_MODE})
+                "region": config.REGION, "mode": config.TRIAGE_MODE, "turnTaking": "after-playback-v1",
+                "diagnostics": bool(config.VOICE_DIAGNOSTICS)})
             await bridge.push_state()
             await bridge.pump_browser()
             return
+        if browser.query_params.get("turnTaking") != "after-playback-v1":
+            await bridge.send_browser({
+                "type": "relay.error", "code": "VOICE_TURN_TAKING_UNSUPPORTED",
+                "message": "음성 입력은 after-playback-v1 클라이언트가 필요합니다. 페이지를 새로고침하세요."})
+            return
+        auth_started = time.perf_counter()
         try:
             token = await credential().get_token(config.TOKEN_SCOPE)
         except Exception:
@@ -919,15 +1299,21 @@ async def ws_endpoint(browser: WebSocket):
                 "type": "relay.error",
                 "message": "Azure 음성 인증에 실패했습니다. PC에서 Azure 로그인을 완료한 뒤 연결 다시 시도를 눌러 주세요."})
             return
+        bridge.trace_voice("startup_auth", duration_ms=int((time.perf_counter() - auth_started) * 1000))
+        connect_started = time.perf_counter()
         async with websockets.connect(
             config.WS_URL, additional_headers={"Authorization": f"Bearer {token.token}"},
             open_timeout=30, max_size=None,
         ) as upstream:
+            bridge.trace_voice("startup_connect", duration_ms=int((time.perf_counter() - connect_started) * 1000))
             bridge.upstream = upstream
+            config_started = time.perf_counter()
             await configure_voice(upstream, build_session())
+            bridge.trace_voice("startup_config", duration_ms=int((time.perf_counter() - config_started) * 1000))
             await bridge.send_browser({
                 "type": "relay.ready", "model": config.MODEL, "voice": config.VOICE_NAME,
-                "region": config.REGION, "mode": config.TRIAGE_MODE})
+                "region": config.REGION, "mode": config.TRIAGE_MODE, "turnTaking": "after-playback-v1",
+                "diagnostics": bool(config.VOICE_DIAGNOSTICS)})
             await bridge.push_state()
             pumps = [asyncio.create_task(bridge.pump_upstream()),
                      asyncio.create_task(bridge.pump_browser())]

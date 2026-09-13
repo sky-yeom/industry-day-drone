@@ -1,3 +1,10 @@
+variable "deploy_cloud_apps" {
+  description = "Explicit opt-in to create the retired relay/web apps and their relay-owned role assignments. Shared infrastructure is preserved when false."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "resource_group_name" {
   description = "Existing resource group to deploy the demo stack into."
   type        = string
@@ -43,11 +50,23 @@ variable "web_app_name" {
 variable "relay_image" {
   description = "Full image reference for the relay, e.g. myacr.azurecr.io/idd-relay:20260101000000. Build/push it first with `az acr build` (see scripts/deploy.sh)."
   type        = string
+  default     = ""
+  nullable    = false
+  validation {
+    condition     = !var.deploy_cloud_apps || length(trimspace(var.relay_image)) > 0
+    error_message = "relay_image must be a non-empty image reference when deploy_cloud_apps is true."
+  }
 }
 
 variable "web_image" {
   description = "Full image reference for the web app, e.g. myacr.azurecr.io/idd-web:20260101000000."
   type        = string
+  default     = ""
+  nullable    = false
+  validation {
+    condition     = !var.deploy_cloud_apps || length(trimspace(var.web_image)) > 0
+    error_message = "web_image must be a non-empty image reference when deploy_cloud_apps is true."
+  }
 }
 
 variable "voice_live_resource_group" {

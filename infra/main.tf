@@ -1,5 +1,6 @@
-# Deploys the public demo stack (relay + web) into the existing
-# `industry-day-drone` resource group, reusing its Log Analytics workspace.
+# Preserves shared infrastructure; the retired public demo apps (relay + web)
+# and their exclusively owned role assignments require deploy_cloud_apps=true.
+# Uses the existing `industry-day-drone` resource group and Log Analytics workspace.
 # The Voice Live and Vision Cognitive Services accounts already exist
 # (managed elsewhere / by another team) and are only read here, never
 # created or destroyed by this config — they're looked up as `data` sources.
@@ -17,11 +18,15 @@ data "azurerm_log_analytics_workspace" "logs" {
 }
 
 data "azurerm_cognitive_account" "voice_live" {
+  count = var.deploy_cloud_apps ? 1 : 0
+
   name                = var.voice_live_resource_name
   resource_group_name = var.voice_live_resource_group
 }
 
 data "azurerm_cognitive_account" "vision" {
+  count = var.deploy_cloud_apps ? 1 : 0
+
   name                = var.vision_resource_name
   resource_group_name = var.vision_resource_group
 }
@@ -42,6 +47,8 @@ resource "azurerm_container_app_environment" "main" {
 }
 
 resource "azurerm_container_app" "relay" {
+  count = var.deploy_cloud_apps ? 1 : 0
+
   name                         = var.relay_app_name
   container_app_environment_id = azurerm_container_app_environment.main.id
   resource_group_name          = data.azurerm_resource_group.main.name
@@ -96,7 +103,7 @@ resource "azurerm_container_app" "relay" {
       }
       env {
         name  = "AZURE_VISION_ENDPOINT"
-        value = data.azurerm_cognitive_account.vision.endpoint
+        value = data.azurerm_cognitive_account.vision[0].endpoint
       }
       env {
         name  = "AZURE_VISION_DEPLOYMENT"
@@ -110,29 +117,35 @@ resource "azurerm_container_app" "relay" {
   }
 
   lifecycle {
-    # CI (.github/workflows/deploy.yml) deploys new images imperatively via
-    # `az containerapp update` on every push to main; ignore drift here so
+    # Explicitly opted-in manual CI runs deploy new images imperatively via
+    # `az containerapp update`; ignore drift here so
     # a later `terraform apply` doesn't revert to the tfvars image tag.
     ignore_changes = [template[0].container[0].image]
   }
 }
 
 resource "azurerm_role_assignment" "relay_voice_live" {
+  count = var.deploy_cloud_apps ? 1 : 0
+
   # Scoped at the resource group (not just the cognitive account) to match
   # what was actually provisioned; the Voice Live account and this demo
   # stack share the same resource group anyway.
   scope                = data.azurerm_resource_group.main.id
   role_definition_name = "Cognitive Services User"
-  principal_id         = azurerm_container_app.relay.identity[0].principal_id
+  principal_id         = azurerm_container_app.relay[0].identity[0].principal_id
 }
 
 resource "azurerm_role_assignment" "relay_vision" {
-  scope                = data.azurerm_cognitive_account.vision.id
+  count = var.deploy_cloud_apps ? 1 : 0
+
+  scope                = data.azurerm_cognitive_account.vision[0].id
   role_definition_name = "Cognitive Services User"
-  principal_id         = azurerm_container_app.relay.identity[0].principal_id
+  principal_id         = azurerm_container_app.relay[0].identity[0].principal_id
 }
 
 resource "azurerm_container_app" "web" {
+  count = var.deploy_cloud_apps ? 1 : 0
+
   name                         = var.web_app_name
   container_app_environment_id = azurerm_container_app_environment.main.id
   resource_group_name          = data.azurerm_resource_group.main.name
@@ -183,11 +196,11 @@ resource "azurerm_container_app" "web" {
 
       env {
         name  = "NEXT_PUBLIC_RELAY_HTTP"
-        value = "https://${azurerm_container_app.relay.ingress[0].fqdn}"
+        value = "https://${azurerm_container_app.relay[0].ingress[0].fqdn}"
       }
       env {
         name  = "NEXT_PUBLIC_RELAY_WS"
-        value = "wss://${azurerm_container_app.relay.ingress[0].fqdn}/ws"
+        value = "wss://${azurerm_container_app.relay[0].ingress[0].fqdn}/ws"
       }
 
       dynamic "env" {
@@ -203,4 +216,34 @@ resource "azurerm_container_app" "web" {
   lifecycle {
     ignore_changes = [template[0].container[0].image]
   }
+}
+
+moved {
+  from = azurerm_container_app.relay
+  to   = azurerm_container_app.relay[0]
+}
+
+moved {
+  from = azurerm_container_app.web
+  to   = azurerm_container_app.web[0]
+}
+
+moved {
+  from = azurerm_role_assignment.relay_voice_live
+  to   = azurerm_role_assignment.relay_voice_live[0]
+}
+
+moved {
+  from = azurerm_role_assignment.relay_vision
+  to   = azurerm_role_assignment.relay_vision[0]
+}
+
+moved {
+  from = data.azurerm_cognitive_account.voice_live
+  to   = data.azurerm_cognitive_account.voice_live[0]
+}
+
+moved {
+  from = data.azurerm_cognitive_account.vision
+  to   = data.azurerm_cognitive_account.vision[0]
 }

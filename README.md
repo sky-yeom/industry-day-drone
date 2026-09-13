@@ -127,35 +127,61 @@ npm run dev:all  # 릴레이(mock)와 Next.js 대시보드를 한 번에 실행
 `relay/requirements.lock.txt`(고정 버전)로 관리합니다. Windows에서는
 `scripts/setup.sh` 대신 README의 수동 절차(아래 "1. 릴레이" PowerShell 예시)를 따르세요.
 
-## 배포 (Azure Container Apps)
+## Cloud deployment (retired by default)
 
-브라우저만으로 접속 가능한 공개 데모로 배포하려면:
+Localhost remains supported. The retirement scope is only `idd-web`, `idd-relay`,
+and the relay's exclusively owned role assignments in the `industry-day-drone`
+resource group. Preserve the shared Azure Speech/Voice Live/Vision accounts and
+model deployments, resource group, registry, Container Apps environment,
+Log Analytics workspace, and unrelated identities/roles.
+
+The workflow in `.github/workflows/deploy.yml` has no automatic push trigger.
+A manual run requires an explicit `deploy_cloud_apps=true` input, which defaults
+to false. It updates **existing** app images; it cannot recreate deleted apps.
+Publish workflow changes for them to take effect on GitHub. Before removing live
+apps, separately disable the currently active deployment workflow and stop its
+outstanding deployment runs; local file edits alone do not do that.
+
+Only use this command when intentionally recreating cloud hosting. Without the
+opt-in, the script exits with an error before any image build or Azure mutation:
 
 ```bash
-./scripts/deploy.sh
+DEPLOY_CLOUD_APPS=true ./scripts/deploy.sh
 ```
 
-이 스크립트는 Azure Container Registry에 두 이미지(릴레이 + 웹)를 클라우드에서
-빌드(`az acr build`, 로컬 Docker 불필요)하고, Azure Container Apps에 배포하며,
-릴레이 컨테이너의 시스템 할당 관리 ID(Managed Identity)에 기존 Voice Live /
-Vision 리소스에 대한 "Cognitive Services User" 역할을 부여합니다(API 키를 코드나
-환경변수에 저장할 필요 없음). 기본적으로 방문자가 세션 시작 전 공유 PIN을
-입력하도록 게이트를 켭니다 — 세션마다 과금되는 Voice Live/Vision 호출이 발생하기
-때문입니다. `SITE_PIN=""`으로 게이트를 끌 수 있습니다.
+The script builds both images in Azure Container Registry, provisions the apps,
+and grants the relay's managed identity access to the existing Voice Live/Vision
+resources. Local Docker is not required. It generates a shared site PIN if none
+is supplied, since visitor sessions make billed calls to those services.
 
-인프라 정의(Container Apps 환경, 두 컨테이너 앱, 역할 할당)는 `infra/*.tf`
-(Terraform)에 있습니다. 이미지를 이미 빌드/푸시했다면 직접 조정할 수도 있습니다:
+Terraform in `infra/*.tf` defaults to `deploy_cloud_apps=false`. With existing
+state, a plan can therefore propose removal of the two apps and their dedicated
+relay role assignments. Inspect the plan before applying it. Shared registry and
+environment definitions remain intact; **do not destroy the whole stack**.
+`moved` blocks preserve existing resource addresses during conditional indexing.
+Disabled apps need no image inputs and their FQDN/principal outputs are null
+(Terraform may omit null outputs). Azure authentication is still required to
+inspect/manage shared infrastructure.
+
+If images are already built and you deliberately intend to redeploy:
 
 ```bash
 cd infra
-cp terraform.tfvars.example terraform.tfvars   # 이미지 태그, site_pin 채우기
+cp terraform.tfvars.example terraform.tfvars   # Set image references and site_pin
 terraform init
-terraform plan
-terraform apply
+terraform plan -var='deploy_cloud_apps=true'
+terraform apply -var='deploy_cloud_apps=true'
 ```
 
-`infra/*.tfvars`와 `*.tfstate`는 비밀 값(ACR 관리자 암호, PIN)을 담고 있어
-gitignore 처리되어 있습니다.
+Enabled apps require nonempty `relay_image` and `web_image` values. An empty
+Terraform `site_pin` disables the access gate; use it only for intentional public
+access. Do not leave `deploy_cloud_apps=true` in tfvars or persistent environment
+settings if hosting should remain retired.
+
+`infra/*.tfvars` and `*.tfstate` are gitignored because they can contain secrets,
+including registry passwords and the site PIN. Configuration changes do not
+delete running apps by themselves; live removal and verification are separate,
+explicitly authorized operations.
 
 ## 실행
 
@@ -291,9 +317,11 @@ Korean replies that acoustic VAD detected; lowering the semantic threshold did
 not recover them. This does not establish recognition quality for a live
 microphone or a noisy venue.
 
-After the opening greeting, the microphone stays open during ordinary replies
-and confirmation questions. Participant speech interrupts queued playback without
-clearing the new input. Native responses do not wait for transcription, but state
+Voice conversation uses strict turn-taking. The microphone stays closed while
+Gibby prepares or speaks a reply, including tool continuations and the last
+queued audio samples. Wait for **지금 말해줘** before answering; speech made before
+that cue is not captured or replayed later. The same rule applies to short
+confirmations such as **응**. Native responses do not wait for transcription, but state
 changes require fresh participant input. Gibby saves a description, reads it back,
 and confirms that exact draft only after a separate affirmative reply. Corrections
 require another readback; silence never confirms or launches the mission.
@@ -304,13 +332,19 @@ offered while a description is awaiting confirmation. Departure consent is armed
 only after the browser acknowledges playback of the complete route readback.
 Speech bubbles follow the response that is actually playing, including its final
 audio transcript, rather than showing a future reply while it is still queued.
-Possible interruptions pause playback without deleting its unheard tail. Empty
-or failed transcriptions resume it; recognized participant speech discards only
-the interrupted responses and preserves any newly generated reply. Native
-response generation stays enabled. Interruption removes only the old response's
-queued playback; it never sends a provider-wide cancellation that could cut off
-a newer reply. Overlapping native turns are recovered after generation finishes.
-The X button stops the session. Tune these settings for the venue:
+Noise during an assistant reply cannot pause or discard its audio. Listening
+windows correlate captured audio and late transcripts with the current question;
+old input cannot replace an admitted answer. No provider-wide cancellation is used.
+
+The route briefing is generated while Gibby unfolds the map. Only that response
+is held until the real map screen is visible, then its audio streams immediately.
+Its caption and microphone reopening still follow actual playback. The map image
+is preloaded during the animation. Failed or oversized prefetched speech produces
+an explicit error and bounded recovery rather than silently losing its ending.
+
+Frontend and relay must both support `after-playback-v1`. A version mismatch is
+reported instead of enabling input with incompatible timing rules. Tune these
+settings only after measuring them in the venue:
 
 ```bash
 export VOICE_LIVE_VAD_TYPE="server_vad"
@@ -321,7 +355,11 @@ export VOICE_LIVE_SILENCE_MS="300"
 `VOICE_LIVE_VAD_TYPE="azure_semantic_vad_multilingual"` remains available.
 Only semantic VAD uses `VOICE_LIVE_SPEECH_DURATION_MS` (default `80`) and disables
 filler removal. `VOICE_LIVE_DIAGNOSTICS=1` enables bounded event-ID, microphone-state
-and rejection-code logs without raw audio or transcripts.
+and rejection-code logs without raw audio or transcripts. Correlated timing also
+separates final transcription, tool processing, first provider audio, browser
+buffering/rendering, and input reopening. These timestamps are not a direct
+measurement of when a listener physically hears sound; output-device timing is
+estimated separately using available Web Audio timestamps and latency values.
 
 도구는 `facts`와 `ask`를 반환하고 음성 모델은 사실을 자연스러운 한국어로
 요약합니다. 모호한 발화 때문에 경로를 임의 선택하거나 초기화하지 않습니다.

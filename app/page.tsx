@@ -218,11 +218,6 @@ export default function Home() {
     start();
   }, [reset, start]);
 
-  // Mic/voice controls are fully hidden across the pixel UI: the session
-  // still runs in the background the whole time (started the moment the
-  // player presses "Let's Go!"), only Gibby's own transcript lines surface,
-  // via his speech bubble on the prompt screen.
-
   // Display interpolation only: expiration, rescue and scoring remain relay-owned.
   const elapsedMs = state.elapsedMs + (state.clockRunning ? Math.max(0, now - snapshot.receivedAt) : 0);
   const visionReady = config?.visionReady ?? false;
@@ -235,6 +230,9 @@ export default function Home() {
       targetAlt={TARGET_APPEARANCE.referenceAlt}
       briefing={SCENARIO_BRIEFING}
       agentText={agentText}
+      voiceStatus={status}
+      error={error}
+      onRetry={retryConnection}
     />;
   }
 
@@ -243,7 +241,6 @@ export default function Home() {
       targetImage={TARGET_APPEARANCE.referenceImage}
       targetAlt={TARGET_APPEARANCE.referenceAlt}
       briefing={SCENARIO_BRIEFING}
-      onIntroReady={() => sessionRef.current?.sendRouteIntroReady()}
       onDone={() => {
         if (!returnSceneRef.current && latestStateRef.current.runId === state.runId) setStep("route");
       }}
@@ -262,6 +259,7 @@ export default function Home() {
         <button type="button" onClick={() => sessionRef.current?.sendCommand("abort_mission")} className="pixel-button bg-white px-3 py-1.5">작전 중단</button>
       </div> : <p className="mt-2">계속하려면 “다시 시도해 줘”, 중단하려면 “작전을 중단해 줘”라고 말해주세요.</p>)}
     </div>}
+    {error && status !== "error" && <p role="alert" className="pixel-panel bg-white p-2 text-sm text-[#091f2c]">{error}</p>}
     {status === "error" && <div className="pixel-panel bg-white p-3">
       <button onClick={retryConnection} className="pixel-button bg-[#ffd23f] px-4 py-2 text-sm font-semibold text-[#091f2c]">연결 다시 시도 · 새 작전</button>
       {error && <p className="mt-2 text-xs leading-5 text-[#6e6575]">{error}</p>}
@@ -272,7 +270,9 @@ export default function Home() {
     <PixelShell banners={banners} groundHidden={boarded && !returnScene} groundReturning={Boolean(returnScene?.origin)}>
       {(step === "route" || step === "results-transition") && <div className="absolute inset-0">
         <FlightPathMap state={state} boarded={boarded} elapsedMs={elapsedMs} connected={connected}
-          markerRef={markerRef} departing={Boolean(returnScene)} />
+          markerRef={markerRef} departing={Boolean(returnScene)}
+          voiceStatus={!missionLaunched ? status : undefined}
+          onMapReady={() => sessionRef.current?.sendRouteIntroReady()} onMapError={setSceneError} />
       </div>}
       {step === "results" && <div className="results-content h-full min-h-0">
         <ResultsPanel state={state} debrief={debrief} onReset={reset} visible={resultsVisible} />

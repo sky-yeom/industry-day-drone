@@ -2,7 +2,8 @@
 
 import Image from "next/image";
 import { Press_Start_2P } from "next/font/google";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { preload } from "react-dom";
 import PixelGround from "@/components/PixelGround";
 import { ANCHOR_W, LAST_FRAME, gibbyFrameStyle } from "@/lib/gibbyMapSprite";
 import type { BriefingBullet } from "@/lib/types";
@@ -25,9 +26,7 @@ const READY_DELAY_MS = 150;
  * translates or rescales here, per the "don't move him" requirement) digs
  * in his pocket and unrolls a map while the old prompt content (photo +
  * briefing) fades out and the title swaps to "비행경로". The moment he
- * reaches the last frame, `onIntroReady` fires (releases the backend-held
- * voice line, see relay/server.py's route_intro_pending gate) and shortly
- * after, `onDone` fires so the parent can swap straight into the live
+ * reaches the last frame, `onDone` fires so the parent can swap into the live
  * Route step (real map.png + info cards) — there's no separate smaller
  * map preview shown here first.
  */
@@ -35,16 +34,17 @@ export default function GibbyMapTransition({
   targetImage,
   targetAlt,
   briefing,
-  onIntroReady,
   onDone,
 }: {
   targetImage: string;
   targetAlt: string;
   briefing: BriefingBullet[];
-  onIntroReady: () => void;
   onDone: () => void;
 }) {
+  preload("/gibby/map.png", { as: "image" });
   const [frame, setFrame] = useState(0);
+  const done = useRef(onDone);
+  useEffect(() => { done.current = onDone; }, [onDone]);
   // Old photo/briefing content starts fading out as soon as Gibby actually
   // pulls the scroll out of his pocket (frame 2), instead of waiting for
   // the whole animation to finish — so the "content leaves" beat is synced
@@ -61,19 +61,10 @@ export default function GibbyMapTransition({
 
   useEffect(() => {
     if (frame !== LAST_FRAME) return;
-    // Voice release and the swap into the real Route screen now fire
-    // together off one timer — previously the route-screen swap
-    // (`onDone`) waited an extra beat after the voice was already released
-    // (`onIntroReady`), which made the agent start talking while the
-    // screen was still sitting on the empty transition frame. There
-    // should be no perceptible gap between "voice starts" and "route
-    // screen appears".
-    const id = window.setTimeout(() => {
-      onIntroReady();
-      onDone();
-    }, READY_DELAY_MS);
+    // The mounted map releases prefetched audio after its first visible paint.
+    const id = window.setTimeout(() => done.current(), READY_DELAY_MS);
     return () => window.clearTimeout(id);
-  }, [frame, onIntroReady, onDone]);
+  }, [frame]);
 
   return (
     <main className="relative flex h-dvh w-full flex-col overflow-hidden">

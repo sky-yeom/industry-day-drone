@@ -1,8 +1,10 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState, type Ref } from "react";
+import { useEffect, useRef, useState, type Ref } from "react";
 import DroneImagePanel from "@/components/DroneImagePanel";
+import VoiceTurnIndicator from "@/components/VoiceTurnIndicator";
+import type { VoiceStatus } from "@/lib/voiceClient";
 import { MONITOR_MAP, MONITORS } from "@/data/monitors";
 import { BOARDING_MIRRORED, MAP_MARKER_ENTRY, MAP_MARKER_HEIGHT, MAP_MARKER_SRC, MAP_MARKER_WIDTH } from "@/lib/gibbyDroneSprite";
 import { OUTCOME_LABELS, type DashboardState } from "@/lib/types";
@@ -52,14 +54,40 @@ export function MissionCountdownSummary({ state, elapsedMs, connected }: {
  * column swaps from the clue cards below to the drone-image panel + the
  * 3 rescue timers.
  */
-export default function FlightPathMap({ state, boarded = false, elapsedMs, connected, departing = false, markerRef }: {
+export default function FlightPathMap({ state, boarded = false, elapsedMs, connected, departing = false, markerRef,
+  voiceStatus, onMapReady, onMapError }: {
   state: DashboardState;
   boarded?: boolean;
   elapsedMs: number;
   connected: boolean;
   departing?: boolean;
   markerRef?: Ref<HTMLDivElement>;
+  voiceStatus?: VoiceStatus;
+  onMapReady?: () => void;
+  onMapError?: (message: string) => void;
 }) {
+  const [mapReady, setMapReady] = useState(false);
+  const mapCallbacks = useRef({ onMapReady, onMapError });
+  useEffect(() => { mapCallbacks.current = { onMapReady, onMapError }; }, [onMapReady, onMapError]);
+  useEffect(() => {
+    if (mapReady) return;
+    const timer = window.setTimeout(() => {
+      mapCallbacks.current.onMapError?.("지도를 불러오지 못했어. 현장 설명을 보고 진행해 줘.");
+      setMapReady(true);
+    }, 8000);
+    return () => window.clearTimeout(timer);
+  }, [mapReady]);
+  useEffect(() => {
+    if (!mapReady || departing || boarded) return;
+    let paint: number | undefined;
+    const frame = requestAnimationFrame(() => {
+      paint = requestAnimationFrame(() => mapCallbacks.current.onMapReady?.());
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      if (paint !== undefined) cancelAnimationFrame(paint);
+    };
+  }, [mapReady, departing, boarded, state.runId]);
   const route = state.confirmedRoute.length ? state.confirmedRoute : state.draftRoute;
   const isConfirmed = state.phase === "confirmed";
   const lineColor = isConfirmed ? "#0078d4" : "#8661c5";
@@ -96,6 +124,7 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
         <div className="flex flex-wrap items-baseline gap-2">
           <p className="text-[10px] font-bold tracking-[0.2em] text-[#091f2c]">실시간 경로 관제</p>
           <h2 className="text-lg font-semibold text-[#091f2c]">비행경로</h2>
+          {voiceStatus && <VoiceTurnIndicator status={voiceStatus} />}
         </div>
       </div>
       <div className="shrink-0 text-right">
@@ -107,7 +136,12 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
 
     <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,0.8fr)]">
       <div className="mission-map pixel-frame pixel-rendering relative mx-auto aspect-[3/2] w-full max-w-[820px] overflow-hidden">
-        <Image src="/gibby/map.png" alt="탐색 지역 지도" fill unoptimized className="object-contain" sizes="(max-width: 1024px) 90vw, 820px" />
+        <Image src="/gibby/map.png" alt="탐색 지역 지도" fill unoptimized loading="eager"
+          className="object-contain" sizes="(max-width: 1024px) 90vw, 820px"
+          onLoad={() => setMapReady(true)} onError={() => {
+            mapCallbacks.current.onMapError?.("지도를 불러오지 못했어. 현장 설명을 보고 진행해 줘.");
+            setMapReady(true);
+          }} />
         <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="pointer-events-none absolute inset-0 z-10 h-full w-full" aria-hidden="true">
           <defs>
             {/* userSpaceOnUse (not the default objectBoundingBox) — a

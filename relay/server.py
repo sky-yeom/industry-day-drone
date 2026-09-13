@@ -1019,7 +1019,7 @@ class Bridge:
                         log.warning("Blocked voice action %s: %s", name, rejection)
                         self.trace_voice("rejected", name=name, code=self.voice_turns.last_rejection_code,
                                          item_id=turn.item_id if turn else None)
-                        outcome = {"ok": False, "facts": rejection,
+                        outcome = {"ok": False, "facts": rejection, "silent": True,
                                    "ask": "현재 질문만 짧게 다시 묻고 참가자의 답을 기다릴 것"}
                     else:
                         effective_args = args

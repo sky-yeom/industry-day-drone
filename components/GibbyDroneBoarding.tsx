@@ -97,8 +97,8 @@ export default function GibbyDroneBoarding({ onBoarded }: {
     return (
       <div
         data-boarding-phase={phase}
-        className="absolute bottom-[16%] left-[calc(94%-145px)] z-20 flex items-end justify-center"
-        style={{ width: ANCHOR_W }}
+        className="absolute bottom-[16%] z-20 flex items-end justify-center"
+        style={{ width: ANCHOR_W, left: `min(calc(94% - 145px), calc(100% - ${ANCHOR_W}px))` }}
       >
         <div aria-hidden className="pixel-rendering shrink-0" style={gibbyFrameStyle(mapFrame)} />
       </div>

@@ -108,8 +108,8 @@ export default function GibbyMapTransition({
           prompt screen (see .gibby-travel--corner) — only the sprite frame
           changes here, no translate/scale, so he never appears to move. */}
       <div
-        className="absolute bottom-[16%] left-[calc(94%-145px)] z-20 flex items-end justify-center"
-        style={{ width: ANCHOR_W }}
+        className="absolute bottom-[16%] z-20 flex items-end justify-center"
+        style={{ width: ANCHOR_W, left: `min(calc(94% - 145px), calc(100% - ${ANCHOR_W}px))` }}
       >
         <div aria-hidden className="pixel-rendering shrink-0" style={gibbyFrameStyle(frame)} />
       </div>

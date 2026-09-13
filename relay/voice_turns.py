@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import dataclass, field
 import re
+import time
 import unicodedata
 
 
@@ -64,6 +65,10 @@ class ParticipantTurn:
     ready: asyncio.Event = field(default_factory=asyncio.Event)
     consumed: bool = False
     replied: bool = False
+    timestamps: dict = field(default_factory=dict)
+    ttfa_response_id: str | None = None
+    ttfa_reported: bool = False
+    input_failure_reported: bool = False
 
 
 class VoiceTurns:
@@ -84,6 +89,34 @@ class VoiceTurns:
         self.confirmed_route_replied = False
         self.route_readback = None
         self.route_generated = False
+        self.response_timestamps = {}
+
+    def mark_item(self, item_id, event):
+        turn = self.turns.get(item_id)
+        if turn:
+            turn.timestamps.setdefault(event, time.perf_counter())
+        return turn
+
+    def mark_response(self, response_id, event):
+        if not response_id:
+            return None
+        stamps = self.response_timestamps.setdefault(response_id, {})
+        stamps.setdefault(event, time.perf_counter())
+        if len(self.response_timestamps) > 128:
+            del self.response_timestamps[next(iter(self.response_timestamps))]
+        turn = self.responses.get(response_id)
+        if turn:
+            self.mark_item(turn.item_id, "response_" + event)
+        return turn
+
+    def first_audio_latency(self, response_id):
+        turn = self.mark_response(response_id, "first_audio")
+        if (turn is None or turn.ttfa_reported
+                or "speech_stopped" not in turn.timestamps):
+            return None
+        turn.ttfa_response_id = response_id
+        turn.ttfa_reported = True
+        return turn, int((time.perf_counter() - turn.timestamps["speech_stopped"]) * 1000)
 
     @staticmethod
     def context(session):
@@ -118,6 +151,7 @@ class VoiceTurns:
         if turn.ready.is_set():
             return
         turn.text = text.strip() if isinstance(text, str) else ""
+        self.mark_item(item_id, "transcript_completed")
         turn.ready.set()
         if turn.prompt_revision is not None and is_retry_input(turn.text):
             self.retry_prompt_revision = turn.prompt_revision
@@ -128,9 +162,10 @@ class VoiceTurns:
                 self.audible_prompt_revision = None
             turn.prompt_revision = None
 
-    def bind_response(self, response_id, item_id=None):
+    def bind_response(self, response_id, item_id=None, *, inherit=True):
         if response_id:
-            self.responses[response_id] = self.turns.get(item_id) if item_id else self.response_turn
+            self.responses[response_id] = (
+                self.turns.get(item_id) if item_id else self.response_turn if inherit else None)
             if len(self.responses) > 128:
                 del self.responses[next(iter(self.responses))]
 

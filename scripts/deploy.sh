@@ -6,12 +6,19 @@
 # assignment this script creates on the Vision resource).
 #
 # Usage:
-#   ./scripts/deploy.sh
+#   DEPLOY_CLOUD_APPS=true ./scripts/deploy.sh
+# Cloud hosting is retired. Explicit opt-in is required to recreate it.
 #
 # Override any of these via environment variables before running:
 #   RESOURCE_GROUP, LOCATION, ACR_NAME, SITE_PIN,
 #   VISION_RESOURCE_GROUP, VISION_RESOURCE_NAME, VISION_DEPLOYMENT
 set -euo pipefail
+
+if [[ "${DEPLOY_CLOUD_APPS:-false}" != "true" ]]; then
+  echo "Cloud deployment is retired and disabled. No build or Azure changes were made." >&2
+  echo "To intentionally recreate the cloud apps, run: DEPLOY_CLOUD_APPS=true ./scripts/deploy.sh" >&2
+  exit 1
+fi
 
 RESOURCE_GROUP="${RESOURCE_GROUP:-industry-day-drone}"
 LOCATION="${LOCATION:-southeastasia}"
@@ -51,6 +58,7 @@ if [ -z "$ENV_DEFAULT_DOMAIN" ]; then
   echo "==> Container Apps environment doesn't exist yet; creating it first so we know its default domain"
   terraform -chdir=infra init -input=false >/dev/null
   terraform -chdir=infra apply -input=false -auto-approve \
+    -var "deploy_cloud_apps=true" \
     -target=azurerm_container_app_environment.main \
     -var "relay_image=mcr.microsoft.com/k8se/quickstart:latest" \
     -var "web_image=mcr.microsoft.com/k8se/quickstart:latest" \
@@ -86,6 +94,7 @@ echo "==> Deploying infra via Terraform (Container Apps env, relay + web apps, r
 cd infra
 terraform init -input=false >/dev/null
 terraform apply -input=false -auto-approve \
+  -var "deploy_cloud_apps=true" \
   -var "relay_image=$ACR_LOGIN_SERVER/idd-relay:$IMAGE_TAG" \
   -var "web_image=$ACR_LOGIN_SERVER/idd-web:$IMAGE_TAG" \
   -var "site_pin=$SITE_PIN" \

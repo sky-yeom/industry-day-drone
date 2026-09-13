@@ -1,4 +1,4 @@
-"""Same September-12 UI protocol through embedded/HTTP mock and the actual relay."""
+"""Current UI protocol through embedded/HTTP mock and the actual relay."""
 import asyncio
 import base64
 from contextlib import nullcontext
@@ -33,7 +33,6 @@ from relay.tool_target import resolve_tool_target
 from relay.vision import AzureVision, ContractMockVision, MockVision, VisionError, create_providers
 
 ROOT = Path(__file__).resolve().parents[1]
-UI_REF = "a828ee0be17c14cd2444ec44d9c101b5c28f2421"
 
 
 def free_port():
@@ -203,7 +202,8 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
                     patch.object(server, "DroneClient", return_value=SimpleNamespace(readiness=lambda: None)):
                 session = SurveySession(mode=analysis, drone_control_mode=wire_mode)
                 browser = Browser()
-                bridge = server.Bridge(browser, session, (FakeCamera(), FakeVision()))
+                bridge = server.Bridge(browser, session, (FakeCamera(), FakeVision()),
+                                       strict_turn_taking=True)
                 self.assertIsInstance(bridge.runner, LiveMissionRunner)
                 self.assertEqual(bridge.runner.expected_mode, wire_mode)
                 self.assertEqual(server.build_session()["session"]["instructions"],
@@ -219,14 +219,28 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
                         "name": "confirm_prompt", "call_id": "prompt",
                         "arguments": "{}"},
                         turn=participant_turn(bridge, "응"))
-                    self.assertTrue(bridge._route_intro_pending)
-                    self.assertFalse(any(e["type"] == "response.create" for e in upstream.sent))
-                    browser.incoming.put_nowait(json.dumps({"type": "route_intro.ready"}))
+                    pending = next(e for e in browser.events if e["type"] == "route_intro.pending")
+                    responses = [e for e in upstream.sent if e["type"] == "response.create"]
+                    self.assertEqual(len(responses), 1, "prefetch starts before visual readiness")
+                    self.assertEqual(responses[0]["response"]["metadata"],
+                                     {"runId": pending["runId"], "routeIntro": pending["introId"]})
+                    self.assertEqual(responses[0]["response"]["tool_choice"], "none")
+                    output = next(e for e in upstream.sent if e["type"] == "conversation.item.create"
+                                  and e["item"]["type"] == "function_call_output")
+                    facts = json.loads(output["item"]["output"])["facts"]
+                    self.assertIn(facts, responses[0]["response"]["instructions"])
+                    self.assertLess(upstream.sent.index(output), upstream.sent.index(responses[0]))
+                    for _ in range(2):
+                        browser.incoming.put_nowait(json.dumps({
+                            "type": "route_intro.ready", "runId": pending["runId"],
+                            "introId": pending["introId"]}))
                     browser.incoming.put_nowait(None)
                     with self.assertRaises(server.WebSocketDisconnect):
                         await bridge.pump_browser()
                     self.assertFalse(bridge._route_intro_pending)
-                    self.assertTrue(any(e["type"] == "response.create" for e in upstream.sent))
+                    self.assertEqual(sum(e["type"] == "response.create" for e in upstream.sent), 1)
+                    self.assertEqual(session.phase, "briefing")
+                    self.assertEqual(session.state.draftRoute, [])
                 finally:
                     await bridge.close()
 
@@ -265,19 +279,45 @@ class LatestUIContractTests(unittest.TestCase):
             self.assertTrue(info["droneControlUseTools"])
             self.assertEqual(info["voice"], "shimmer")
 
-    def test_latest_ui_and_voice_source_match_team_commit_ignoring_checkout_newlines(self):
-        for relative in ("app/page.tsx", "lib/voiceClient.ts", "lib/types.ts",
-                         "relay/tools.py", "data/emergency-triage.json"):
-            result = subprocess.run(["git", "show", f"{UI_REF}:{relative}"], cwd=ROOT, capture_output=True, timeout=10)
-            self.assertEqual(result.returncode, 0)
-            self.assertEqual(result.stdout.replace(b"\r\n", b"\n"),
-                             (ROOT / relative).read_bytes().replace(b"\r\n", b"\n"), relative)
+    def test_current_voice_protocol_requires_explicit_listening_and_map_readiness(self):
+        frontend = (ROOT / "lib/voiceClient.ts").read_text(encoding="utf-8")
+        backend = (ROOT / "relay/server.py").read_text(encoding="utf-8")
+        for event in ("after-playback-v1", "voice.input.ready", "voice.input.open",
+                      "route_intro.pending", "route_intro.response", "route_intro.ready"):
+            self.assertIn(event, frontend)
+            self.assertIn(event, backend)
+        self.assertIn("onMapReady=", (ROOT / "app/page.tsx").read_text(encoding="utf-8"))
+        self.assertIn("VoiceTurnIndicator", (ROOT / "components/PixelPromptScreen.tsx").read_text(encoding="utf-8"))
 
-    def test_unchanged_route_intro_ready_is_supported_by_merged_relay(self):
-        frontend = (ROOT / "lib" / "voiceClient.ts").read_text(encoding="utf-8")
-        backend = (ROOT / "relay" / "server.py").read_text(encoding="utf-8")
-        self.assertIn('type: "route_intro.ready"', frontend)
-        self.assertIn('mtype == "route_intro.ready"', backend)
+class CloudRetirementTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("bash"), "Deployment script requires Bash")
+    def test_retired_script_fails_before_external_commands(self):
+        bash = shutil.which("bash")
+        for value in (None, "", "false", "TRUE", "1"):
+            with self.subTest(value=value):
+                env = {**os.environ, "PATH": ""}
+                env.pop("DEPLOY_CLOUD_APPS", None)
+                if value is not None:
+                    env["DEPLOY_CLOUD_APPS"] = value
+                result = subprocess.run([bash, str(ROOT / "scripts/deploy.sh")],
+                                        env=env, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("No build or Azure changes were made.", result.stderr)
+
+    def test_workflow_and_terraform_require_explicit_cloud_opt_in(self):
+        workflow = (ROOT / ".github/workflows/deploy.yml").read_text(encoding="utf-8")
+        variables = (ROOT / "infra/variables.tf").read_text(encoding="utf-8")
+        terraform = (ROOT / "infra/main.tf").read_text(encoding="utf-8")
+        self.assertNotRegex(workflow, r"(?m)^  push:")
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("inputs.deploy_cloud_apps == true", workflow)
+        self.assertIn("default: false", workflow)
+        self.assertRegex(variables, r'(?s)variable "deploy_cloud_apps" \{.*?default\s*=\s*false')
+        for address in ("azurerm_container_app.relay", "azurerm_container_app.web",
+                        "azurerm_role_assignment.relay_voice_live", "azurerm_role_assignment.relay_vision"):
+            escaped = address.replace(".", r"\.")
+            self.assertRegex(terraform, rf"from\s*=\s*{escaped}\s")
+            self.assertIn(f"{address}[0]", terraform)
 
 
 @unittest.skipUnless(os.name == "nt", "Windows launcher")

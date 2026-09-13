@@ -6,6 +6,7 @@ import PixelGround from "@/components/PixelGround";
 import PixelPromptScreen from "@/components/PixelPromptScreen";
 import { useTypewriter } from "@/lib/useTypewriter";
 import type { BriefingBullet } from "@/lib/types";
+import type { VoiceStatus } from "@/lib/voiceClient";
 
 // Pixel-game display font for headings/labels/buttons only; Korean copy
 // (the speech bubble) stays in the app's normal Korean-capable font since
@@ -30,7 +31,7 @@ type Phase = "idle" | "smiling" | "resetting" | "walking" | "sliding" | "exiting
 
 /**
  * Pixel-art opening screen + the choreographed handoff into the "prompt"
- * step. Pressing "Let's Go!" starts the voice session immediately (onReady)
+ * step. Pressing "Let's Go!" starts the walk-in; onReady starts voice once docked.
  * and plays idle -> smile -> idle -> walk-to-center; once Gibby reaches
  * center the ground starts scrolling and the prompt screen's content slides
  * in from the right; when it's nearly in place the ground stops and Gibby
@@ -44,12 +45,18 @@ export default function GibbyIntroSequence({
   targetAlt,
   briefing,
   agentText,
+  voiceStatus,
+  error,
+  onRetry,
 }: {
   onReady: () => void;
   targetImage: string;
   targetAlt: string;
   briefing: BriefingBullet[];
   agentText: string;
+  voiceStatus?: VoiceStatus;
+  error?: string | null;
+  onRetry?: () => void;
 }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const typed = useTypewriter(agentText);
@@ -161,6 +168,9 @@ export default function GibbyIntroSequence({
           targetImage={targetImage}
           targetAlt={targetAlt}
           briefing={briefing}
+          voiceStatus={phase === "done" ? voiceStatus : undefined}
+          error={phase === "done" ? error : null}
+          onRetry={onRetry}
         />
       </div>
     </main>

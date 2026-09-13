@@ -14,7 +14,9 @@ import type { DashboardState, DetectionMode } from "@/lib/types";
 
 const SAMPLE_RATE = 24000;
 const RESULTS_START_TIMEOUT_MS = 15000;
-const INTERRUPTION_TRANSCRIPT_TIMEOUT_MS = 5000;
+const TURN_TAKING = "after-playback-v1";
+const ROUTE_BUFFER_LIMIT = 4 * 1024 * 1024;
+class VoiceProtocolError extends Error {}
 
 const RELAY_HTTP =
   process.env.NEXT_PUBLIC_RELAY_HTTP ?? "http://127.0.0.1:8080";
@@ -23,6 +25,7 @@ const RELAY_WS = process.env.NEXT_PUBLIC_RELAY_WS ?? "ws://127.0.0.1:8080/ws";
 export type VoiceStatus =
   | "idle"
   | "connecting"
+  | "processing"
   | "listening"
   | "speaking"
   | "error";
@@ -43,11 +46,21 @@ interface AssistantSpeech {
   started: boolean;
   drainRequested: boolean;
   ordinary: boolean;
+  terminal: boolean;
+  drained: boolean;
+  receivedAt?: number;
 }
 
-interface InterruptionHold {
-  inputs: Map<string, ReturnType<typeof setTimeout> | null>;
+interface InputWindow {
+  windowId: string;
+  responseIds: string[];
+}
+
+interface RouteIntro {
+  introId: string;
+  ready: boolean;
   responseIds: Set<string>;
+  bytes: number;
 }
 
 export interface VoiceHandlers {
@@ -103,7 +116,16 @@ export class VoiceSession {
   private partialUser = "";
   private speech = new Map<string, AssistantSpeech>();
   private audibleResponseId: string | null = null;
-  private interruption: InterruptionHold | null = null;
+  private inputReady: InputWindow | null = null;
+  private inputWindowId: string | null = null;
+  private inputEpoch = 0;
+  private routeIntro: RouteIntro | null = null;
+  private routeVisible = false;
+  private diagnostics = false;
+  private metricsRemaining = 256;
+  private outputTimers = new Set<ReturnType<typeof setTimeout>>();
+  private settledResponses = new Set<string>();
+  private usedInputWindows = new Set<string>();
   private generation = 0;
   private withVoice = true;
   private debriefRunId: string | null = null;
@@ -169,8 +191,15 @@ export class VoiceSession {
     this.microphoneMuted = true;
     this.partialUser = "";
     this.speech.clear();
+    this.inputReady = null;
+    this.inputWindowId = null;
+    this.routeIntro = null;
+    this.routeVisible = false;
+    this.settledResponses.clear();
+    this.usedInputWindows.clear();
+    this.diagnostics = false;
+    this.metricsRemaining = 256;
     this.audibleResponseId = null;
-    this.clearInterruption(false);
     this.handlers.onSpeechText?.("");
     this.handlers.onStatus("connecting");
 
@@ -211,57 +240,71 @@ export class VoiceSession {
 
       this.captureNode.port.onmessage = (e) => {
         if (generation !== this.generation || this.microphoneMuted) return;
-        const { pcm, peak } = e.data as { pcm: Int16Array; peak: number };
+        const { pcm, peak, epoch, type, muted } = e.data as {
+          pcm?: Int16Array; peak: number; epoch: number; type?: string; muted?: boolean;
+        };
+        if (epoch !== this.inputEpoch || !this.inputWindowId) return;
+        if (type === "input-state") {
+          if (!muted) this.handlers.onStatus("listening");
+          return;
+        }
+        if (!pcm) return;
         this.handlers.onLevel(peak);
         if (this.ws?.readyState === WebSocket.OPEN) {
-          this.ws.send(JSON.stringify({ type: "audio", data: toBase64(pcm) }));
+          this.ws.send(JSON.stringify({ type: "audio", data: toBase64(pcm), windowId: this.inputWindowId }));
         }
       };
       this.playbackNode.port.onmessage = (e) => {
         if (generation !== this.generation) return;
-        const msg = e.data as { type: string; playing: boolean; id?: string };
+        const msg = e.data as { type: string; playing: boolean; id?: string; contextTime?: number };
         if (msg.id && this.interruptedResponses.has(msg.id)) return;
         const speech = msg.id ? this.speech.get(msg.id) : undefined;
         if (msg.type === "state") {
           if (!this.voiceStopped || this.narratingResults) {
-            this.handlers.onStatus(!this.interruption && (msg.playing || this.replyResponseId || this.narratingResults) ? "speaking" : "listening");
+            if (msg.playing) this.handlers.onStatus("speaking");
+            else if (this.microphoneMuted) this.handlers.onStatus("processing");
           }
         }
         if (msg.type === "started" && msg.id && speech) {
           speech.started = true;
           this.audibleResponseId = msg.id;
           this.publishSpeechCaption(msg.id);
+          this.handlers.onStatus("speaking");
+          this.tracePlayback("started", msg.id, speech.receivedAt === undefined ? undefined : performance.now() - speech.receivedAt);
         }
         if (msg.type === "started" && this.narratingResults && msg.id && this.resultsResponseIds.has(msg.id)) {
           this.revealResults();
         }
-        if (msg.type === "drained" && this.launchDrainRequested && msg.id === this.launchResponseId) {
-          void this.finishDeparture();
-        } else if (msg.type === "drained" && this.finalDrainRequested && msg.id === this.finalResponseId) {
-          const missingAudio = !this.resultsRevealed;
-          if (missingAudio) {
-            const message = "결과 음성이 재생되지 않았습니다. 화면의 최종 구조 결과를 확인해 주세요.";
-            this.handlers.onStatus("error", message);
-            this.handlers.onError(message);
+        if (msg.type !== "drained" || !msg.id) return;
+        this.afterOutput(msg.contextTime, () => {
+          if (this.launchDrainRequested && msg.id === this.launchResponseId) {
+            void this.finishDeparture();
+          } else if (this.finalDrainRequested && msg.id === this.finalResponseId) {
+            const missingAudio = !this.resultsRevealed;
+            if (missingAudio) {
+              const message = "결과 음성이 재생되지 않았습니다. 화면의 최종 구조 결과를 확인해 주세요.";
+              this.handlers.onStatus("error", message);
+              this.handlers.onError(message);
+            }
+            this.fallbackResults();
+            void this.closeSession(missingAudio, true);
+          } else if (speech?.ordinary && speech.drainRequested && !speech.drained) {
+            if (speech.started && speech.completed && this.ws?.readyState === WebSocket.OPEN) {
+              this.ws.send(JSON.stringify({
+                type: "voice.reply_drained", responseId: msg.id, runId: this.currentRunId,
+              }));
+            }
+            if (msg.id === this.replyResponseId) {
+              this.replyResponseId = null;
+            }
+            speech.drained = true;
           }
-          this.fallbackResults();
-          void this.closeSession(missingAudio, true);
-        } else if (msg.type === "drained" && speech?.ordinary && speech.drainRequested) {
-          if (speech.started && speech.completed && this.ws?.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({
-              type: "voice.reply_drained", responseId: msg.id, runId: this.currentRunId,
-            }));
+          if (msg.id) {
+            this.tracePlayback("drained", msg.id);
+            if (speech?.terminal) this.settleResponse(msg.id);
           }
-          if (msg.id === this.replyResponseId) {
-            this.replyResponseId = null;
-          }
-          if (!this.responseActive && !this.launchRunId && !this.debriefRunId) {
-            this.greetPending = false;
-            this.setMicrophoneMuted(false);
-            this.handlers.onStatus("listening");
-          }
-        }
-        if (msg.type === "drained" && msg.id) this.speech.delete(msg.id);
+          this.tryOpenInput();
+        });
       };
 
       source.connect(this.captureNode);
@@ -278,7 +321,7 @@ export class VoiceSession {
       this.running = true;
     } catch (err) {
       if (generation !== this.generation) return;
-      const message = withVoice
+      const message = err instanceof VoiceProtocolError ? err.message : withVoice
         ? "음성 연결을 시작하지 못했습니다. 마이크 권한과 음성 서비스 설정을 확인한 뒤 연결 다시 시도를 눌러 주세요."
         : "관제 서버에 연결하지 못했습니다. 릴레이 실행 상태를 확인하세요.";
       this.handlers.onStatus("error", message);
@@ -294,7 +337,9 @@ export class VoiceSession {
 
   private async closeSession(keepStatus = false, preserveResults = false): Promise<void> {
     this.clearResultsStartTimer();
-    this.clearInterruption(false);
+    this.closeInput();
+    for (const timer of this.outputTimers) clearTimeout(timer);
+    this.outputTimers.clear();
     this.speech.clear();
     this.audibleResponseId = null;
     this.handlers.onSpeechText?.("");
@@ -347,7 +392,8 @@ export class VoiceSession {
 
   private async finishDeparture(announce = true) {
     if (this.voiceStopped) return;
-    this.clearInterruption();
+    this.closeInput();
+    this.retireRouteIntro();
     this.voiceStopped = true;
     this.greetPending = false;
     this.responseActive = false;
@@ -425,6 +471,7 @@ export class VoiceSession {
       speech = {
         parts: new Map(), completed: false, hasAudio: false, started: false,
         drainRequested: false, ordinary: !this.launchRunId && !this.debriefRunId,
+        terminal: false, drained: false,
       };
       this.speech.set(id, speech);
       if (this.speech.size > 128) {
@@ -442,78 +489,88 @@ export class VoiceSession {
     if (speech) this.handlers.onSpeechText?.([...speech.parts.values()].join(""));
   }
 
-  private holdForInput(itemId: unknown) {
-    if (typeof itemId !== "string" || !itemId) {
-      console.warn("Voice activity event is missing its input item ID.");
-      return;
-    }
-    const pending = [...this.speech].filter(([, speech]) => speech.ordinary && (speech.hasAudio || !speech.completed));
-    if (!pending.length && !this.interruption) return;
-    this.interruption ??= { inputs: new Map(), responseIds: new Set() };
-    if (!this.interruption.inputs.has(itemId)) this.interruption.inputs.set(itemId, null);
-    for (const [id] of pending) this.interruption.responseIds.add(id);
-    // Pause immediately, but keep the unheard tail until ASR distinguishes a reply from noise.
-    this.playbackNode?.port.postMessage({ type: "pause", value: true });
+  private closeInput() {
+    this.inputReady = null;
+    this.inputWindowId = null;
+    this.setMicrophoneMuted(true);
   }
 
-  private awaitInputTranscript(itemId: unknown) {
-    if (typeof itemId !== "string" || !this.interruption?.inputs.has(itemId)) return;
-    if (this.interruption.inputs.get(itemId) !== null) return;
+  private settleResponse(id: string) {
+    this.settledResponses.add(id);
+    this.speech.delete(id);
+    if (this.replyResponseId === id) this.replyResponseId = null;
+    while (this.settledResponses.size > 128) {
+      const first = this.settledResponses.values().next().value;
+      if (first) this.settledResponses.delete(first);
+    }
+  }
+
+  private tryOpenInput() {
+    const ready = this.inputReady;
+    if (!ready || !this.withVoice || this.voiceStopped || this.launchRunId || this.debriefRunId
+        || (this.routeIntro && !this.routeIntro.ready)
+        || this.ws?.readyState !== WebSocket.OPEN) return;
+    if (ready.responseIds.some(id => !this.settledResponses.has(id))) return;
+    if ([...this.speech.values()].some(speech => speech.ordinary
+      && (!speech.terminal || (speech.hasAudio && !speech.drained)))) return;
+    this.inputReady = null;
+    this.inputWindowId = ready.windowId;
+    this.usedInputWindows.add(ready.windowId);
+    if (this.usedInputWindows.size > 128) {
+      const first = this.usedInputWindows.values().next().value;
+      if (first) this.usedInputWindows.delete(first);
+    }
+    this.greetPending = false;
+    this.responseActive = false;
+    this.handlers.onBusy(false);
+    this.ws.send(JSON.stringify({ type: "voice.input.open", runId: this.currentRunId, windowId: ready.windowId }));
+    this.setMicrophoneMuted(false);
+  }
+
+  private afterOutput(contextTime: number | undefined, callback: () => void) {
+    const context = this.audioCtx;
+    if (!context || contextTime === undefined || !Number.isFinite(contextTime)) {
+      callback();
+      return;
+    }
+    if (context.state !== "running") {
+      this.handlers.onStatus("error");
+      this.handlers.onError("오디오 재생이 멈췄어. 연결 다시 시도로 음성을 다시 시작해 줘.");
+      return;
+    }
+    const output = context.getOutputTimestamp?.();
+    const wait = output?.contextTime && output.performanceTime
+      ? output.performanceTime + (contextTime - output.contextTime) * 1000 - performance.now()
+      : (contextTime - context.currentTime + (context.baseLatency || 0) + (context.outputLatency || 0)) * 1000;
+    if (!(wait > 0)) {
+      callback();
+      return;
+    }
     const generation = this.generation;
     const timer = setTimeout(() => {
-      if (generation !== this.generation || !this.interruption?.inputs.has(itemId)) return;
-      this.handlers.onError("음성 확인이 지연되어 기비의 안내를 이어서 재생합니다. 안내 뒤에 다시 말해 주세요.");
-      this.resolveInterruption(itemId, false);
-    }, INTERRUPTION_TRANSCRIPT_TIMEOUT_MS);
-    this.interruption.inputs.set(itemId, timer);
+      this.outputTimers.delete(timer);
+      if (generation === this.generation) this.afterOutput(contextTime, callback);
+    }, Math.ceil(wait));
+    this.outputTimers.add(timer);
   }
 
-  private clearInterruption(resume = true) {
-    if (!this.interruption) return;
-    for (const timer of this.interruption.inputs.values()) {
-      if (timer !== null) clearTimeout(timer);
-    }
-    this.interruption = null;
-    if (resume) this.playbackNode?.port.postMessage({ type: "pause", value: false });
+  private tracePlayback(event: string, responseId: string, ms?: number) {
+    if (!this.diagnostics || this.metricsRemaining-- <= 0 || this.ws?.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({
+      type: "voice.playback.metrics", runId: this.currentRunId, responseId, event,
+      ...(ms === undefined ? {} : { ms: Math.round(ms) }),
+    }));
   }
 
-  private resolveInterruption(itemId: unknown, genuine: boolean) {
-    const hold = this.interruption;
-    if (typeof itemId !== "string" || !hold?.inputs.has(itemId)) return;
-    const timer = hold.inputs.get(itemId);
-    if (timer != null) clearTimeout(timer);
-    hold.inputs.delete(itemId);
-    if (!genuine) {
-      if (!hold.inputs.size) this.clearInterruption();
-      return;
-    }
-    const ids = [...hold.responseIds];
+  private retireRouteIntro() {
+    if (!this.routeIntro) return;
+    const ids = [...this.routeIntro.responseIds];
+    this.playbackNode?.port.postMessage({ type: "discard", ids });
     for (const id of ids) {
       this.interruptedResponses.add(id);
       this.speech.delete(id);
     }
-    while (this.interruptedResponses.size > 64) {
-      const oldest = this.interruptedResponses.values().next().value;
-      if (oldest) this.interruptedResponses.delete(oldest);
-    }
-    this.playbackNode?.port.postMessage({ type: "discard", ids });
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: "voice.interrupt", runId: this.currentRunId, responseIds: ids.slice(-64) }));
-    }
-    if (this.audibleResponseId && hold.responseIds.has(this.audibleResponseId)) {
-      this.audibleResponseId = null;
-      this.handlers.onSpeechText?.("");
-    }
-    if (this.replyResponseId && hold.responseIds.has(this.replyResponseId)) {
-      this.replyResponseId = null;
-    }
-    if (this.responseId && hold.responseIds.has(this.responseId)) {
-      this.responseId = null;
-      this.responseActive = false;
-      this.toolCallPending = false;
-      this.handlers.onBusy(false);
-    }
-    this.clearInterruption();
+    this.routeIntro = null;
   }
 
   sendText(text: string): boolean {
@@ -533,12 +590,19 @@ export class VoiceSession {
     return true;
   }
 
-  // Tells the relay that Gibby's map-finding animation has reached its last
-  // frame, releasing the agent's held "which site first?" question so its
-  // voice line starts in sync with the visual.
+  // Called after the actual route screen is visible, not just its preceding animation.
   sendRouteIntroReady(): boolean {
-    if (this.ws?.readyState !== WebSocket.OPEN) return false;
-    this.ws.send(JSON.stringify({ type: "route_intro.ready" }));
+    this.routeVisible = true;
+    if (this.ws?.readyState !== WebSocket.OPEN || !this.routeIntro) return false;
+    if (this.routeIntro.ready) return true;
+    this.routeIntro.ready = true;
+    this.ws.send(JSON.stringify({ type: "route_intro.ready", runId: this.currentRunId, introId: this.routeIntro.introId }));
+    for (const id of this.routeIntro.responseIds) {
+      this.tracePlayback("route_ready", id);
+      this.playbackNode?.port.postMessage({ type: "release", id });
+    }
+    this.routeIntro.bytes = 0;
+    this.tryOpenInput();
     return true;
   }
 
@@ -547,6 +611,7 @@ export class VoiceSession {
       this.rejectConnect = reject;
       const url = new URL(RELAY_WS);
       url.searchParams.set("voice", this.withVoice ? "1" : "0");
+      if (this.withVoice) url.searchParams.set("turnTaking", TURN_TAKING);
       const ws = new WebSocket(url);
       this.ws = ws;
 
@@ -567,9 +632,14 @@ export class VoiceSession {
         if (generation !== this.generation) return;
         const msg = JSON.parse(e.data as string);
         if (msg.type === "relay.ready") {
+          if (this.withVoice && msg.turnTaking !== TURN_TAKING) {
+            reject(new VoiceProtocolError("음성 서버와 화면의 버전이 달라. 서버를 업데이트하고 새로고침해 줘."));
+            return;
+          }
+          this.diagnostics = msg.diagnostics === true;
           this.rejectConnect = null;
           this.handlers.onConnection?.(true);
-          this.handlers.onStatus("listening");
+          this.handlers.onStatus(this.withVoice ? "processing" : "listening");
           if (this.withVoice) ws.send(JSON.stringify({ type: "greet" }));
           resolve();
           return;
@@ -594,12 +664,68 @@ export class VoiceSession {
     if (typeof msg.response_id === "string" && this.interruptedResponses.has(msg.response_id)) return;
 
     switch (type) {
+      case "voice.input.ready": {
+        if (msg.runId !== this.currentRunId || typeof msg.windowId !== "string"
+            || this.usedInputWindows.has(msg.windowId)) return;
+        if (!Array.isArray(msg.responseIds) || msg.responseIds.length > 128
+            || !msg.responseIds.every(id => typeof id === "string" && id)) {
+          console.warn("Invalid voice input readiness response IDs.");
+          return;
+        }
+        this.inputReady = { windowId: msg.windowId, responseIds: msg.responseIds };
+        this.tryOpenInput();
+        return;
+      }
+      case "voice.input.closed": {
+        if (msg.runId === this.currentRunId
+            && (msg.windowId === this.inputWindowId || msg.windowId === this.inputReady?.windowId)) {
+          this.closeInput();
+          this.handlers.onStatus("processing");
+        }
+        return;
+      }
+      case "voice.input.failed": {
+        if (msg.runId !== this.currentRunId) return;
+        this.handlers.onError(typeof msg.message === "string" && msg.message
+          ? msg.message : "말을 알아듣지 못했어. 지금 말해줘 표시가 나오면 다시 말해 줘.");
+        return;
+      }
+      case "route_intro.pending": {
+        if (msg.runId !== this.currentRunId || typeof msg.introId !== "string"
+            || msg.introId === this.routeIntro?.introId) return;
+        this.closeInput();
+        this.retireRouteIntro();
+        this.routeIntro = { introId: msg.introId, ready: false, responseIds: new Set(), bytes: 0 };
+        if (this.routeVisible) this.sendRouteIntroReady();
+        return;
+      }
+      case "route_intro.response": {
+        const intro = this.routeIntro;
+        if (!intro || msg.runId !== this.currentRunId || msg.introId !== intro.introId
+            || typeof msg.responseId !== "string") return;
+        intro.responseIds.add(msg.responseId);
+        if (!intro.ready) this.playbackNode?.port.postMessage({ type: "hold", id: msg.responseId });
+        return;
+      }
+      case "route_intro.failed": {
+        const intro = this.routeIntro;
+        if (!intro || msg.runId !== this.currentRunId || msg.introId !== intro.introId) return;
+        this.handlers.onError(String(msg.message ?? "현장 안내를 준비하지 못했어. 다시 시도할게."));
+        if (typeof msg.responseId === "string") {
+          this.playbackNode?.port.postMessage({ type: "discard", ids: [msg.responseId] });
+          this.interruptedResponses.add(msg.responseId);
+          this.settleResponse(msg.responseId);
+        }
+        intro.bytes = 0;
+        this.tryOpenInput();
+        return;
+      }
       case "mission.launch": {
         if (String(msg.runId) !== this.currentRunId) return;
         this.launchRunId = this.currentRunId;
         this.greetPending = false;
-        this.clearInterruption();
-        this.setMicrophoneMuted(true);
+        this.closeInput();
+        this.retireRouteIntro();
         return;
       }
       case "mission.launch.response": {
@@ -625,7 +751,8 @@ export class VoiceSession {
         this.missionEnded = true;
         this.debriefRunId = this.currentRunId;
         this.handlers.onDebrief(String(msg.text ?? ""));
-        this.setMicrophoneMuted(true);
+        this.closeInput();
+        this.retireRouteIntro();
         if (!this.launchRunId) {
           this.playbackNode?.port.postMessage({ type: "flush" });
           void this.finishDeparture(false);
@@ -680,7 +807,8 @@ export class VoiceSession {
         if (response?.id && !this.launchRunId && !this.debriefRunId) {
           this.replyResponseId = response.id;
         }
-        this.setMicrophoneMuted(this.greetPending || this.launchRunId !== null || this.debriefRunId !== null);
+        this.closeInput();
+        this.handlers.onStatus("processing");
         this.responseId = response?.id ?? null;
         if (this.responseId) this.speechFor(this.responseId);
         this.responseActive = true;
@@ -702,26 +830,49 @@ export class VoiceSession {
           : this.narratingResults ? this.finalResponseId : this.responseId ?? this.launchResponseId;
         if (this.voiceStopped && (!this.narratingResults || !id || id !== this.finalResponseId)) return;
         if (delta && this.playbackNode) {
-          if (id) this.speechFor(id).hasAudio = true;
-          this.playbackNode.port.postMessage({ type: "push", pcm: fromBase64(delta), id });
+          const pcm = fromBase64(delta);
+          if (id && this.routeIntro?.responseIds.has(id) && !this.routeIntro.ready) {
+            this.routeIntro.bytes += pcm.byteLength;
+            if (this.routeIntro.bytes > ROUTE_BUFFER_LIMIT) {
+              this.playbackNode.port.postMessage({ type: "discard", ids: [id] });
+              this.interruptedResponses.add(id);
+              this.settleResponse(id);
+              this.routeIntro.bytes = 0;
+              this.handlers.onError("현장 음성 안내가 너무 길어. 지도가 나타나면 다시 준비할게.");
+              this.ws?.send(JSON.stringify({
+                type: "route_intro.retry", runId: this.currentRunId,
+                introId: this.routeIntro.introId, responseId: id, reason: "buffer_limit",
+              }));
+              return;
+            }
+          }
+          if (id) {
+            const speech = this.speechFor(id);
+            speech.hasAudio = true;
+            if (this.diagnostics && speech.receivedAt === undefined) {
+              speech.receivedAt = performance.now();
+              this.tracePlayback("received", id);
+            }
+          }
+          this.playbackNode.port.postMessage({ type: "push", pcm, id });
         }
         return;
       }
 
       case "input_audio_buffer.speech_started": {
         if (this.microphoneMuted || this.debriefRunId !== null || this.launchRunId !== null) return;
-        this.holdForInput(msg.item_id);
         this.handlers.onStatus("listening");
-        // Whisper's transcript lands about a second later, but the agent starts
-        // answering in ~460ms. Reserve the user's bubble now or the reply is
-        // rendered above the question that prompted it.
+        // Native audio can precede transcription; reserve the participant's
+        // transcript entry before the next assistant reply arrives.
         this.partialUser = "";
         this.handlers.onTranscript("user", "…", false);
         return;
       }
 
       case "input_audio_buffer.speech_stopped": {
-        this.awaitInputTranscript(msg.item_id);
+        if (this.microphoneMuted) return;
+        this.closeInput();
+        this.handlers.onStatus("processing");
         return;
       }
 
@@ -736,7 +887,6 @@ export class VoiceSession {
         // 잡음에서 지어낸 말은 화면에 남기지 않는다. 빈 문자열로 넘기면
         // 미리 잡아둔 자리표시자가 지워진다.
         const clean = looksHallucinated(final) ? "" : final;
-        this.resolveInterruption(msg.item_id, Boolean(clean));
         this.handlers.onTranscript("user", clean, true);
         this.partialUser = "";
         return;
@@ -744,7 +894,6 @@ export class VoiceSession {
       case "conversation.item.input_audio_transcription.failed": {
         // 전사가 실패하면 completed가 오지 않는다. 그대로 두면 "…" 자리표시자가
         // 남고, 다음 발화가 그 낡은 말풍선에 덮어써진다.
-        this.resolveInterruption(msg.item_id, false);
         this.handlers.onTranscript("user", "", true);
         this.partialUser = "";
         return;
@@ -774,9 +923,11 @@ export class VoiceSession {
         if (response?.id && this.interruptedResponses.has(response.id)) return;
         const speech = response?.id ? this.speechFor(response.id) : undefined;
         if (speech) {
+          speech.terminal = true;
           speech.completed = response?.status === "completed";
-          if (speech.completed && speech.ordinary && speech.hasAudio) this.drainReply(response?.id);
+          if (speech.ordinary && speech.hasAudio) this.drainReply(response?.id);
           if (response?.id) this.publishSpeechCaption(response.id);
+          if (response?.id && (!speech.hasAudio || speech.drained)) this.settleResponse(response.id);
         }
         if (this.launchResponseId && response?.id === this.launchResponseId && response.status === "completed") {
           this.drainDeparture();
@@ -802,6 +953,7 @@ export class VoiceSession {
             this.drainReply();
           }
         }
+        this.tryOpenInput();
         return;
       }
 
@@ -849,11 +1001,15 @@ export class VoiceSession {
         // 응답이 실패하면 response.done이 오지 않으므로 입력창을 직접 푼다.
         this.responseActive = false;
         this.toolCallPending = false;
+        if (this.responseId) {
+          const speech = this.speech.get(this.responseId);
+          if (speech) {
+            speech.terminal = true;
+            if (!speech.hasAudio) this.settleResponse(this.responseId);
+          }
+        }
         if (this.replyResponseId && !this.debriefRunId && !this.launchRunId) {
           this.drainReply();
-        } else if (this.greetPending && this.debriefRunId === null && this.launchRunId === null) {
-          this.greetPending = false;
-          this.setMicrophoneMuted(false);
         }
         this.handlers.onBusy(false);
         this.handlers.onError("음성 응답에 오류가 발생했습니다. 화면 조작은 계속 사용할 수 있습니다.");
@@ -867,9 +1023,10 @@ export class VoiceSession {
         // 있다. 여기서 status를 "error"로 바꾸면 마이크가 계속 열려 있는데도
         // 화면은 "세션 시작"으로 돌아가 세션이 끝난 것처럼 보인다.
         this.handlers.onStatus(
-          this.replyResponseId ? "speaking" : "listening",
+          this.microphoneMuted ? "processing" : "listening",
           err?.message ?? "알 수 없는 오류가 났습니다.",
         );
+        this.tryOpenInput();
         return;
       }
     }
@@ -878,7 +1035,8 @@ export class VoiceSession {
   private setMicrophoneMuted(muted: boolean) {
     const changed = this.microphoneMuted !== muted;
     this.microphoneMuted = muted;
-    this.captureNode?.port.postMessage({ type: "mute", value: muted });
+    if (changed) this.inputEpoch++;
+    this.captureNode?.port.postMessage({ type: "mute", value: muted, epoch: this.inputEpoch });
     if (changed && this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: "voice.input_state", muted }));
     }
@@ -887,8 +1045,8 @@ export class VoiceSession {
 
   private drainReply(id: string | null = this.replyResponseId) {
     if (!id) return;
-    const speech = this.speechFor(id);
-    if (speech.drainRequested) return;
+    const speech = this.speech.get(id);
+    if (!speech?.hasAudio || speech.drainRequested) return;
     speech.drainRequested = true;
     // Generation can finish seconds before the last queued sentence is audible.
     this.playbackNode?.port.postMessage({ type: "drain", id });

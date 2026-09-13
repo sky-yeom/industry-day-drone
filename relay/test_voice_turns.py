@@ -8,7 +8,7 @@ from relay.survey import SurveySession
 from relay.test_mission_runner import FakeCamera, FakeVision
 from relay.test_server import Browser, Upstream, participant_turn, spoken_reply
 from relay.test_survey import PROMPT_ARGS, SEARCH_PROMPT, ready
-from relay.voice_turns import names_stop
+from relay.voice_turns import VoiceTurns, names_stop
 
 
 class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
@@ -59,7 +59,7 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
                        if event["type"] == "session.update" and "tools" in event["session"])
         self.assertEqual({tool["name"] for tool in context["tools"]},
                          {"get_state", "select_stop", "clear_route", "confirm_route"})
-        self.assertTrue(self.bridge._route_intro_pending)
+        self.assertIsNotNone(self.bridge._route_intro_id)
         self.assertEqual(self.session.data["userPromptText"], SEARCH_PROMPT)
 
     async def test_agreement_without_description_or_before_readback_is_rejected(self):
@@ -205,7 +205,9 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.gather(*self.bridge._tool_tasks)
                 self.assertEqual(self.session.data["userPromptText"], SEARCH_PROMPT)
                 self.assertIsNone(self.session.pending_prompt)
-                self.bridge.browser.incoming.put_nowait(json.dumps({"type": "route_intro.ready"}))
+                self.bridge.browser.incoming.put_nowait(json.dumps({
+                    "type": "route_intro.ready", "runId": self.session.run_id,
+                    "introId": self.bridge._route_intro_id}))
                 self.bridge.browser.incoming.put_nowait(None)
                 with self.assertRaises(server.WebSocketDisconnect):
                     await self.bridge.pump_browser()
@@ -425,6 +427,36 @@ class StopInterpretationTests(unittest.TestCase):
                      "바다 아니면 잔해", "바다 먼저 잔해 다음", "1번과 2번"):
             for monitor in ("monitor-1", "monitor-2", "monitor-3"):
                 self.assertFalse(names_stop(text, monitor), text)
+
+
+class VoiceTimingTests(unittest.TestCase):
+    def test_first_matching_audio_after_tool_only_response_is_measured_once(self):
+        turns = VoiceTurns()
+        session = SurveySession()
+        turns.stop("participant", session)
+        turns.mark_item("participant", "speech_stopped")
+        turns.bind_response("tool")
+        turns.mark_response("tool", "created")
+        turns.mark_response("tool", "done")
+        turns.bind_response("followup")
+        turns.mark_response("followup", "created")
+        turn, ms = turns.first_audio_latency("followup")
+        self.assertEqual(turn.item_id, "participant")
+        self.assertEqual(turn.ttfa_response_id, "followup")
+        self.assertGreaterEqual(ms, 0)
+        self.assertIsNone(turns.first_audio_latency("followup"))
+        self.assertIsNone(turns.first_audio_latency("unmapped"))
+
+    def test_response_timestamps_are_bounded_and_first_receipt_is_preserved(self):
+        turns = VoiceTurns()
+        turns.mark_response("first", "created")
+        first = turns.response_timestamps["first"]["created"]
+        turns.mark_response("first", "created")
+        self.assertEqual(turns.response_timestamps["first"]["created"], first)
+        for index in range(130):
+            turns.mark_response(str(index), "created")
+        self.assertEqual(len(turns.response_timestamps), 128)
+        self.assertNotIn("first", turns.response_timestamps)
 
 
 if __name__ == "__main__":

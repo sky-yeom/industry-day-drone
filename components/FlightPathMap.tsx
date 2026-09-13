@@ -122,7 +122,7 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
     <div className="mission-workspace-heading flex shrink-0 items-center justify-between gap-3 px-1">
       <div>
         <div className="flex flex-wrap items-baseline gap-2">
-          <p className="text-[10px] font-bold tracking-[0.2em] text-[#091f2c]">실시간 경로 관제</p>
+          <p className="text-[0.625rem] font-bold tracking-[0.2em] text-[#091f2c]">실시간 경로 관제</p>
           <h2 className="text-lg font-semibold text-[#091f2c]">비행경로</h2>
           {voiceStatus && <VoiceTurnIndicator status={voiceStatus} />}
         </div>
@@ -135,7 +135,7 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
     </div>
 
     <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,0.8fr)]">
-      <div className="mission-map pixel-frame pixel-rendering relative mx-auto aspect-[3/2] w-full max-w-[820px] overflow-hidden">
+      <div className="mission-map pixel-frame pixel-rendering relative mx-auto aspect-[3/2] w-full max-w-[51.25rem] overflow-hidden">
         <Image src="/gibby/map.png" alt="탐색 지역 지도" fill unoptimized loading="eager"
           className="object-contain" sizes="(max-width: 1024px) 90vw, 820px"
           onLoad={() => setMapReady(true)} onError={() => {
@@ -174,7 +174,7 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
             style={{ left: `${monitor.x}%`, top: `${monitor.y}%` }}>
             <div className="relative">
               <Image src="/gibby/location-pin.png" alt={`${monitor.label} 위치`} width={40} height={40} unoptimized className="pixel-rendering h-10 w-10 drop-shadow-[2px_2px_0_#091f2c]" />
-              {picked && <span className={`absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white ${isConfirmed ? "bg-[#0078d4]" : "bg-[#8661c5]"}`}>{order + 1}</span>}
+              {picked && <span className={`absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full text-[0.625rem] font-bold text-white ${isConfirmed ? "bg-[#0078d4]" : "bg-[#8661c5]"}`}>{order + 1}</span>}
             </div>
           </div>;
         })}
@@ -209,12 +209,12 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
           return <article key={monitor.id}
             className={`pixel-panel shrink-0 p-3 ${order >= 0 ? isConfirmed ? "bg-[#eaf3fb]" : "bg-[#f0ebf7]" : "bg-white"}`}>
             <h3 className="text-xs font-semibold text-[#091f2c]">{monitor.label} <span className="font-normal text-[#091f2c]">{order >= 0 ? `· ${order + 1}번째 방문` : ""}</span></h3>
-            <p className="mt-1 text-[11px] leading-snug text-[#091f2c]">{person?.clue}</p>
+            <p className="mt-1 text-[0.6875rem] leading-snug text-[#091f2c]">{person?.clue}</p>
           </article>;
         })}
       </div>
     </div>
 
-    {state.promptPhase === "confirmed" && state.missionPhase === "briefing" && <p className="mission-workspace-heading shrink-0 text-[11px] leading-4 text-[#091f2c] [text-shadow:1px_1px_0_#fff]">첫 두 방문지를 음성으로 선택하세요. 출발에 동의하면 자동 비행을 시작합니다.</p>}
+    {state.promptPhase === "confirmed" && state.missionPhase === "briefing" && <p className="mission-workspace-heading shrink-0 text-[0.6875rem] leading-4 text-[#091f2c] [text-shadow:1px_1px_0_#fff]">첫 두 방문지를 음성으로 선택하세요. 출발에 동의하면 자동 비행을 시작합니다.</p>}
   </section>;
 }

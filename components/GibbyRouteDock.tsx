@@ -15,14 +15,21 @@ export default function GibbyRouteDock({ agentText }: { agentText: string }) {
   return (
     <>
       <div
-        className="absolute bottom-[16%] left-[calc(94%-145px)] z-20 flex items-end justify-center"
-        style={{ width: ANCHOR_W }}
+        className="absolute bottom-[16%] z-20 flex items-end justify-center"
+        style={{
+          width: ANCHOR_W,
+          left: `min(calc(94% - (145px * var(--ui-scale))), calc(100% - ${ANCHOR_W}px))`,
+        }}
       >
-        <div aria-hidden className="pixel-rendering shrink-0" style={gibbyFrameStyle(LAST_FRAME)} />
+        <div
+          aria-hidden
+          className="pixel-rendering shrink-0"
+          style={{ ...gibbyFrameStyle(LAST_FRAME), transform: "scale(var(--ui-scale))", transformOrigin: "bottom center" }}
+        />
       </div>
       {typed && (
-        <div className="absolute bottom-[min(calc(16%+196px),200px)] z-20 right-[calc(6%+161px)]">
-          <div className="pixel-bubble pixel-bubble--right relative max-w-[260px] px-4 py-3 text-sm leading-6 text-[#091f2c] sm:max-w-xs">
+        <div className="absolute bottom-[calc(16%+(196px*var(--ui-scale)))] z-20 right-[calc(6%+(161px*var(--ui-scale)))]">
+          <div className="pixel-bubble pixel-bubble--right relative max-w-[16.25rem] px-4 py-3 text-sm leading-6 text-[#091f2c] sm:max-w-xs">
             {typed}
           </div>
         </div>

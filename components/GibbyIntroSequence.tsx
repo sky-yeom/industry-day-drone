@@ -126,6 +126,7 @@ export default function GibbyIntroSequence({
             alt=""
             aria-hidden
             className="pixel-rendering h-[214px] w-auto"
+            style={{ transform: "scale(var(--ui-scale))", transformOrigin: "bottom center" }}
           />
         )}
       </div>
@@ -135,8 +136,8 @@ export default function GibbyIntroSequence({
           typewriter text grows the bubble only widens leftward — it never
           nudges Gibby's own fixed resting position. */}
       {phase === "done" && typed && (
-        <div className="absolute bottom-[calc(16%+146px)] z-20 right-[calc(6%+161px)]">
-          <div className="pixel-bubble pixel-bubble--right relative max-w-[260px] px-4 py-3 text-sm leading-6 text-[#091f2c] sm:max-w-xs">
+        <div className="absolute bottom-[calc(16%+(146px*var(--ui-scale)))] z-20 right-[calc(6%+(161px*var(--ui-scale)))]">
+          <div className="pixel-bubble pixel-bubble--right relative max-w-[16.25rem] px-4 py-3 text-sm leading-6 text-[#091f2c] sm:max-w-xs">
             {typed}
           </div>
         </div>
@@ -145,7 +146,7 @@ export default function GibbyIntroSequence({
       {showIdleCard && (
         <div className="relative z-10 flex flex-1 items-center justify-center p-5">
           <div className="pixel-bubble pixel-bubble--gibby relative w-full max-w-3xl px-8 pb-20 pt-10 sm:px-14 sm:pb-24 sm:pt-12">
-            <div className="ml-[20px]">
+            <div className="ml-[1.25rem]">
               <h2 className={`${pixelFont.className} pixel-title text-2xl text-[#463668] sm:text-3xl`}>{GIBBY_TITLE}</h2>
               <p className="mt-5 whitespace-pre-line text-xl leading-8 text-[#091f2c] sm:text-2xl sm:leading-9">{GIBBY_LINE}</p>
             </div>

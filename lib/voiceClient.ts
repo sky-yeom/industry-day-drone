@@ -965,7 +965,7 @@ export class VoiceSession {
         return;
       }
       case "tool.finished": {
-        const result = msg.result as { ok?: boolean; facts?: string; error?: string } | undefined;
+        const result = msg.result as { ok?: boolean; facts?: string; error?: string; silent?: boolean } | undefined;
         this.handlers.onTool({
           id: String(msg.id ?? msg.requestId ?? msg.call_id),
           name: String(msg.name),
@@ -973,7 +973,7 @@ export class VoiceSession {
           facts: result?.facts,
           ms: msg.ms as number | undefined,
         });
-        if (result?.ok === false) {
+        if (result?.ok === false && !result.silent) {
           this.handlers.onError(result.facts ?? result.error ?? "요청을 처리하지 못했습니다.");
         }
         return;

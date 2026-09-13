@@ -48,10 +48,10 @@ export default function PixelPromptScreen({
           className="pixel-button ml-3 bg-white px-2 py-1 text-xs">연결 다시 시도</button>}
       </div>}
 
-      <div className="grid min-h-0 max-w-[860px] flex-1 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] sm:items-center">
+      <div className="grid min-h-0 max-w-[53.75rem] flex-1 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] sm:items-center">
         <div className="flex min-h-0 flex-col items-center justify-center gap-4 py-2">
           <div className="pixel-panel pixel-rendering relative mt-6 w-full max-w-48">
-            <span className={`${pixelFont.className} pixel-frame-header--danger text-[10px]`}>구조 필요</span>
+            <span className={`${pixelFont.className} pixel-frame-header--danger text-[0.625rem]`}>구조 필요</span>
             <Image src={targetImage} alt={targetAlt} width={1536} height={1536} sizes="184px" className="block h-auto w-full" />
           </div>
         </div>

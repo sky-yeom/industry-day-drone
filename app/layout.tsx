@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import UIScale from "@/components/UIScale";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -9,7 +10,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="ko" className="h-full antialiased">
-      <body className="h-full flex flex-col">{children}</body>
+      <body className="h-full flex flex-col">
+        <UIScale />
+        {children}
+      </body>
     </html>
   );
 }

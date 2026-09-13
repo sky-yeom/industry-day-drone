@@ -117,7 +117,13 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
   }, [boarded]);
   const markerPos = markerArrived && droneMarkerMonitor ? droneMarkerMonitor : MAP_MARKER_ENTRY;
 
-  return <section className={`mission-workspace flex h-full min-h-0 w-full flex-col gap-3 p-3 sm:p-4 ${departing ? "mission-workspace--exiting" : ""}`}
+  return <section
+    // pr reserves room for Gibby's docked speech bubble (bottom-right,
+    // right:6%+161px, up to sm:max-w-xs=320px wide, both scaled by
+    // --ui-scale — see GibbyRouteDock.tsx), so the clue-card/drone-image
+    // column never grows underneath it the way an unconstrained grid
+    // column otherwise would on wider desktop viewports.
+    className={`mission-workspace flex h-full min-h-0 w-full flex-col gap-3 py-3 pl-3 pr-[calc(6%+600px*var(--ui-scale))] sm:py-4 sm:pl-4 ${departing ? "mission-workspace--exiting" : ""}`}
     inert={departing} aria-hidden={departing || undefined}>
     <div className="mission-workspace-heading flex shrink-0 items-center justify-between gap-3 px-1">
       <div>

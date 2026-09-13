@@ -94,7 +94,7 @@ export default function ResultsPanel({ state, debrief, onReset, visible = true }
   return <section ref={panelRef} className={`flex h-full min-h-0 w-full flex-col gap-2 p-2 ${compactSummary ? "" : "sm:p-3"}`}>
     <div className="flex shrink-0 items-center justify-between gap-3">
       <div className="flex items-baseline gap-2">
-      <p className="text-[10px] font-bold tracking-[0.2em] text-[#091f2c]">작전 최종 설명</p>
+      <p className="text-[0.625rem] font-bold tracking-[0.2em] text-[#091f2c]">작전 최종 설명</p>
       <h2 className="text-lg font-semibold text-[#091f2c]">결과</h2>
       </div>
       {terminal && <button type="button" onClick={onReset}
@@ -111,14 +111,14 @@ export default function ResultsPanel({ state, debrief, onReset, visible = true }
         className={`flex h-full min-h-0 flex-col gap-2 ${insufficientSpace ? "invisible overflow-hidden" : ""}`}>
       <div className="flex shrink-0 flex-col gap-2">
       <div className={`pixel-panel flex w-full shrink-0 flex-col items-center bg-[#ffd23f] text-center ${compactSummary ? "px-2 py-1" : "px-3 py-2"}`}>
-        <p className="text-[10px] font-bold leading-3 tracking-[0.2em] text-[#091f2c]">{state.missionPhase === "aborted" ? "작전 중단" : "구조 작전 종료"}</p>
+        <p className="text-[0.625rem] font-bold leading-3 tracking-[0.2em] text-[#091f2c]">{state.missionPhase === "aborted" ? "작전 중단" : "구조 작전 종료"}</p>
         <p className={`${compactSummary ? "text-lg leading-6" : "text-xl"} font-bold text-[#091f2c]`}>{score ? `${score.total}명 중 ${score.rescuedCount}명 구조` : "결과 확인 중"}</p>
       </div>
       <div className="grid shrink-0 grid-cols-3 items-start gap-2">
         {state.people.map((person) => <article key={person.id} className={`pixel-panel min-w-0 [overflow-wrap:anywhere] ${compactSummary ? "p-1" : "p-1.5"}`}>
           <div className={compactSummary ? "flex flex-wrap items-baseline gap-x-2" : undefined}>
           <h3 className="text-xs font-semibold text-[#091f2c]">{MONITOR_MAP[person.monitorId].label}</h3>
-          <p className={`${compactSummary ? "" : "mt-1"} text-[11px] text-[#091f2c]`}>{person.label}</p>
+          <p className={`${compactSummary ? "" : "mt-1"} text-[0.6875rem] text-[#091f2c]`}>{person.label}</p>
           </div>
           <p className={`${compactSummary ? "mt-0.5" : "mt-1"} text-xs font-semibold text-[#091f2c]`}>{person.outcome ? OUTCOME_LABELS[person.outcome] : "미해결 · 작전 중단"}</p>
         </article>)}

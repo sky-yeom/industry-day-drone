@@ -98,20 +98,31 @@ export default function GibbyDroneBoarding({ onBoarded }: {
       <div
         data-boarding-phase={phase}
         className="absolute bottom-[16%] z-20 flex items-end justify-center"
-        style={{ width: ANCHOR_W, left: `min(calc(94% - 145px), calc(100% - ${ANCHOR_W}px))` }}
+        style={{
+          width: ANCHOR_W,
+          left: `min(calc(94% - (145px * var(--ui-scale))), calc(100% - ${ANCHOR_W}px))`,
+        }}
       >
-        <div aria-hidden className="pixel-rendering shrink-0" style={gibbyFrameStyle(mapFrame)} />
+        <div
+          aria-hidden
+          className="pixel-rendering shrink-0"
+          style={{ ...gibbyFrameStyle(mapFrame), transform: "scale(var(--ui-scale))", transformOrigin: "bottom center" }}
+        />
       </div>
     );
   }
 
   const sprite = BOARDING_FRAMES[frame];
-  const mirrorStyle = BOARDING_MIRRORED ? { transform: "scaleX(-1)" } : undefined;
+  const spriteTransform = `${BOARDING_MIRRORED ? "scaleX(-1) " : ""}scale(var(--ui-scale))`;
 
   return (
     <div data-boarding-phase={phase}
-      className="absolute bottom-[16%] left-[min(calc(94%-145px),calc(100%-300px))] z-20 flex w-[300px] items-end justify-center">
-      <div className="pixel-rendering" style={{ width: sprite.width, height: sprite.height, ...mirrorStyle }}>
+      className="absolute bottom-[16%] z-20 flex w-[300px] items-end justify-center"
+      style={{ left: `min(calc(94% - (145px * var(--ui-scale))), calc(100% - (300px * var(--ui-scale))))` }}>
+      <div
+        className="pixel-rendering"
+        style={{ width: sprite.width, height: sprite.height, transform: spriteTransform, transformOrigin: "bottom center" }}
+      >
         <Image src={sprite.src} alt="" width={sprite.width} height={sprite.height} unoptimized loading="eager"
           className="pixel-rendering h-full w-full object-contain" />
       </div>

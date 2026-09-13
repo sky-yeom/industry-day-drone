@@ -7,6 +7,16 @@
 
 html {
   background: #f4f3f5;
+  /* Overwritten immediately on mount by <UIScale/>; this fallback only
+     matters for the flash before hydration/JS runs. */
+  --ui-scale: 1;
+  /* Tailwind's spacing/text/rounded/etc. utilities are all rem-based, so
+     scaling the root font-size scales every one of them (padding, gaps,
+     font sizes, max-widths written in rem) together in one place, instead
+     of hand-patching each component. Raw pixel-art asset sizes (Gibby's
+     sprites, ground height, his dock offsets) are unaffected since they're
+     plain px values scaled separately via calc(...*var(--ui-scale)). */
+  font-size: calc(16px * var(--ui-scale));
 }
 
 body {
@@ -152,12 +162,14 @@ input {
 }
 
 .gibby-travel--corner {
-  left: calc(94% - 145px);
+  left: calc(94% - (145px * var(--ui-scale)));
 }
 
 /* Gibby walk-cycle: steps() through the 6-frame strip (public/gibby/walk-strip.png,
    852x214 native, 142x214 per frame) via background-position, independent of the
-   translateX travel animation applied to the parent stage element. */
+   translateX travel animation applied to the parent stage element. Scaled visually
+   via transform (not by resizing the background) so the native pixel-art background
+   math/keyframes stay untouched while the rendered size still tracks --ui-scale. */
 @keyframes gibby-walk-cycle {
   from { background-position-x: 0; }
   to { background-position-x: -852px; }
@@ -170,38 +182,42 @@ input {
   background-repeat: no-repeat;
   background-size: 852px 214px;
   animation: gibby-walk-cycle 0.66s steps(6) infinite;
+  transform: scale(var(--ui-scale));
+  transform-origin: bottom center;
 }
 
 /* Pixel-bordered speech bubble: hard-edged "step" border instead of a
-   smooth rounded corner/box-shadow, built from stacked box-shadows. */
+   smooth rounded corner/box-shadow, built from stacked box-shadows. In
+   rem (not px) so the whole border/tail scales with the root font-size
+   alongside the bubble's rem-based padding/text (see html's font-size). */
 .pixel-bubble {
   position: relative;
   background: #fff;
-  border: 4px solid #091f2c;
-  box-shadow: 4px 4px 0 0 #091f2c;
+  border: 0.25rem solid #091f2c;
+  box-shadow: 0.25rem 0.25rem 0 0 #091f2c;
 }
 
 .pixel-bubble::after {
   content: "";
   position: absolute;
-  left: 28px;
-  bottom: -14px;
+  left: 1.75rem;
+  bottom: -0.875rem;
   width: 0;
   height: 0;
   border-style: solid;
-  border-width: 14px 10px 0 0;
+  border-width: 0.875rem 0.625rem 0 0;
   border-color: #091f2c transparent transparent transparent;
 }
 
 .pixel-bubble::before {
   content: "";
   position: absolute;
-  left: 32px;
-  bottom: -9px;
+  left: 2rem;
+  bottom: -0.5625rem;
   width: 0;
   height: 0;
   border-style: solid;
-  border-width: 10px 7px 0 0;
+  border-width: 0.625rem 0.4375rem 0 0;
   border-color: #fff transparent transparent transparent;
   z-index: 1;
 }
@@ -211,16 +227,16 @@ input {
    stands at the bottom-left of the screen. Box position/size elsewhere is
    unaffected. */
 .pixel-bubble--gibby::after {
-  left: -48px;
-  bottom: 20px;
-  border-width: 24px 48px 24px 0;
+  left: -3rem;
+  bottom: 1.25rem;
+  border-width: 1.5rem 3rem 1.5rem 0;
   border-color: transparent #091f2c transparent transparent;
 }
 
 .pixel-bubble--gibby::before {
-  left: -37px;
-  bottom: 27px;
-  border-width: 17px 37px 17px 0;
+  left: -2.3125rem;
+  bottom: 1.6875rem;
+  border-width: 1.0625rem 2.3125rem 1.0625rem 0;
   border-color: transparent #fff transparent transparent;
 }
 
@@ -229,17 +245,17 @@ input {
    down-left. */
 .pixel-bubble--right::after {
   left: auto;
-  right: -20px;
-  bottom: 14px;
-  border-width: 14px 0 0 20px;
+  right: -1.25rem;
+  bottom: 0.875rem;
+  border-width: 0.875rem 0 0 1.25rem;
   border-color: transparent transparent transparent #091f2c;
 }
 
 .pixel-bubble--right::before {
   left: auto;
-  right: -14px;
-  bottom: 18px;
-  border-width: 10px 0 0 14px;
+  right: -0.875rem;
+  bottom: 1.125rem;
+  border-width: 0.625rem 0 0 0.875rem;
   border-color: transparent transparent transparent #fff;
 }
 
@@ -249,22 +265,22 @@ input {
    instead of relying on font-weight (which that font ignores). */
 .pixel-title {
   text-shadow:
-    1px 0 0 currentColor,
-    -1px 0 0 currentColor,
-    0 1px 0 currentColor,
-    0 -1px 0 currentColor;
+    0.0625rem 0 0 currentColor,
+    -0.0625rem 0 0 currentColor,
+    0 0.0625rem 0 currentColor,
+    0 -0.0625rem 0 currentColor;
 }
 
 /* Chunky pixel-game button: flat colors, hard drop shadow, no rounding,
    "presses" down on click by canceling the shadow offset. */
 .pixel-button {
-  border: 4px solid #091f2c;
-  box-shadow: 5px 5px 0 0 #091f2c;
+  border: 0.25rem solid #091f2c;
+  box-shadow: 0.3125rem 0.3125rem 0 0 #091f2c;
   transition: transform 0.08s ease-out, box-shadow 0.08s ease-out;
 }
 
 .pixel-button:active {
-  transform: translate(5px, 5px);
+  transform: translate(0.3125rem, 0.3125rem);
   box-shadow: 0 0 0 0 #091f2c;
 }
 
@@ -281,8 +297,8 @@ input {
 .pixel-panel {
   position: relative;
   background: #fff;
-  border: 4px solid #091f2c;
-  box-shadow: 6px 6px 0 0 #091f2c;
+  border: 0.25rem solid #091f2c;
+  box-shadow: 0.375rem 0.375rem 0 0 #091f2c;
 }
 
 /* Photo frame variant: thicker "wood/plastic" border feel via an inset ring,
@@ -290,9 +306,9 @@ input {
 .pixel-frame {
   position: relative;
   background: #fff;
-  border: 4px solid #091f2c;
-  box-shadow: 6px 6px 0 0 #091f2c;
-  padding: 10px;
+  border: 0.25rem solid #091f2c;
+  box-shadow: 0.375rem 0.375rem 0 0 #091f2c;
+  padding: 0.625rem;
 }
 
 .pixel-frame-header--danger {
@@ -303,15 +319,15 @@ input {
   z-index: 2;
   background: #d63447;
   color: #fff;
-  border: 4px solid #091f2c;
-  box-shadow: 4px 4px 0 0 #091f2c;
-  padding: 6px 14px;
+  border: 0.25rem solid #091f2c;
+  box-shadow: 0.25rem 0.25rem 0 0 #091f2c;
+  padding: 0.375rem 0.875rem;
   white-space: nowrap;
   text-shadow:
-    1px 0 0 #091f2c,
-    -1px 0 0 #091f2c,
-    0 1px 0 #091f2c,
-    0 -1px 0 #091f2c;
+    0.0625rem 0 0 #091f2c,
+    -0.0625rem 0 0 #091f2c,
+    0 0.0625rem 0 #091f2c,
+    0 -0.0625rem 0 #091f2c;
 }
 
 /* Incoming content stage during the transition: starts off-screen to the

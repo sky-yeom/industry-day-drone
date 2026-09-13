@@ -30,7 +30,7 @@ export default function PixelGround({ scrolling = false, hidden = false, returni
       ref={groundRef}
       aria-hidden
       style={{
-        height: "calc(16% + 35px)",
+        height: "calc(16% + (35px * var(--ui-scale)))",
         zIndex: 50,
         animationPlayState: scrolling || returning ? "running" : "paused",
       }}

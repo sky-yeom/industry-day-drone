@@ -78,10 +78,10 @@ export default function GibbyMapTransition({
         </div>
 
         {/* Old prompt content fades away as soon as the transition starts. */}
-        <div className={`grid min-h-0 max-w-[860px] flex-1 grid-cols-1 gap-3 transition-opacity duration-700 sm:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] sm:items-center ${fadingOut ? "pointer-events-none opacity-0" : "opacity-100"}`}>
+        <div className={`grid min-h-0 max-w-[53.75rem] flex-1 grid-cols-1 gap-3 transition-opacity duration-700 sm:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] sm:items-center ${fadingOut ? "pointer-events-none opacity-0" : "opacity-100"}`}>
           <div className="flex min-h-0 flex-col items-center justify-center gap-4 py-2">
             <div className="pixel-panel pixel-rendering relative mt-6 w-full max-w-48">
-              <span className={`${pixelFont.className} pixel-frame-header--danger text-[10px]`}>구조 필요</span>
+              <span className={`${pixelFont.className} pixel-frame-header--danger text-[0.625rem]`}>구조 필요</span>
               <Image src={targetImage} alt={targetAlt} width={1536} height={1536} sizes="184px" className="block h-auto w-full" />
             </div>
           </div>
@@ -109,9 +109,16 @@ export default function GibbyMapTransition({
           changes here, no translate/scale, so he never appears to move. */}
       <div
         className="absolute bottom-[16%] z-20 flex items-end justify-center"
-        style={{ width: ANCHOR_W, left: `min(calc(94% - 145px), calc(100% - ${ANCHOR_W}px))` }}
+        style={{
+          width: ANCHOR_W,
+          left: `min(calc(94% - (145px * var(--ui-scale))), calc(100% - ${ANCHOR_W}px))`,
+        }}
       >
-        <div aria-hidden className="pixel-rendering shrink-0" style={gibbyFrameStyle(frame)} />
+        <div
+          aria-hidden
+          className="pixel-rendering shrink-0"
+          style={{ ...gibbyFrameStyle(frame), transform: "scale(var(--ui-scale))", transformOrigin: "bottom center" }}
+        />
       </div>
     </main>
   );

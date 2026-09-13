@@ -95,7 +95,7 @@ export default function PagedText({ text, label, contentFit = false, maxHeight }
       <p ref={measureRef} aria-hidden="true" className="invisible absolute inset-x-0 top-0 whitespace-pre-wrap [overflow-wrap:anywhere]" />
     </div>
     <nav ref={pagerRef} aria-hidden={!showPager}
-      className={`flex h-6 shrink-0 items-center justify-end gap-2 whitespace-nowrap text-[11px] leading-5 ${showPager ? (contentFit ? "mt-1" : "") : (contentFit ? "invisible absolute bottom-0 right-0" : "invisible")}`}
+      className={`flex h-6 shrink-0 items-center justify-end gap-2 whitespace-nowrap text-[0.6875rem] leading-5 ${showPager ? (contentFit ? "mt-1" : "") : (contentFit ? "invisible absolute bottom-0 right-0" : "invisible")}`}
       aria-label={`${label} 페이지`}>
       <button type="button" disabled={index === 0} onClick={() => setPage(index - 1)}
         className="text-[#8661c5] disabled:opacity-30" aria-label={`${label} 이전 페이지`}>이전</button>

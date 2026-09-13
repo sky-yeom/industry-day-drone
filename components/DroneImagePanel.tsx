@@ -22,7 +22,7 @@ export default function DroneImagePanel({ captures }: { captures: CapturedImage[
   return <section className="flex h-full min-h-0 flex-col gap-2 p-3 sm:p-4">
     <div className="flex shrink-0 items-center justify-between gap-3">
       <div>
-        <p className="text-[10px] font-bold tracking-[0.2em] text-white [text-shadow:2px_2px_0_#091f2c]">카메라 이미지 수신</p>
+        <p className="text-[0.625rem] font-bold tracking-[0.2em] text-white [text-shadow:2px_2px_0_#091f2c]">카메라 이미지 수신</p>
         <h2 className="text-lg font-semibold text-white [text-shadow:2px_2px_0_#091f2c]">드론 이미지</h2>
       </div>
       <span className="pixel-panel shrink-0 px-3 py-1.5 text-xs font-semibold text-[#091f2c]">
@@ -30,7 +30,7 @@ export default function DroneImagePanel({ captures }: { captures: CapturedImage[
       </span>
     </div>
       <div className="pixel-frame flex min-h-0 flex-1 flex-col overflow-hidden !p-0">
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-1 bg-[#091f2c] px-3 py-2 text-[10px] text-white/80">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-1 bg-[#091f2c] px-3 py-2 text-[0.625rem] text-white/80">
           <span>{current ? `${MONITOR_MAP[current.monitorId].label} · ${index + 1}차 촬영` : "촬영 이미지 수신 대기"}</span>
           <span className="tabular-nums">{current ? `촬영 ${(current.capturedAtMs / 1000).toFixed(1)}초` : "출발 전"}</span>
         </div>
@@ -47,7 +47,7 @@ export default function DroneImagePanel({ captures }: { captures: CapturedImage[
                   setDimensions({ id: current.id, ratio: image.naturalWidth / image.naturalHeight });
                 }
               }} />
-            {validBox && <div aria-label="탐지 근거에 포함된 대상자 위치" className="pointer-events-none absolute border-[3px] border-emerald-400"
+            {validBox && <div aria-label="탐지 근거에 포함된 대상자 위치" className="pointer-events-none absolute border-[0.1875rem] border-emerald-400"
               style={{ left: `${box[0] * 100}%`, top: `${box[1] * 100}%`, width: `${box[2] * 100}%`, height: `${box[3] * 100}%` }} />}
           </div>
         </div>}

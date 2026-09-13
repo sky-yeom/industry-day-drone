@@ -359,7 +359,8 @@ class LivePreflightBoundaryTest(unittest.TestCase):
                 self.attempted_action = False
                 self.raw = {}
                 self.received = 0.
-                self.last_telemetry = SimpleNamespace(battery_percent=80, rc_override_age_s=None)
+                self.last_telemetry = SimpleNamespace(battery_percent=80, rc_override_age_s=None,
+                    vs_enabled=True, vs_advanced_enabled=True, vs_authority="MSDK")
             def connect(self):
                 self._socket = object()
             def status(self, reason):
@@ -427,7 +428,8 @@ class LiveFullRouteTest(unittest.TestCase):
                 self.airborne = False
                 self.received = time.perf_counter()
                 self.raw = {}
-                self.last_telemetry = SimpleNamespace(battery_percent=80, rc_override_age_s=None, height_m=1.4)
+                self.last_telemetry = SimpleNamespace(battery_percent=80, rc_override_age_s=None, height_m=1.4,
+                    vs_enabled=True, vs_advanced_enabled=True, vs_authority="MSDK")
             def connect(self):
                 self._socket = object()
             def status(self, reason):

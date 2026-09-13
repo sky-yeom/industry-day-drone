@@ -661,6 +661,7 @@ class NDJSONClient:
         self._socket: socket.socket | None = None
         self._file = None
         self._armed = False
+        self._armed_since: float | None = None
         self.last_telemetry: Telemetry | None = None
         self.last_known_telemetry: Telemetry | None = None
         self.last_telemetry_received_pc_monotonic_ns: int | None = None
@@ -712,6 +713,7 @@ class NDJSONClient:
             self._socket.close()
         self._file = self._socket = None
         self._armed = False
+        self._armed_since = None
         self._invalidate_telemetry()
         self._log_event("session_closed", {})
         if self._log_file is not None:
@@ -951,6 +953,7 @@ class NDJSONClient:
             timeout_s=SLOW_COMMAND_TIMEOUT_S,
         )
         self._armed = True
+        self._armed_since = time.perf_counter()
 
     def takeoff(self, confirmation_token: str) -> None:
         if not confirmation_token:
@@ -970,6 +973,7 @@ class NDJSONClient:
             timeout_s=SLOW_COMMAND_TIMEOUT_S,
         )
         self._armed = False
+        self._armed_since = None
 
     def stick_mode(self, mode: str) -> None:
         """Select official Advanced or an explicit diagnostic control path."""
@@ -1060,10 +1064,12 @@ class NDJSONClient:
     def emergency_stop(self) -> None:
         self.send("emergency_stop", {}, timeout_s=SLOW_COMMAND_TIMEOUT_S)
         self._armed = False
+        self._armed_since = None
 
     def disarm(self) -> None:
         self.send("disarm", {}, timeout_s=SLOW_COMMAND_TIMEOUT_S)
         self._armed = False
+        self._armed_since = None
 
 
 class RateLimiter:

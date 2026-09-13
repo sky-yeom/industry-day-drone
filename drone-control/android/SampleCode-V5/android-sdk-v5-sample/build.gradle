@@ -10,8 +10,8 @@ android {
         applicationId "com.ms.voice"
         minSdkVersion Integer.parseInt(project.ANDROID_MIN_SDK_VERSION)
         targetSdkVersion Integer.parseInt(project.ANDROID_TARGET_SDK_VERSION)
-        versionCode 20260913
-        versionName "5.18-connectivity.20260913.1"
+        versionCode 20260913_03
+        versionName "5.18-connectivity.20260913.3"
         manifestPlaceholders["API_KEY"] = project.AIRCRAFT_API_KEY
         buildConfigField "String", "OPERATOR_ARM_TOKEN", "\"" + (project.findProperty("OPERATOR_ARM_TOKEN") ?: "REPLACE_ME") + "\""
         manifestPlaceholders["GMAP_API_KEY"] = project.GMAP_API_KEY
@@ -22,7 +22,7 @@ android {
         }
     }
 
-    //配置签名信息
+    //??몄돭癲レ뼃由ュ껙?믨쿂
     signingConfigs {
         release {
             storeFile file(project.STORE_FILE)
@@ -46,9 +46,7 @@ android {
     }
 
     packagingOptions {
-        // 因为mrtc库内部使用了NDK的c++_shared的编译参数
-        // 与其他库重复引用了，因此选其中一个即可
-        pickFirst 'lib/arm64-v8a/libc++_shared.so'
+        // ?議쎈쭗mrtc鵝?퀫???㏃뒾??㏉떃NDK?瑗?+_shared?袁ㅽ룍?λ쵆猶??        // 鼇앸‥?繞볥쉘???띠㉢畑밸틹逾ら썒?낇렰?議???㏓?鼇??鼇앫굝???        pickFirst 'lib/arm64-v8a/libc++_shared.so'
         pickFirst 'lib/armeabi-v7a/libc++_shared.so'
     }
 
@@ -62,7 +60,7 @@ android {
         freeCompilerArgs += ["-Xjvm-default=all"]
     }
 
-    //关闭lint
+    //??쒕열lint
     lintOptions {
         checkReleaseBuilds false
         abortOnError false
@@ -106,11 +104,11 @@ android {
 
 dependencies {
     implementation project(':bridge')
-    /** <-----------------依赖MSDK--------------------> **/
+    /** <-----------------?딆빍?튝SDK--------------------> **/
     compileOnly deps.aircraftProvided
     implementation deps.aircraft
 
-    /** <-----------------sample所需--------------------> **/
+    /** <-----------------sample????--------------------> **/
     implementation project(':uxsdk')
     implementation deps.appcompat
     implementation deps.constraintLayout

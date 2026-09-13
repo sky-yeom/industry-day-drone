@@ -417,7 +417,7 @@ public final class TelemetryProvider {
         long now;
         JSONObject json = new JSONObject();
         try {
-            json.put("bridge_build_id", "5.18-connectivity.20260913.1");
+            json.put("bridge_build_id", "5.18-connectivity.20260913.3");
             json.put("bridge_health", com.msdkremote.PcBridge.diagnostics());
             json.put("max_tilt_angle_deg", StickControlManager.MAX_TILT_ANGLE_DEG);
             JSONObject video = com.msdkremote.livevideo.VideoServerManager.getInstance().diagnostics();

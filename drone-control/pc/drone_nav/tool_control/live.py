@@ -22,7 +22,13 @@ from ..vision import TcpVideoStream
 from .camera import VideoBroker
 from .service import ToolError
 
-BUILD_ID = "5.18-connectivity.20260913.1"
+BUILD_ID = "5.18-connectivity.20260913.3"
+
+# DJI's real flight-control authority handoff to MSDK after enableVirtualStick()/arm()
+# can lag a few seconds behind the SDK's own "enabled" confirmation (observed up to
+# ~3.3s in the field). Treat a vs_authority/armed mismatch as fatal only once this
+# grace period has elapsed since arm(), instead of aborting on the very first read.
+AUTHORITY_HANDOFF_GRACE_S = 4.0
 
 
 def fresh(raw, key, max_ms=500):
@@ -35,6 +41,41 @@ def ground_verified(raw):
             and fresh(raw, "is_flying") and fresh(raw, "are_motors_on")
             and raw.get("armed") is False and raw.get("vs_enabled") is False
             and raw.get("vs_authority") == "RC")
+
+
+# The first STATUS read on a fresh connection can carry telemetry the phone
+# gathered before the socket existed (observed are_motors_on_age_ms=1735 with
+# zero poll failures), so a single-shot gate reports GROUND_UNVERIFIED for a
+# healthy grounded aircraft. Keep requiring a genuinely fresh proof; only allow
+# more time to obtain one.
+GROUND_PROOF_TIMEOUT_S = 4.0
+
+
+def await_ground_proof(client, label, timeout_s=GROUND_PROOF_TIMEOUT_S):
+    """Poll STATUS until ground_verified passes; never accepts stale telemetry."""
+    deadline = time.monotonic() + timeout_s
+    attempts = 0
+    while True:
+        client.status(label)
+        attempts += 1
+        if ground_verified(client.raw):
+            if attempts > 1:
+                client.log_event("tool_ground_proof_settled",
+                                 {"label": label, "attempts": attempts})
+            return True
+        if time.monotonic() >= deadline:
+            raw = client.raw or {}
+            client.log_event("tool_ground_proof_failed", {
+                "label": label, "attempts": attempts,
+                "is_flying": raw.get("is_flying"),
+                "is_flying_age_ms": raw.get("is_flying_age_ms"),
+                "are_motors_on": raw.get("are_motors_on"),
+                "are_motors_on_age_ms": raw.get("are_motors_on_age_ms"),
+                "armed": raw.get("armed"), "vs_enabled": raw.get("vs_enabled"),
+                "vs_authority": raw.get("vs_authority"),
+                "telemetry_poll_failures": raw.get("telemetry_poll_failures")})
+            return False
+        time.sleep(.2)
 
 
 def process_identity(raw):
@@ -208,8 +249,11 @@ class MissionClient(NDJSONClient):
                           "raw_telemetry": self.raw, **{k: raw.get(k) for k in
                           ("is_flying", "are_motors_on", "vs_enabled", "vs_authority", "bridge_build_id")}}))
         if self._armed and not self.cleaning and kind != "disarm":
-            if (raw.get("armed") is not True or raw.get("vs_authority") != "MSDK"
-                    or raw.get("vs_enabled") is not True):
+            authority_ok = (raw.get("armed") is True and raw.get("vs_authority") == "MSDK"
+                            and raw.get("vs_enabled") is True)
+            within_handoff_grace = (self._armed_since is not None
+                and time.perf_counter() - self._armed_since < AUTHORITY_HANDOFF_GRACE_S)
+            if not authority_ok and not (within_handoff_grace and raw.get("armed") is True):
                 raise InterruptedError("Control authority changed; no automatic re-arm")
             override = self.last_telemetry.rc_override_age_s
             if override is not None and 0 <= override < 5:
@@ -295,7 +339,7 @@ class LiveAdapter:
             raise ValueError("Private phone arm token is required")
         self.config = replace(self.config, network=replace(self.config.network, rate_hz=10),
             patrol=replace(self.config.patrol, obstacle_stop_m=0., cruise_altitude_m=self.target_height_m,
-                angle_deg=1.5, recovery_max_angle_deg=1.5, leg_timeout_s=45,
+                angle_deg=1.5, recovery_max_angle_deg=1.5, leg_timeout_s=90,
                 align_cruise_yaw=False))
         self.site = site
         self.live_ready = True  # configured adapter; fresh hardware proof still required at admission
@@ -368,7 +412,8 @@ class LiveAdapter:
     def run(self, mission, cancel, emit):
         from ..vision import AprilTagDetector
         from ..patrol import (PatrolPhase, _DetectionLogger, _acquire_tag,
-            _traverse_to_expected, _pause_zero, _visual_floor_height_m)
+            _traverse_to_expected, _pause_zero, _visual_floor_height_m,
+            _confirm_advanced_authority)
         with self.lock:
             self.busy = True
         client = MissionClient(self.config, cancel, self._snapshot)
@@ -379,8 +424,9 @@ class LiveAdapter:
         try:
             emit(state="preflight")
             client.connect()
-            client.status("tool_mission_preflight")
-            if not ground_verified(client.raw) or client.raw.get("bridge_build_id") != BUILD_ID:
+            if not await_ground_proof(client, "tool_mission_preflight"):
+                raise RuntimeError("Fresh motors-off, grounded, RC state and new bridge build required")
+            if client.raw.get("bridge_build_id") != BUILD_ID:
                 raise RuntimeError("Fresh motors-off, grounded, RC state and new bridge build required")
             if not process_identity(client.raw) or client.raw.get("telemetry_generation") is None:
                 raise RuntimeError("Missing app process/generation identity")
@@ -405,8 +451,7 @@ class LiveAdapter:
             else:
                 raise RuntimeError("Fresh live image with floor ID0 required before takeoff")
             client.stick_mode("advanced_angle")
-            client.status("tool_immediate_takeoff_ground_proof")
-            if not ground_verified(client.raw):
+            if not await_ground_proof(client, "tool_immediate_takeoff_ground_proof"):
                 raise RuntimeError("Ground/motor state changed before takeoff")
             if client.last_telemetry.rc_override_age_s is not None and 0 <= client.last_telemetry.rc_override_age_s < 5:
                 raise InterruptedError("RC stick activity before takeoff")
@@ -423,6 +468,12 @@ class LiveAdapter:
                 raise RuntimeError("Takeoff not confirmed; no retry")
             client.arm(self.config.network.confirmation_token)  # once only
             client.deadline = time.perf_counter() + 180
+            # enableVirtualStick() succeeding does not mean DJI has handed real
+            # flight-control authority to MSDK yet; that handoff can lag a few
+            # seconds. Wait for it explicitly instead of racing straight into
+            # tag acquisition/climb, which used to abort the mission with
+            # AUTHORITY_LOST before the handoff even finished.
+            _confirm_advanced_authority(client, limiter, timeout_s=5.0)
             floor = VisitGate(self.floor_tag_id, PatrolPhase.FLOOR_HOME)
             _acquire_tag(client, limiter, stream, detector, logger, floor, self.config.patrol)
             self._climb(client, limiter, stream, detector, _visual_floor_height_m)

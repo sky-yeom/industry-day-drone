@@ -76,7 +76,12 @@ public final class StickControlManager {
     // the SDK's much larger +/-30 degree range by mistake.
     public static final double MAX_TILT_ANGLE_DEG = 3.0;
 
-    private static final long MODE_STATE_GRACE_MS = 1000;
+    // DJI's vsAdvancedEnabled listener confirmation has been observed to lag
+    // 1.6s+ behind our own setVirtualStickAdvancedModeEnabled() call in the
+    // field (2026-09-13 sessions). The old 1000 ms grace released control to
+    // RC before the SDK's own callback ever arrived, tearing down a mission
+    // that had just armed successfully. Widen the window with margin.
+    private static final long MODE_STATE_GRACE_MS = 3000;
     private static final long RELEASE_RETRY_MS = 500;
     // Bounded: an unbounded retry loop spun 200+ times in flight.
     private static final int MAX_RELEASE_ATTEMPTS = 10;

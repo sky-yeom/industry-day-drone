@@ -47,8 +47,9 @@ FRESH_S = .5
 # trips at random (15:23 flight: age 517 ms while armed/MSDK/height were all
 # fine). Three missed polls is the stale threshold for the flight flag only.
 FLIGHT_STATE_FRESH_S = 1.5
-# Grace window for a transient single-frame ID0 miss/stale-age during climb
-# before treating it as a real loss and aborting (see _climb below).
+# A single missed/stale ID0 sample during climb (decode hiccup, tag briefly
+# clipped by the FOV as attitude shifts) recovers within one or two 100 ms
+# ticks. Only a sustained miss is a real loss, mirroring FLIGHT_STATE_FRESH_S.
 CLIMB_TAG_MISS_GRACE_S = 1.0
 # The first STATUS read on a fresh connection can carry telemetry the phone
 # gathered before the socket existed (observed are_motors_on_age_ms=1735 with
@@ -517,11 +518,15 @@ def _await_ground_proof(client, label, cancel=None, timeout_s=GROUND_PROOF_TIMEO
         time.sleep(.2)
 
 
+class GroundVideoUnavailable(RuntimeError):
+    pass
+
+
 def _wait_ground_video(client, limiter, stream, detector, logger):
     # At ground height the downward camera can crop the printed floor tag.
     # The tested takeoff sequence requires fresh video here, then ID0 after
     # takeoff before ascent/lateral motion. All visible IDs are still logged.
-    deadline, previous_key, held = time.monotonic() + 20., None, None
+    deadline, previous_key, held, logged_at = time.monotonic() + 20., None, None, None
     while time.monotonic() < deadline:
         limiter.wait()
         client.status("standalone_ground_video")
@@ -529,6 +534,27 @@ def _wait_ground_video(client, limiter, stream, detector, logger):
             raise InterruptedError("Ground/motor/RC proof changed before takeoff")
         _, age = _observe(client, stream, detector, logger, PatrolPhase.FLOOR_HOME, 0)
         key = _snapshot_key(stream)
+        now = time.monotonic()
+        if logged_at is None or now - logged_at >= 1.:
+            diagnostic = stream.diagnostics() if hasattr(stream, "diagnostics") else {}
+            video = client.raw.get("video")
+            video = video if isinstance(video, dict) else {}
+            binding, socket = video.get("sdk_binding"), video.get("socket")
+            binding = binding if isinstance(binding, dict) else {}
+            socket = socket if isinstance(socket, dict) else {}
+            client.log_event("ground_video_preflight", {
+                "pc_state": diagnostic.get("state"), "received_bytes": diagnostic.get("received_bytes"),
+                "decoded_frames": diagnostic.get("decoded_frames"),
+                "frame_age_s": age if _number(age, 0., 1e9) else None,
+                "frame_key": key, "sdk_activation_state": binding.get("activation_state"),
+                "android_camera_frames": video.get("camera_frames"),
+                "android_camera_age_ms": video.get("camera_age_ms"),
+                "android_written_bytes": socket.get("client_written_bytes"),
+            })
+            logged_at = now
+        diagnostic = stream.diagnostics() if hasattr(stream, "diagnostics") else {}
+        if diagnostic.get("state") == "FAILED":
+            raise GroundVideoUnavailable("Fresh video not confirmed before takeoff")
         if not _number(age, 0., FRESH_S) or key is None:
             held, previous_key = None, None
             continue
@@ -540,11 +566,53 @@ def _wait_ground_video(client, limiter, stream, detector, logger):
         if previous_key is not None and key[0] != previous_key[0]:
             held = None
         previous_key = key
-        now = time.monotonic()
         held = now if held is None else held
         if now - held >= CONFIRM_S:
             return
-    raise RuntimeError("Fresh video not confirmed before takeoff")
+    raise GroundVideoUnavailable("Fresh video not confirmed before takeoff")
+
+
+def _prepare_ground_video(client, limiter, stream, detector, logger, config, video_broker=None):
+    """Retry a failed first-frame video connection once, never after flight or decoded progress."""
+    def verify_ground():
+        client.status("standalone_ground_video_recovery_proof")
+        elapsed_ms = (time.perf_counter() - client.received) * 1000
+        raw = dict(client.raw)
+        for key in ("is_flying_age_ms", "are_motors_on_age_ms"):
+            if type(raw.get(key)) in (int, float):
+                raw[key] += elapsed_ms
+        if elapsed_ms < 0 or not ground_verified(raw):
+            raise InterruptedError("Fresh grounded RC state required for video recovery")
+
+    try:
+        _wait_ground_video(client, limiter, stream, detector, logger)
+        return stream
+    except GroundVideoUnavailable:
+        diagnostic = stream.diagnostics()
+        if (diagnostic.get("state") != "FAILED" or diagnostic.get("decoded_frames") != 0
+                or stream.snapshot() is not None):
+            raise
+        verify_ground()
+        client.log_event("ground_video_reconnect", {
+            "attempt": 1, "previous_received_bytes": diagnostic.get("received_bytes"),
+            "previous_decoded_frames": 0, "ground_verified": True})
+        if video_broker is not None:
+            replacement = video_broker.restart_unstarted_mission_stream(verify_ground)
+        else:
+            stream.close()
+            verify_ground()
+            replacement = FreshVideoStream(
+                config.network.host, config.network.video_port, config.network.video_codec,
+                initial_keyframe_timeout_s=15.)
+        client.stream = replacement
+        try:
+            logger.attach_capture(replacement)
+            _wait_ground_video(client, limiter, replacement, detector, logger)
+        except BaseException:
+            if video_broker is None:
+                replacement.close()
+            raise
+        return replacement
 
 
 def _takeoff_observation(client):
@@ -603,6 +671,7 @@ def _climb(client, limiter, stream, detector, logger, config, target):
     client.phase = "climb"
     deadline, held, previous_key = time.monotonic() + CLIMB_TIMEOUT_S, None, None
     generation = None
+    tag_miss_since = None
     def require_frame(snapshot):
         nonlocal generation
         if (snapshot is None or stream.last_detection_snapshot is not snapshot
@@ -623,7 +692,6 @@ def _climb(client, limiter, stream, detector, logger, config, target):
         elapsed = time.perf_counter() - client.received
         age = None if telemetry.height_age_s is None else telemetry.height_age_s + elapsed
         return telemetry, elapsed, climb_command(telemetry.height_m, age, target)
-    tag_miss_since = None
     while time.monotonic() < deadline:
         limiter.wait()
         client.status("standalone_bounded_sonar_climb")
@@ -631,18 +699,13 @@ def _climb(client, limiter, stream, detector, logger, config, target):
         tags, age = _observe(client, stream, detector, logger, PatrolPhase.FLOOR_HOME, 0)
         floor = next((tag for tag in tags if tag.tag_id == 0), None)
         if not _number(age, 0., FRESH_S) or floor is None:
-            # A single missed/stale frame during climb (decode hiccup, tag
-            # briefly clipped by FOV as gimbal/attitude shifts) is common and
-            # recoverable within one or two 100 ms loop ticks. Only abort if
-            # ID0 stays unavailable for a sustained window, mirroring the
-            # FLIGHT_STATE_FRESH_S tolerance already applied above for the
-            # same class of spurious single-sample staleness trip.
+            # One stale/missing sample is a decode hiccup, not a lost tag.
             now = time.monotonic()
-            tag_miss_since = tag_miss_since or now
+            if tag_miss_since is None:
+                tag_miss_since = now
+                client.log_event("standalone_climb_tag_miss",
+                                 {"frame_age_s": age, "floor_seen": floor is not None})
             if now - tag_miss_since < CLIMB_TAG_MISS_GRACE_S:
-                client.log_event("standalone_climb_tag_miss", {
-                    "age_s": age, "tag_seen": floor is not None,
-                    "miss_elapsed_s": now - tag_miss_since})
                 continue
             raise RuntimeError("Fresh floor ID0 unavailable during climb")
         tag_miss_since = None
@@ -1036,7 +1099,7 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
         logger.attach_capture(stream)
         limiter = RateLimiter(10.)
         client.gimbal_down()
-        _wait_ground_video(client, limiter, stream, detector, logger)
+        stream = _prepare_ground_video(client, limiter, stream, detector, logger, config, video_broker)
         client.stick_mode("advanced_angle")
         if not _await_ground_proof(client, "standalone_immediate_takeoff_ground_proof", cancel):
             raise RuntimeError("Ground/motor state changed before takeoff")

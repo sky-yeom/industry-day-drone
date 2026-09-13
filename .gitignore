@@ -56,3 +56,12 @@ infra/.terraform/
 infra/terraform.tfstate*
 infra/terraform.tfvars
 infra/*.tfplan
+
+# Private Android and PC migration artifacts
+*.jks
+*.keystore
+*.apk
+*.local.properties
+**/field-diagnostics/
+**/private-handoff*/
+drone-control/pc/tests/.field-test-*/

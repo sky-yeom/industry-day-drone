@@ -144,6 +144,7 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
                         self.assertNotEqual(event["type"], "relay.error", event)
                         if event["type"] == "route.state":
                             state = event["state"]
+                            self.assertNotEqual(state["missionPhase"], "aborted", state.get("error"))
                         return event
                     while state is None:
                         await receive()

@@ -115,6 +115,7 @@ PREFIX_PADDING_MS = int(os.getenv("VOICE_LIVE_PREFIX_PADDING_MS", "420"))
 # 행사장 잡음과 실제 짧은 한국어 답변으로 확인한 뒤 환경 변수로 조정합니다.
 SPEECH_DURATION_MS = int(os.getenv("VOICE_LIVE_SPEECH_DURATION_MS", "80"))
 VOICE_DIAGNOSTICS = os.getenv("VOICE_LIVE_DIAGNOSTICS", "0") == "1"
+VOICE_TRACE_DIRECTORY = os.getenv("RELAY_VOICE_TRACE_DIRECTORY", "").strip()
 
 # --- 전사(transcription) -------------------------------------------------------
 #

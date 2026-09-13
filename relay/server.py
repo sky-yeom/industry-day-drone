@@ -26,6 +26,7 @@ try:
     from .drone_client import DroneClient, DroneError
     from .vision import create_providers
     from .voice_turns import VoiceTurns, is_affirmative
+    from .voice_trace import VoiceTrace, validate_directory
     from .browser_access import BrowserAccessMiddleware
     from .camera_preview import serve_camera
     from .drone_status import read_drone_status
@@ -41,6 +42,7 @@ except ImportError:
     from drone_client import DroneClient, DroneError
     from vision import create_providers
     from voice_turns import VoiceTurns, is_affirmative
+    from voice_trace import VoiceTrace, validate_directory
     from browser_access import BrowserAccessMiddleware
     from camera_preview import serve_camera
     from drone_status import read_drone_status
@@ -111,6 +113,8 @@ async def device_endpoint(device: WebSocket):
 
 @app.on_event("startup")
 async def validate_transport_configuration():
+    if config.VOICE_TRACE_DIRECTORY:
+        validate_directory(config.VOICE_TRACE_DIRECTORY, config.HOST)
     if config.DRONE_CONTROL_TRANSPORT == "remote":
         get_device_hub()  # Fail closed: memory routing cannot run with autoscaled replicas.
     elif config.DRONE_CONTROL_TRANSPORT == "inprocess":
@@ -167,6 +171,8 @@ async def api_config():
             drone_error = observed["error"]
         elif observed["executionMode"] != config.DRONE_CONTROL_MODE:
             drone_error = "선택한 Test/Real 모드와 연결된 Tools의 모드가 다릅니다."
+        elif config.DRONE_RUN_MODE == "real" and observed.get("readinessError"):
+            drone_error = observed["readinessError"]
         elif config.DRONE_RUN_MODE == "real" and (
                 observed["liveReady"] is not True or observed["physicalConnected"] is not True
                 or observed["groundVerified"] is not True):
@@ -311,8 +317,12 @@ class Bridge:
                 expected_mode=session.data["droneControlMode"], allow_mock_tools=config.DRONE_CONTROL_USE_TOOLS)
         else:
             self.runner = MissionRunner(session, camera, vision, self.publish_mission)
+        self.voice_trace = (VoiceTrace(config.VOICE_TRACE_DIRECTORY, session.run_id, config.HOST)
+                            if config.VOICE_TRACE_DIRECTORY else None)
 
     async def send_browser(self, payload):
+        if self.voice_trace:
+            self.voice_trace.browser_event(payload)
         async with self._browser_lock:
             with contextlib.suppress(Exception):
                 await self.browser.send_text(json.dumps(payload, ensure_ascii=False))
@@ -321,6 +331,8 @@ class Bridge:
         await self.send_browser({"type": "route.state", "state": self.session.snapshot()})
 
     def trace_voice(self, event, **fields):
+        if self.voice_trace:
+            self.voice_trace.record("voice." + event, run_id=self.session.run_id, **fields)
         if config.VOICE_DIAGNOSTICS and self._voice_diagnostics_remaining:
             self._voice_diagnostics_remaining -= 1
             log.info("voice.flow %s", json.dumps({
@@ -1085,6 +1097,16 @@ class Bridge:
                 if not self.strict_turn_taking:
                     await self.upstream.send(json.dumps({"type": "input_audio_buffer.clear"}))
             await self.sync_voice_context()
+            if self.voice_trace:
+                self.voice_trace.record(
+                    "tool_result", run_id=self.session.run_id, call_id=activity_id, name=name, arguments=args,
+                    from_voice=from_voice, participant_item_id=turn.item_id if turn else None,
+                    participant_text=turn.text if turn else None,
+                    latest_item_id=self.voice_turns.latest.item_id if self.voice_turns.latest else None,
+                    turn_context=turn.context if turn else None, current_context=self.voice_turns.context(self.session),
+                    route_readback_done=turn.route_readback_done if turn else None,
+                    rejection_code=self.voice_turns.last_rejection_code if from_voice else None,
+                    result=outcome)
             await self.send_browser({
                 "type": "tool.finished", "id": activity_id, "name": name, "result": outcome,
                 "ms": int((time.perf_counter() - started) * 1000)})
@@ -1169,6 +1191,8 @@ class Bridge:
                 self.trace_playback(msg)
             elif mtype == "voice.reply_drained" and msg.get("runId") == self.session.run_id:
                 self.voice_turns.finish_route_playback(msg.get("responseId"), self.session)
+                self.trace_voice("reply_drained", response_id=msg.get("responseId"),
+                                 route_confirmed=self.voice_turns.confirmed_route_replied)
             elif mtype == "voice.input.open":
                 await self.open_input(msg)
             elif mtype == "voice.interrupt":
@@ -1186,6 +1210,8 @@ class Bridge:
                     self._input_has_audio = True
                 await self.upstream.send(json.dumps({
                     "type": "input_audio_buffer.append", "audio": msg.get("data", "")}))
+                if self.voice_trace:
+                    self.voice_trace.audio_forwarded(msg.get("data", ""))
             elif mtype == "text" and self.upstream and not self.departure_started:
                 if self.strict_turn_taking and not self._input_open:
                     log.warning("Rejected text during closed voice input window")
@@ -1201,6 +1227,8 @@ class Bridge:
                     self._turn_response_ids.clear()
                 self.voice_turns.stop(item_id, self.session)
                 self.voice_turns.transcribe(item_id, text)
+                if self.voice_trace:
+                    self.voice_trace.record("participant_text_input", item_id=item_id, transcript=text)
                 self.sync_prompt_correction()
                 await self.sync_voice_context()
                 await self.upstream.send(json.dumps({
@@ -1255,6 +1283,9 @@ class Bridge:
         if self.session.phase not in {"complete", "aborted"}:
             self.session.abort_mission()
         await self.runner.close()
+        if self.voice_trace:
+            self.voice_trace.record("session_closed", run_id=self.session.run_id)
+            self.voice_trace.close()
 
 
 @app.websocket("/ws")

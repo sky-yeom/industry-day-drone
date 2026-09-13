@@ -8,12 +8,14 @@ from uuid import uuid4
 try:
     from .camera import CaptureError, LiveCaptureCamera
     from .drone_client import DroneError
+    from .drone_status import live_readiness_issue
     from .mission_runner import MissionRunner
     from .survey import ACTIVE, TERMINAL, result
     from .vision import PromptRevisionRequired, VisionError
 except ImportError:
     from camera import CaptureError, LiveCaptureCamera
     from drone_client import DroneError
+    from drone_status import live_readiness_issue
     from mission_runner import MissionRunner
     from survey import ACTIVE, TERMINAL, result
     from vision import PromptRevisionRequired, VisionError
@@ -22,6 +24,15 @@ STATES = {"accepted", "preflight", "taking_off", "running", "returning",
     "awaiting_rc_landing", "completed", "stop_requested", "stopped", "failed", "outcome_unknown"}
 TERMINAL_FLIGHT = {"completed", "stopped", "failed", "outcome_unknown"}
 log = logging.getLogger("relay.tool_mission")
+PREFLIGHT_FAILURES = {
+    "RuntimeError: Fresh video not confirmed before takeoff": (
+        "PREFLIGHT_VIDEO_UNAVAILABLE",
+        "이륙 전 PC 수신 영상이 준비되지 않았습니다. 폰 화면의 영상과 PC 전송 영상은 별도입니다. "
+        "PC 영상 수신을 복구한 뒤 새 작전을 시작하세요."),
+}
+PREFLIGHT_FAILURE_MESSAGES = {code: message for code, message in PREFLIGHT_FAILURES.values()}
+PREFLIGHT_FAILURES["GroundVideoUnavailable: Fresh video not confirmed before takeoff"] = (
+    PREFLIGHT_FAILURES["RuntimeError: Fresh video not confirmed before takeoff"])
 
 
 class LiveMissionRunner(MissionRunner):
@@ -50,7 +61,7 @@ class LiveMissionRunner(MissionRunner):
 
     def _live_response(self, response):
         if (response.get("execution_mode") != self.expected_mode
-                or (self.expected_mode == "mock" and response.get("physical_execution") is not False)):
+                or response.get("physical_execution") is not (self.expected_mode == "live")):
             raise DroneError("MODE_MISMATCH", f"{self.label} 실행 모드가 일치하지 않아 중단합니다.")
         return response
 
@@ -132,12 +143,19 @@ class LiveMissionRunner(MissionRunner):
                 if self._route not in caps.get("supported_ordered_sequences", []):
                     raise DroneError("ROUTE_UNSUPPORTED", "확인한 방문 순서는 현장 드론 프로파일에서 지원하지 않습니다.")
                 status = self._live_response(await self.drone.call("drone_get_status", {}))
+                if self.expected_mode == "live" and (issue := live_readiness_issue(status)):
+                    code, message = issue
+                    self.session.data.update(droneState="idle", droneErrorCode=code,
+                        error=f"실제 출발 요청을 보내지 않았습니다 ({code}). {message}")
+                    self.session.touch()
+                    await self._push()
+                    return result(False, self.session.data["error"])
                 if status.get("active_mission_id") is not None:
                     raise DroneError("DRONE_BUSY", "기존 드론 임무가 종료되었는지 먼저 확인해야 합니다.")
                 if self._closing:
                     return result(False, "세션이 종료되어 비행을 시작하지 않습니다.")
                 self._attempted = True
-                self.session.data.update(droneState="requesting", droneErrorCode=None)
+                self.session.data.update(droneState="requesting", droneErrorCode=None, error=None)
                 self.session.touch()
                 await self._push()
                 self._execute_task = asyncio.create_task(self.drone.call("drone_execute_route", {
@@ -196,6 +214,8 @@ class LiveMissionRunner(MissionRunner):
         if isinstance(exc, (VisionError, CaptureError)):
             code = "VISION_FAILED" if isinstance(exc, VisionError) else "CAPTURE_FAILED"
             detail = str(exc)
+        elif code in PREFLIGHT_FAILURE_MESSAGES:
+            detail = PREFLIGHT_FAILURE_MESSAGES[code]
         log.error("Tool mission failed (%s, %s)%s", code, type(exc).__name__, ": " + detail if detail else "")
         if self._attempted:
             self.session.abort_mission()
@@ -203,6 +223,8 @@ class LiveMissionRunner(MissionRunner):
             f"MOCK 도구 실행을 중단했습니다 ({code}). 실제 비행은 없으며 자동 재개하지 않습니다."
             if self.expected_mode == "mock" else
             f"실제 드론 작업을 중단했습니다 ({code}). 자동 재개하지 않습니다. 정지 상태를 확인하고 필요하면 RC로 제어·착륙하세요."))
+        if code in PREFLIGHT_FAILURE_MESSAGES:
+            self.session.data["error"] = f"실제 출발 준비를 중단했습니다 ({code}). 자동 재출발하지 않습니다."
         if detail:
             self.session.data["error"] += " " + detail
         if isinstance(exc, PromptRevisionRequired):
@@ -214,8 +236,16 @@ class LiveMissionRunner(MissionRunner):
     async def _read_mission(self):
         mission = self._mission(await self.drone.call("drone_get_mission", {"mission_id": self._mission_id}))
         if mission["state"] in {"failed", "outcome_unknown", "stopped", "stop_requested"}:
-            raise DroneError("MISSION_" + mission["state"].upper())
+            raise self._mission_failure(mission)
         return mission
+
+    def _mission_failure(self, mission):
+        failure = mission.get("error")
+        if (self.expected_mode == "live" and isinstance(failure, str)
+                and failure in PREFLIGHT_FAILURES):
+            code, message = PREFLIGHT_FAILURES[failure]
+            return DroneError(code, message)
+        return DroneError("MISSION_" + mission["state"].upper())
 
     async def _renew_lease(self):
         # Analysis can take longer than the service lease. Keep this independent
@@ -233,7 +263,7 @@ class LiveMissionRunner(MissionRunner):
                 if mission["state"] == "completed":
                     return
                 if mission["state"] in TERMINAL_FLIGHT or mission["stop_requested"]:
-                    raise DroneError("MISSION_" + mission["state"].upper())
+                    raise self._mission_failure(mission)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

@@ -9,6 +9,7 @@ import threading
 import time
 
 from ..vision import VideoSnapshot, VisionDependencyError
+from .fixtures import fixture_preview
 
 
 MAX_EDGE = 960
@@ -47,12 +48,10 @@ def encode_jpeg(frame):
 class FixtureStream:
     """Lazy, local-only fixture source. No vision dependency or network access."""
     def __init__(self, path, clock):
-        with Path(path).open("rb") as source:
-            self.data = source.read(MAX_BYTES + 1)
-        if (len(self.data) > MAX_BYTES or len(self.data) < 24
-                or not self.data.startswith(b"\x89PNG\r\n\x1a\n")
-                or self.data[12:16] != b"IHDR"):
-            raise PreviewUnavailable("Mock fixture unavailable")
+        try:
+            self.data = fixture_preview(path, max_edge=MAX_EDGE, max_bytes=MAX_BYTES)
+        except RuntimeError as exc:
+            raise PreviewUnavailable("Mock fixture unavailable") from exc
         if not all(0 < size <= MAX_EDGE for size in struct.unpack(">II", self.data[16:24])):
             raise PreviewUnavailable("Mock fixture exceeds preview limits")
         self.clock = clock
@@ -151,6 +150,28 @@ class VideoBroker:
             self.mission = False
             self.expire()
 
+    def restart_unstarted_mission_stream(self, verify_ground):
+        """Replace only a failed first-frame connection while the owning mission is grounded."""
+        with self.lock:
+            if self.closed or not self.mission or self.stream is None:
+                raise RuntimeError("A live mission video owner is required for ground recovery")
+            diagnostic = self.stream.diagnostics()
+            if (diagnostic.get("state") != "FAILED" or diagnostic.get("decoded_frames") != 0
+                    or self.stream.snapshot() is not None):
+                raise RuntimeError("Only a failed initial video connection can be recovered")
+            verify_ground()
+            self.stream.close()
+            self.stream = None
+            self.cached = None
+            self.open_failed = self.encoding_failed = False
+            self.last_encode_at = -math.inf
+            # Closing a decoder can block; renew the ground proof before opening its replacement.
+            verify_ground()
+            self._open()
+            if self.stream is None:
+                raise RuntimeError("Ground video recovery could not open a replacement stream")
+            return self.stream
+
     def _result(self, state, *, snapshot=None, content_type=None, image=None, message=None):
         age = None if snapshot is None else (self.clock() - snapshot.received_s) * 1000
         if age is not None and (not math.isfinite(age) or age < 0):
@@ -189,8 +210,8 @@ class VideoBroker:
             if action == "start":
                 if caller not in self.viewers and len(self.viewers) >= self.max_viewers:
                     return self._result("unavailable", message="Camera viewer limit reached.")
-                self.viewers[caller] = self.clock() + self.lease_seconds
                 self._open()
+                self.viewers[caller] = self.clock() + self.lease_seconds
                 if self.watcher is None:
                     self.watcher = threading.Thread(target=self._watch, name="drone-preview-leases", daemon=True)
                     self.watcher.start()

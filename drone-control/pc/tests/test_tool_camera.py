@@ -76,6 +76,29 @@ class BrokerTest(unittest.TestCase):
         self.assertEqual(self.broker.camera("stop", "a")["state"], "stopped")
         self.assertEqual(self.streams, [])
 
+    def test_ground_restart_rechecks_proof_and_preserves_mission_ownership(self):
+        original = self.broker.acquire_mission()
+        original.latest = None
+        original.diagnostics = lambda: {"state": "FAILED", "decoded_frames": 0}
+        self.broker.viewers["viewer"] = self.now + 5
+        proof = Mock()
+        replacement = self.broker.restart_unstarted_mission_stream(proof)
+        self.assertIsNot(replacement, original)
+        self.assertEqual(original.closes, 1)
+        self.assertEqual(proof.call_count, 2)
+        self.assertTrue(self.broker.mission)
+        self.assertIn("viewer", self.broker.viewers)
+
+    def test_ground_restart_refuses_decoded_progress_or_invalid_ground(self):
+        original = self.broker.acquire_mission()
+        with self.assertRaises(RuntimeError):
+            self.broker.restart_unstarted_mission_stream(Mock())
+        original.latest = None
+        original.diagnostics = lambda: {"state": "FAILED", "decoded_frames": 0}
+        with self.assertRaises(InterruptedError):
+            self.broker.restart_unstarted_mission_stream(Mock(side_effect=InterruptedError("not grounded")))
+        self.assertEqual(original.closes, 0)
+
     def test_start_and_two_viewers_share_a_stream_and_encoded_frame(self):
         first = self.broker.camera("start", "a")
         self.assertEqual(set(first), CAMERA_FIELDS)
@@ -92,6 +115,15 @@ class BrokerTest(unittest.TestCase):
         self.assertEqual(self.broker.camera("frame", "b")["state"], "streaming")
         self.broker.camera("stop", "b")
         self.assertEqual(self.streams[0].closes, 1)
+
+    def test_start_lease_begins_after_slow_source_preparation(self):
+        factory = self.broker.factory
+        def slow_factory():
+            self.now += 6
+            return factory()
+        self.broker.factory = slow_factory
+        self.assertEqual(self.broker.camera("start", "a")["state"], "streaming")
+        self.assertEqual(self.broker.viewers["a"], self.now + 5)
 
     def test_mission_and_preview_share_in_either_start_order(self):
         for mission_first in (True, False):
@@ -366,9 +398,11 @@ class MockCameraServiceTest(unittest.TestCase):
                 self.assertEqual(camera["content_type"], "image/png")
                 raw = base64.b64decode(camera["image_base64"], validate=True)
                 fixture = Path(__file__).resolve().parents[3] / "public" / "monitors" / "monitor-1.png"
-                self.assertEqual(raw, fixture.read_bytes())
                 self.assertLessEqual(len(raw), MAX_BYTES)
-                self.assertEqual(struct.unpack(">II", raw[16:24]), (640, 400))
+                width, height = struct.unpack(">II", raw[16:24])
+                original_width, original_height = struct.unpack(">II", fixture.read_bytes()[16:24])
+                self.assertLessEqual(max(width, height), MAX_EDGE)
+                self.assertAlmostEqual(width / height, original_width / original_height, places=2)
                 self.assertIsNone(service._active())
                 self.assertIsNone(service.lease_deadline)
                 self.assertEqual(service.camera("stop", {}, "browser-preview", "stop-1")["camera"]["state"], "stopped")

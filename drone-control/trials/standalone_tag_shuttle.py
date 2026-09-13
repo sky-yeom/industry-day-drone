@@ -474,11 +474,15 @@ def _require_flight(client):
         raise InterruptedError("RC/Virtual Stick authority changed; no re-arm")
 
 
+class GroundVideoUnavailable(RuntimeError):
+    pass
+
+
 def _wait_ground_video(client, limiter, stream, detector, logger):
     # At ground height the downward camera can crop the printed floor tag.
     # The tested takeoff sequence requires fresh video here, then ID0 after
     # takeoff before ascent/lateral motion. All visible IDs are still logged.
-    deadline, previous_key, held = time.monotonic() + 20., None, None
+    deadline, previous_key, held, logged_at = time.monotonic() + 20., None, None, None
     while time.monotonic() < deadline:
         limiter.wait()
         client.status("standalone_ground_video")
@@ -486,6 +490,27 @@ def _wait_ground_video(client, limiter, stream, detector, logger):
             raise InterruptedError("Ground/motor/RC proof changed before takeoff")
         _, age = _observe(client, stream, detector, logger, PatrolPhase.FLOOR_HOME, 0)
         key = _snapshot_key(stream)
+        now = time.monotonic()
+        if logged_at is None or now - logged_at >= 1.:
+            diagnostic = stream.diagnostics() if hasattr(stream, "diagnostics") else {}
+            video = client.raw.get("video")
+            video = video if isinstance(video, dict) else {}
+            binding, socket = video.get("sdk_binding"), video.get("socket")
+            binding = binding if isinstance(binding, dict) else {}
+            socket = socket if isinstance(socket, dict) else {}
+            client.log_event("ground_video_preflight", {
+                "pc_state": diagnostic.get("state"), "received_bytes": diagnostic.get("received_bytes"),
+                "decoded_frames": diagnostic.get("decoded_frames"),
+                "frame_age_s": age if _number(age, 0., 1e9) else None,
+                "frame_key": key, "sdk_activation_state": binding.get("activation_state"),
+                "android_camera_frames": video.get("camera_frames"),
+                "android_camera_age_ms": video.get("camera_age_ms"),
+                "android_written_bytes": socket.get("client_written_bytes"),
+            })
+            logged_at = now
+        diagnostic = stream.diagnostics() if hasattr(stream, "diagnostics") else {}
+        if diagnostic.get("state") == "FAILED":
+            raise GroundVideoUnavailable("Fresh video not confirmed before takeoff")
         if not _number(age, 0., FRESH_S) or key is None:
             held, previous_key = None, None
             continue
@@ -497,11 +522,53 @@ def _wait_ground_video(client, limiter, stream, detector, logger):
         if previous_key is not None and key[0] != previous_key[0]:
             held = None
         previous_key = key
-        now = time.monotonic()
         held = now if held is None else held
         if now - held >= CONFIRM_S:
             return
-    raise RuntimeError("Fresh video not confirmed before takeoff")
+    raise GroundVideoUnavailable("Fresh video not confirmed before takeoff")
+
+
+def _prepare_ground_video(client, limiter, stream, detector, logger, config, video_broker=None):
+    """Retry a failed first-frame video connection once, never after flight or decoded progress."""
+    def verify_ground():
+        client.status("standalone_ground_video_recovery_proof")
+        elapsed_ms = (time.perf_counter() - client.received) * 1000
+        raw = dict(client.raw)
+        for key in ("is_flying_age_ms", "are_motors_on_age_ms"):
+            if type(raw.get(key)) in (int, float):
+                raw[key] += elapsed_ms
+        if elapsed_ms < 0 or not ground_verified(raw):
+            raise InterruptedError("Fresh grounded RC state required for video recovery")
+
+    try:
+        _wait_ground_video(client, limiter, stream, detector, logger)
+        return stream
+    except GroundVideoUnavailable:
+        diagnostic = stream.diagnostics()
+        if (diagnostic.get("state") != "FAILED" or diagnostic.get("decoded_frames") != 0
+                or stream.snapshot() is not None):
+            raise
+        verify_ground()
+        client.log_event("ground_video_reconnect", {
+            "attempt": 1, "previous_received_bytes": diagnostic.get("received_bytes"),
+            "previous_decoded_frames": 0, "ground_verified": True})
+        if video_broker is not None:
+            replacement = video_broker.restart_unstarted_mission_stream(verify_ground)
+        else:
+            stream.close()
+            verify_ground()
+            replacement = FreshVideoStream(
+                config.network.host, config.network.video_port, config.network.video_codec,
+                initial_keyframe_timeout_s=15.)
+        client.stream = replacement
+        try:
+            logger.attach_capture(replacement)
+            _wait_ground_video(client, limiter, replacement, detector, logger)
+        except BaseException:
+            if video_broker is None:
+                replacement.close()
+            raise
+        return replacement
 
 
 def _takeoff_observation(client):
@@ -977,7 +1044,7 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
         logger.attach_capture(stream)
         limiter = RateLimiter(10.)
         client.gimbal_down()
-        _wait_ground_video(client, limiter, stream, detector, logger)
+        stream = _prepare_ground_video(client, limiter, stream, detector, logger, config, video_broker)
         client.stick_mode("advanced_angle")
         client.status("standalone_immediate_takeoff_ground_proof")
         if not ground_verified(client.raw):

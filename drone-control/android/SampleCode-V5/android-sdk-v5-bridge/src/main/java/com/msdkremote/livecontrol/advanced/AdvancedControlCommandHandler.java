@@ -4,6 +4,7 @@ import androidx.annotation.NonNull;
 
 import com.msdkremote.commandserver.CommandHandler;
 import com.msdkremote.commandserver.CommandServer;
+import com.msdkremote.diagnostics.FieldDiagnostics;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -79,6 +80,13 @@ public final class AdvancedControlCommandHandler implements CommandHandler {
 
         // Link activity is diagnostic only; it cannot renew the motion lease.
         stickManager.touchKeepalive();
+        if(java.util.Arrays.asList("arm","takeoff","land","heartbeat","stick_mode","velocity",
+                "attitude","zero","disarm","emergency_stop","gimbal","obstacle_avoidance","status").contains(type)) {
+            java.util.Map<String,Object> diagnostic=new java.util.LinkedHashMap<>();
+            diagnostic.put("type",type);diagnostic.put("sequence",sequence);
+            diagnostic.put("connection_epoch",connectionEpoch);
+            FieldDiagnostics.event("control_request",diagnostic);
+        }
 
         switch (type) {
             case "arm":

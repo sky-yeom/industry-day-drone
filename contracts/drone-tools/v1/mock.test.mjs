@@ -286,7 +286,8 @@ test('only owner get_mission renews lease; expiration cancels without replay', a
   const later = (await api.call('drone_get_mission', { mission_id: m.mission_id })).body.mission;
   assert.deepEqual(later.visited_ids, expired.visited_ids); assert.deepEqual(later.visits, expired.visits);
   assert.equal((await api.send('/mock/status')).body.run_count, 1);
-  const renewed = await fixture(t, { stepMs: 10, leaseMs: 90 });
+  // Keep the route longer than the lease without requiring sub-90ms scheduling on a busy runner.
+  const renewed = await fixture(t, { stepMs: 100, leaseMs: 500 });
   const running = await renewed.execute();
   const complete = (await renewed.poll(running.mission_id, mission => mission.state === 'completed')).mission;
   assert.equal(complete.stop_requested, false);

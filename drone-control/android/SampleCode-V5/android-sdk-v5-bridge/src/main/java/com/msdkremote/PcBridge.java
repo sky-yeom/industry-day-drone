@@ -2,6 +2,7 @@ package com.msdkremote;
 
 import android.util.Log;
 import android.os.SystemClock;
+import com.msdkremote.diagnostics.FieldDiagnostics;
 import com.msdkremote.lifecycle.*;
 import dji.sdk.keyvalue.key.*;
 import dji.v5.manager.KeyManager;
@@ -62,6 +63,7 @@ public final class PcBridge {
     private PcBridge() {}
 
     public static synchronized void start(String armToken) {
+        FieldDiagnostics.event("bridge_start", java.util.Collections.singletonMap("already_scheduled", scheduled));
         token = armToken;
         registered = true;
         lastEvent = "SDK_REGISTERED";
@@ -78,6 +80,10 @@ public final class PcBridge {
         if(!"PRODUCT_CHANGED".equals(event) && productId==id && java.util.Objects.equals(productConnected,connected))return;
         final long serial=++eventSerial, capturedGeneration=++connectionGeneration;
         productId=id;productConnected=connected;lastEvent=event;
+        java.util.Map<String,Object> diagnostic=new java.util.LinkedHashMap<>();
+        diagnostic.put("event",event);diagnostic.put("product_id",id);
+        diagnostic.put("connected",connected);diagnostic.put("generation",capturedGeneration);
+        FieldDiagnostics.event("bridge_product_event",diagnostic);
         MaintenanceGate.SHARED.sourceChanged(capturedGeneration);
         // Capture this event; a later reconnect must not erase an earlier disconnect cleanup.
         worker.execute(()->{
@@ -100,6 +106,7 @@ public final class PcBridge {
     }
 
     private static void invalidateBindings() {
+        FieldDiagnostics.callSite("bridge_invalidate_bindings");
         step("telemetry-stop", () -> TelemetryProvider.getInstance().stop());
         step("rc-stop", () -> RcOverrideMonitor.getInstance().stop());
         step("video-unbind", () -> VideoServerManager.getInstance().unbindSdk());
@@ -177,6 +184,7 @@ public final class PcBridge {
         j.put("rc_binding", binding(rc));
         // Subscription installation is NOT proof of aircraft readiness.
         j.put("automatic_arm_or_resume", false);
+        j.put("diagnostic_recorder",new JSONObject(FieldDiagnostics.status()));
         return j;
     }
 

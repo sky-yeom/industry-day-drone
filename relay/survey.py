@@ -264,6 +264,15 @@ class SurveySession:
         self.data["captures"][-1]["status"] = "analyzing"
         return self.set_operation("analyzing", self.data["activeMonitorId"], run_id)
 
+    def _release_pending_capture(self):
+        if self._active_capture:
+            capture = self.data["captures"][-1]
+            if (capture["id"] == self._active_capture and capture["status"] == "analyzing"
+                    and capture["evidence"] is None):
+                # A cancelled analysis leaves a captured image, not a fabricated detection or technical error.
+                capture["status"] = "captured"
+            self._active_capture = None
+
     def apply_detection(self, run_id, capture_id, evidence):
         if (run_id != self.run_id or self.phase != "analyzing"
                 or capture_id != self._active_capture):
@@ -312,6 +321,7 @@ class SurveySession:
                                  "tooLateCount": sum(p["outcome"] == "too_late" for p in people),
                                  "total": len(people),
                              })
+            self._release_pending_capture()
             self.touch()
 
     def pause(self, message):
@@ -342,7 +352,7 @@ class SurveySession:
         self._frozen_ms = self.elapsed_ms()
         self.data.update(missionPhase="aborted", clockRunning=False, activeMonitorId=None,
                          error="임무가 중단되었습니다. 미확인 대상의 결과는 판정하지 않습니다.")
-        self._active_capture = None
+        self._release_pending_capture()
         self.touch()
         return result(True, self.data["error"])
 

@@ -16,6 +16,10 @@ from relay.test_mission_runner import FakeVision, settle
 from relay.test_survey import Clock, NEGATIVE, ready
 
 
+def live_response(**fields):
+    return dict(response(**fields), physical_execution=True)
+
+
 def png(rgb=b"\0\xff\0"):
     def chunk(kind, value):
         return struct.pack(">I", len(value)) + kind + value + struct.pack(">I", zlib.crc32(kind + value) & 0xFFFFFFFF)
@@ -36,6 +40,7 @@ class Backend:
         self.execution_mode = "live"
         self.active_request = None
         self.fail_reads = False
+        self.status_patch = {}
 
     async def call(self, name, envelope):
         self.calls.append((name, deepcopy(envelope)))
@@ -43,14 +48,15 @@ class Backend:
         if name == "drone_get_mission" and self.fail_reads:
             raise OSError("fake read transport failure")
         if name == "drone_get_capabilities":
-            value = response(live_ready=True, profile_id="site-v1", site_revision="rev-1",
+            value = live_response(live_ready=True, profile_id="site-v1", site_revision="rev-1",
                 destinations=[dict(destination_id=f"tag-{n}", monitor_id=f"monitor-{n}") for n in (1, 2, 3)],
                 supported_ordered_sequences=[["tag-3", "tag-1", "tag-2"]])
             value["execution_mode"] = self.execution_mode
             return value
         if name == "drone_get_status":
-            return response(active_mission_id=self.mission["mission_id"] if self.mission else None,
-                active_request=self.active_request)
+            return live_response(**dict(connected=True, ground_verified=True,
+                active_mission_id=self.mission["mission_id"] if self.mission else None,
+                active_request=self.active_request) | self.status_patch)
         if name == "drone_execute_route":
             route = envelope["arguments"]["destination_ids"]
             self.mission = dict(mission_id="live-1", state="running", destination_ids=route,
@@ -77,8 +83,8 @@ class Backend:
                             destination_id=visit["destination_id"], capture_id=cid, arrival_confirmed=True,
                             content_type="image/png", image_base64=base64.b64encode(png()).decode(),
                             captured_at_unix_ms=1234567890000, sha256=hashlib.sha256(png()).hexdigest()) | self.capture_patch)
-            return response(mission_id="live-1", captures=records)
-        return response(mission=deepcopy(self.mission))
+            return live_response(mission_id="live-1", captures=records)
+        return live_response(mission=deepcopy(self.mission))
 
 
 class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
@@ -105,12 +111,65 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
     def commands(self, name):
         return [call for call in self.backend.calls if call[0] == name]
 
+    async def test_unready_real_controller_never_admits_route_or_starts_timer(self):
+        cases = [
+            ({"connected": False}, "DRONE_DISCONNECTED"),
+            ({"connected": None}, "DRONE_DISCONNECTED"),
+            ({"ground_verified": False}, "GROUND_UNVERIFIED"),
+            ({"ground_verified": None}, "GROUND_UNVERIFIED"),
+            ({"raw_telemetry": {"fc_health": {"state": "HANDLER_FAULT",
+                                             "error": "private-sdk-details"}}}, "FLIGHT_CONTROLLER_UNAVAILABLE"),
+        ]
+        for changes, code in cases:
+            with self.subTest(changes=changes):
+                self.backend.status_patch = changes
+                outcome = await self.runner.launch()
+                self.assertFalse(outcome["ok"])
+                self.assertEqual(self.session.data["droneErrorCode"], code)
+                self.assertIn("실제 출발 요청을 보내지 않았습니다", outcome["facts"])
+                self.assertNotIn("private-sdk-details", outcome["facts"])
+                self.assertFalse(self.runner._attempted)
+                self.assertFalse(self.session.data["clockRunning"])
+                self.assertEqual(self.session.phase, "ready")
+                self.assertEqual(self.commands("drone_execute_route"), [])
+                self.assertEqual(self.commands("drone_stop_mission"), [])
+
+        self.backend.status_patch = {}
+        outcome = await self.runner.launch()
+        self.assertTrue(outcome["ok"])
+        self.assertIsNone(self.session.data["droneErrorCode"])
+        self.assertIsNone(self.session.data["error"])
+        self.assertEqual(len(self.commands("drone_execute_route")), 1)
+        self.assertEqual(self.commands("drone_execute_route")[0][1]["arguments"]["destination_ids"],
+                         ["tag-3", "tag-1", "tag-2"])
+
+    async def test_real_response_cannot_claim_live_with_nonphysical_flag(self):
+        from relay.drone_client import DroneError
+        for value in (False, None, 1):
+            with self.subTest(value=value), self.assertRaisesRegex(DroneError, "모드"):
+                self.runner._live_response({"execution_mode": "live", "physical_execution": value})
+
     async def test_safe_vision_error_is_reported_without_dispatching_flight(self):
         from relay.vision import VisionError
         await self.runner._fail(VisionError("Azure image request failed (HTTP 401)."))
         self.assertEqual(self.session.data["droneErrorCode"], "VISION_FAILED")
         self.assertIn("HTTP 401", self.session.data["error"])
         self.assertEqual(self.commands("drone_execute_route"), [])
+
+    async def test_video_preflight_failure_surfaces_safe_cause_not_only_mission_stopped(self):
+        error = self.runner._mission_failure({
+            "state": "stopped", "error": "RuntimeError: Fresh video not confirmed before takeoff"})
+        await self.runner._fail(error)
+        self.assertEqual(self.session.data["droneErrorCode"], "PREFLIGHT_VIDEO_UNAVAILABLE")
+        self.assertIn("폰 화면의 영상과 PC 전송 영상은 별도", self.session.data["error"])
+        self.assertNotIn("착륙하세요", self.session.data["error"])
+        self.assertEqual(self.commands("drone_execute_route"), [])
+
+    async def test_unknown_controller_error_is_not_forwarded_to_browser(self):
+        error = self.runner._mission_failure({"state": "stopped", "error": "private-secret-token"})
+        await self.runner._fail(error)
+        self.assertEqual(self.session.data["droneErrorCode"], "MISSION_STOPPED")
+        self.assertNotIn("private-secret-token", self.session.data["error"])
 
     async def test_unassessable_request_keeps_revision_message_without_dispatching(self):
         from relay.appearance import REVISION_REQUEST

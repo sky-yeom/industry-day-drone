@@ -515,6 +515,31 @@ class AzureTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ContractSimulationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_equivalent_compression_passes_but_changed_pixels_do_not(self):
+        from dataclasses import replace
+        import struct
+        import zlib
+        from relay.contract_mock import _chunk
+        from relay.vision import _contract_pixels
+        frame = self.frame()
+        pixels = _contract_pixels(frame.image_bytes)
+        header = struct.pack(">IIBBBBB", 640, 360, 8, 2, 0, 0, 0)
+        for changed in (False, True):
+            with self.subTest(changed=changed):
+                candidate = bytearray(pixels)
+                if changed:
+                    candidate[-1] ^= 1
+                image = (b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", header)
+                         + _chunk(b"IDAT", zlib.compress(candidate, level=0)) + _chunk(b"IEND", b""))
+                if changed:
+                    with self.assertRaisesRegex(VisionError, "픽셀"):
+                        await ContractMockVision().analyze(replace(frame, image_bytes=image),
+                                                           search_prompt="초록색 옷을 입은 사람")
+                else:
+                    result = await ContractMockVision().analyze(
+                        replace(frame, image_bytes=image), search_prompt="초록색 옷을 입은 사람")
+                    self.assertTrue(result["targetPresent"])
+
     def frame(self):
         from relay.contract_mock import _capture
         record = _capture("test-mission", 0, "tag-1", 1, 1, 1)

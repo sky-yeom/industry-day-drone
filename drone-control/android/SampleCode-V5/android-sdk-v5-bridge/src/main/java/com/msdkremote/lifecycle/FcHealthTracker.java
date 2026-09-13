@@ -56,6 +56,12 @@ public final class FcHealthTracker {
         return degraded?"DEGRADED": "WARMING";
     }
     public synchronized Map<String,Object> snapshot(long now) {
+        return snapshot(now,true);
+    }
+    public synchronized Map<String,Object> diagnosticSnapshot(long now) {
+        return snapshot(now,false);
+    }
+    private Map<String,Object> snapshot(long now,boolean includeRaw) {
         Map<String,Object> out=new LinkedHashMap<>(), per=new LinkedHashMap<>();
         out.put("state",state(now));out.put("generation",generation);
         for(Map.Entry<String,Key> e:keys.entrySet()) {
@@ -64,7 +70,8 @@ public final class FcHealthTracker {
             v.put("get_success_age_ms",k.get<0?null:Math.max(0,now-k.get));
             v.put("consecutive_failures",k.failures);v.put("consecutive_handler_failures",k.handlers);
             v.put("last_error_code",k.error);v.put("source",k.source);
-            v.put("last_error_raw",k.rawError);v.put("last_error_age_ms",k.errorAt<0?null:Math.max(0,now-k.errorAt));
+            if(includeRaw)v.put("last_error_raw",k.rawError);
+            v.put("last_error_age_ms",k.errorAt<0?null:Math.max(0,now-k.errorAt));
             v.put("get_started_age_ms",k.started<0?null:Math.max(0,now-k.started));
             v.put("get_completed_age_ms",k.completed<0?null:Math.max(0,now-k.completed));
             v.put("failure_streak_age_ms",k.failureSince<0?null:Math.max(0,now-k.failureSince));

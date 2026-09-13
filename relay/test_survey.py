@@ -312,6 +312,28 @@ class SurveyTests(unittest.TestCase):
         self.assertIn(NEGATIVE["description"], s.debrief())
         self.assertIn("마지막 사진의 관찰 내용은 이거야.", s.debrief())
 
+    def test_deadline_or_abort_releases_pending_analysis_without_fabricating_evidence(self):
+        for ending in ("deadline", "abort"):
+            with self.subTest(ending=ending):
+                clock = Clock()
+                session = SurveySession(clock=clock)
+                ready(session)
+                session.launch_mission()
+                session.set_operation("capturing", "monitor-1", session.run_id)
+                session.add_capture(capture("monitor-1"), session.run_id)
+                session.analyzing("frame-1", session.run_id)
+                if ending == "deadline":
+                    clock.advance(45000)
+                    session.expire()
+                    self.assertEqual(session.data["score"]["tooLateCount"], 3)
+                else:
+                    session.abort_mission()
+                    self.assertIsNone(session.data["score"])
+                self.assertEqual(session.data["captures"][-1]["status"], "captured")
+                self.assertIsNone(session.data["captures"][-1]["evidence"])
+                self.assertIsNone(session._active_capture)
+                self.assertFalse(session.apply_detection(session.run_id, "frame-1", POSITIVE))
+
     def test_pause_excludes_only_error_wait_and_abort_has_no_fake_outcomes(self):
         s = self.session
         ready(s)

@@ -13,6 +13,8 @@ import hashlib
 import json
 import math
 import re
+import struct
+import zlib
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -395,6 +397,27 @@ class AzureVision:
             raise VisionError("Azure 이미지 분석 결과가 누락되었거나 거절·중단되어 사용할 수 없습니다.") from exc
 
 
+def _contract_pixels(image: bytes) -> bytes:
+    if image[16:29] != struct.pack(">IIBBBBB", 640, 360, 8, 2, 0, 0, 0):
+        raise VisionError("Test 모드 생성 이미지의 크기·형식이 다릅니다.")
+    compressed = []
+    offset = 8
+    while offset + 12 <= len(image):
+        size = struct.unpack_from(">I", image, offset)[0]
+        if image[offset + 4:offset + 8] == b"IDAT":
+            compressed.append(image[offset + 8:offset + 8 + size])
+        offset += size + 12
+    expected_size = (640 * 3 + 1) * 360
+    decoder = zlib.decompressobj()
+    try:
+        pixels = decoder.decompress(b"".join(compressed), expected_size + 1)
+    except zlib.error as exc:
+        raise VisionError("Test 모드 생성 이미지의 픽셀을 해석하지 못했습니다.") from exc
+    if len(pixels) != expected_size or not decoder.eof or decoder.unused_data:
+        raise VisionError("Test 모드 생성 이미지의 픽셀 크기가 다릅니다.")
+    return pixels
+
+
 class ContractMockVision:
     """Deterministic scenario observations for explicitly generated contract frames."""
 
@@ -411,7 +434,7 @@ class ContractMockVision:
                 or not 0 <= capture.visit_index <= 2
                 or capture.destination_id not in CONTRACT_SIMULATION):
             raise VisionError("Test 모드는 고정 mock에서 받은 임무별 생성 프레임만 처리합니다.")
-        # A forgeable PNG text marker is not enough: compare the entire generator output.
+        # Node and Python can compress identical scanlines differently; compare all bounded pixel bytes.
         try:
             from .contract_mock import _capture
         except ImportError:
@@ -421,7 +444,7 @@ class ContractMockVision:
         if ordinal is None:
             raise VisionError("Test 모드 생성 프레임의 식별자를 확인할 수 없습니다.")
         expected = _capture(capture.mission_id, capture.visit_index, capture.destination_id, ordinal, 1, 1)
-        if capture.image_bytes != base64.b64decode(expected["image_base64"]):
+        if _contract_pixels(capture.image_bytes) != _contract_pixels(base64.b64decode(expected["image_base64"])):
             raise VisionError("Test 모드는 검증된 생성 프레임의 픽셀만 처리합니다.")
         conditions = _fixture_conditions(search_prompt, appearance_constraints, unsupported_appearance)
         matches = matches_appearance(CONTRACT_SIMULATION[capture.destination_id], conditions, [])

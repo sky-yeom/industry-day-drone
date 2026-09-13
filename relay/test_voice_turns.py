@@ -8,7 +8,7 @@ from relay.survey import SurveySession
 from relay.test_mission_runner import FakeCamera, FakeVision
 from relay.test_server import Browser, Upstream, participant_turn, spoken_reply
 from relay.test_survey import PROMPT_ARGS, SEARCH_PROMPT, ready
-from relay.voice_turns import VoiceTurns, names_stop
+from relay.voice_turns import VoiceTurns, is_affirmative, names_stop
 
 
 class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
@@ -416,6 +416,23 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
 
 
 class StopInterpretationTests(unittest.TestCase):
+    def test_polite_and_natural_destination_choices_keep_one_exact_destination(self):
+        for text, expected in (
+            ("불난 집이요", "monitor-3"),
+            ("불난 집으로 가고 싶어", "monitor-3"),
+            ("불이 난 집부터 가고 싶어요", "monitor-3"),
+            ("바다에 빠진 사람을 먼저 구하고 싶어요", "monitor-1"),
+            ("잔해 쪽으로 갈게요", "monitor-2"),
+        ):
+            for monitor in ("monitor-1", "monitor-2", "monitor-3"):
+                with self.subTest(text=text, monitor=monitor):
+                    self.assertEqual(names_stop(text, monitor), monitor == expected)
+        for text in ("불난 집으로 가고 싶지 않아", "바다 말고 잔해로 갈게요",
+                     "불난 집이나 바다로 가고 싶어", "잔해로 갈까요?",
+                     "불난 집으로 가고 싶으면 출발해", "불난 집으로 가지 마세요"):
+            for monitor in ("monitor-1", "monitor-2", "monitor-3"):
+                self.assertFalse(names_stop(text, monitor), text)
+
     def test_supported_aliases_and_negation(self):
         for text, monitor in (("바다", "monitor-1"), ("1번으로 가자", "monitor-1"),
                               ("다음은 잔해", "monitor-2"), ("불난 집부터", "monitor-3"),
@@ -427,6 +444,15 @@ class StopInterpretationTests(unittest.TestCase):
                      "바다 아니면 잔해", "바다 먼저 잔해 다음", "1번과 2번"):
             for monitor in ("monitor-1", "monitor-2", "monitor-3"):
                 self.assertFalse(names_stop(text, monitor), text)
+
+
+class DepartureInterpretationTests(unittest.TestCase):
+    def test_polite_departure_requires_unconditional_affirmation(self):
+        for text in ("출발해 주세요", "네, 출발시켜 주세요", "응 출발시켜줘"):
+            self.assertTrue(is_affirmative(text), text)
+        for text in ("출발하지 마세요", "아직 출발하지 말아 주세요",
+                     "불난 집부터 가면 출발해 주세요", "출발해도 될까"):
+            self.assertFalse(is_affirmative(text), text)
 
 
 class VoiceTimingTests(unittest.TestCase):

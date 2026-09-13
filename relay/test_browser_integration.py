@@ -161,6 +161,16 @@ class PreviewTests(unittest.IsolatedAsyncioTestCase):
 
 
 class StatusTests(unittest.IsolatedAsyncioTestCase):
+    def test_real_readiness_reports_handler_failure_without_exposing_raw_sdk_data(self):
+        from relay.drone_status import live_readiness_issue
+        issue = live_readiness_issue({
+            "connected": True, "ground_verified": False,
+            "raw_telemetry": {"fc_health": {"state": "HANDLER_FAULT", "last_error_raw": "private-secret"}}})
+        self.assertEqual(issue[0], "FLIGHT_CONTROLLER_UNAVAILABLE")
+        self.assertNotIn("private-secret", issue[1])
+        self.assertIsNone(live_readiness_issue({"connected": True, "ground_verified": True}))
+        self.assertEqual(live_readiness_issue({"connected": True})[0], "GROUND_UNVERIFIED")
+
     async def test_mock_status_is_not_physical_connection_or_automatic_mission(self):
         calls = []
         caps = {"execution_mode": "mock", "live_ready": False,

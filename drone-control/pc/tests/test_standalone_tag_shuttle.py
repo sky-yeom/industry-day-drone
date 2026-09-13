@@ -564,6 +564,67 @@ class MissionLifecycleTests(StandaloneTestCase):
         self.assertTrue(all(isinstance(call, tuple) and call[0] == "status" for call in client.calls))
         self.assertGreaterEqual(logger.observations.call_count, 4)
 
+    def test_failed_initial_video_reconnects_once_while_grounded_without_flight_commands(self):
+        client, logger = FakeClient(), MagicMock()
+        original = SimpleNamespace(diagnostics=lambda: {
+            "state": "FAILED", "decoded_frames": 0, "received_bytes": 0}, snapshot=lambda: None)
+        replacement = object()
+        broker = MagicMock()
+        def restart(verify_ground):
+            verify_ground()
+            return replacement
+        broker.restart_unstarted_mission_stream.side_effect = restart
+        failure = shuttle.GroundVideoUnavailable("Fresh video not confirmed before takeoff")
+        with patch.object(shuttle, "_wait_ground_video", side_effect=[failure, None]) as wait:
+            actual = shuttle._prepare_ground_video(client, None, original, None, logger, config(), broker)
+        self.assertIs(actual, replacement)
+        self.assertIs(client.stream, replacement)
+        self.assertEqual(wait.call_count, 2)
+        broker.restart_unstarted_mission_stream.assert_called_once()
+        logger.attach_capture.assert_called_once_with(replacement)
+        self.assertTrue(all(call[0] == "status" for call in client.calls))
+
+    def test_video_recovery_cannot_loop_or_run_after_ground_loss_or_decoded_progress(self):
+        failure = shuttle.GroundVideoUnavailable("Fresh video not confirmed before takeoff")
+        for case in ("second_failure", "airborne", "decoded"):
+            with self.subTest(case=case):
+                client, logger, broker = FakeClient(), MagicMock(), MagicMock()
+                stream = SimpleNamespace(diagnostics=lambda: {
+                    "state": "FAILED", "decoded_frames": 1 if case == "decoded" else 0},
+                    snapshot=lambda: None)
+                if case == "airborne":
+                    client.raw["is_flying"] = True
+                with patch.object(shuttle, "_wait_ground_video", side_effect=failure) as wait:
+                    with self.assertRaises((shuttle.GroundVideoUnavailable, InterruptedError)):
+                        shuttle._prepare_ground_video(client, None, stream, None, logger, config(), broker)
+                self.assertEqual(broker.restart_unstarted_mission_stream.call_count,
+                                 1 if case == "second_failure" else 0)
+                self.assertLessEqual(wait.call_count, 2)
+                self.assertNotIn("takeoff", client.calls)
+                self.assertNotIn("arm", client.calls)
+
+    def test_stalled_ground_video_is_logged_and_never_allows_takeoff(self):
+        client, logger, clock = FakeClient(), MagicMock(), [100.]
+        client.raw["video"] = {"camera_frames": 82, "camera_age_ms": 325532,
+                               "sdk_binding": {"activation_state": "STALLED"},
+                               "socket": {"client_written_bytes": 0}}
+        stream = SimpleNamespace(
+            last_detection_snapshot=None, detect_latest=lambda *_args: ([], float("inf")),
+            diagnostics=lambda: {"state": "FAILED", "received_bytes": 0, "decoded_frames": 0})
+        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .11))
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                patch.object(shuttle.time, "perf_counter", lambda: clock[0]), \
+                patch.object(client, "log_event") as logged:
+            with self.assertRaisesRegex(RuntimeError, "Fresh video not confirmed"):
+                shuttle._wait_ground_video(client, limiter, stream, None, logger)
+        records = [call.args[1] for call in logged.call_args_list if call.args[0] == "ground_video_preflight"]
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[-1]["sdk_activation_state"], "STALLED")
+        self.assertEqual(records[-1]["received_bytes"], 0)
+        self.assertIsNone(records[-1]["frame_age_s"])
+        self.assertNotIn("takeoff", client.calls)
+        self.assertNotIn("arm", client.calls)
+
     def test_release_ages_include_time_since_ack_not_only_callback_age(self):
         client = FakeClient()
         client.received = time.perf_counter() - .3

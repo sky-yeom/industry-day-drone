@@ -167,6 +167,7 @@ public class ControlServerManager
 
         @Override
         public void onClientConnected(InetAddress address) {
+            com.msdkremote.diagnostics.FieldDiagnostics.event("control_client_connected",java.util.Collections.emptyMap());
             AdvancedControlCommandHandler handler = ControlServerManager.this.commandHandler;
             if (handler != null) {
                 handler.resetSession();
@@ -180,6 +181,7 @@ public class ControlServerManager
 
         @Override
         public void onClientDisconnected() {
+            com.msdkremote.diagnostics.FieldDiagnostics.event("control_client_disconnected",java.util.Collections.emptyMap());
             // A read-only status client disconnecting while already disarmed
             // must not generate a misleading DJI disable failure. An armed or
             // in-flight arm handshake still releases immediately.

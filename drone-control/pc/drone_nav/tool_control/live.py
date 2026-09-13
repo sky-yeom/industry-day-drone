@@ -22,7 +22,7 @@ from ..vision import TcpVideoStream
 from .camera import VideoBroker
 from .service import ToolError
 
-BUILD_ID = "5.18-connectivity.20260910.6"
+BUILD_ID = "5.18-connectivity.20260913.1"
 
 
 def fresh(raw, key, max_ms=500):

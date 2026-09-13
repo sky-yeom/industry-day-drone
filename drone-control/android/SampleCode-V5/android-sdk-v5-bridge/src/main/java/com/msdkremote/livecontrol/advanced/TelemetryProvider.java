@@ -16,6 +16,9 @@ import com.msdkremote.lifecycle.PollLease;
 import com.msdkremote.lifecycle.PendingSdkReads;
 import com.msdkremote.lifecycle.FcHealthTracker;
 import com.msdkremote.PcBridge;
+import com.msdkremote.diagnostics.FieldDiagnostics;
+import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.function.BiConsumer;
 
 import dji.sdk.keyvalue.key.DJIKey;
@@ -54,6 +57,9 @@ public final class TelemetryProvider {
     private final DJIKey<Boolean> connectionKey = KeyTools.createKey(FlightControllerKey.KeyConnection);
     private String lastPollError = null;
     private long lastPollErrorMs = 0;
+    private final Map<String,String> diagnosticErrors = new LinkedHashMap<>();
+    private long lastDiagnosticMs;
+    private String lastDiagnosticState;
 
     private final PollLease velocityPollInFlight = new PollLease(2000);
     private final PollLease attitudePollInFlight = new PollLease(2000);
@@ -119,7 +125,10 @@ public final class TelemetryProvider {
             session = ++generation;
             sourceGeneration = PcBridge.connectionGeneration();
             health.reset(generation);
+            diagnosticErrors.clear();
+            lastDiagnosticState=null;
         }
+        FieldDiagnostics.callSite("telemetry_start");
         try {
         Log.i(TAG, "Starting telemetry listeners");
         bindingManager.listen(velocityKey, bindingHolder, (oldValue, newValue) -> {
@@ -180,6 +189,7 @@ public final class TelemetryProvider {
             synchronized(lock) {
                 if (!started || generation != session || sourceGeneration != PcBridge.connectionGeneration()) return;
                 health.connection(newValue); health.listen("Connection",SystemClock.elapsedRealtime(),newValue!=null);
+                FieldDiagnostics.event("fc_connection_listener",java.util.Collections.singletonMap("connected",newValue));
             }
         });
         pollValue(connectionKey, connectionPollInFlight, "Connection", 1000, (v,t)->health.connection(v));
@@ -205,6 +215,7 @@ public final class TelemetryProvider {
     }
 
     public void stop() {
+        FieldDiagnostics.callSite("telemetry_stop");
         ScheduledExecutorService toStop;
         final KeyManager ownerManager;final Object ownerHolder;
         synchronized (lock) {
@@ -263,7 +274,16 @@ public final class TelemetryProvider {
                 pollValue(batteryKey, batteryPollInFlight, "BatteryPowerPercent", 1000,
                         (value, when) -> batteryPercent = value);
             }
+            synchronized(lock) {
+                long now=SystemClock.elapsedRealtime();
+                String state=health.state(now);
+                if(!state.equals(lastDiagnosticState)||now-lastDiagnosticMs>=1000) {
+                    FieldDiagnostics.event("fc_health",diagnosticSnapshot(now));
+                    lastDiagnosticState=state;lastDiagnosticMs=now;
+                }
+            }
         } catch (Throwable error) {
+            FieldDiagnostics.event("telemetry_poll_exception",java.util.Collections.singletonMap("exception_class",error.getClass().getName()));
             Log.e(TAG, "telemetry poll tick failed", error);
         }
     }
@@ -294,7 +314,8 @@ public final class TelemetryProvider {
             health.issued(id,now);
         }
         try {
-            KeyManager.getInstance().getValue(key,new CommonCallbacks.CompletionCallbackWithParam<T>() {
+            final KeyManager requestManager=KeyManager.getInstance();
+            requestManager.getValue(key,new CommonCallbacks.CompletionCallbackWithParam<T>() {
                 @Override public void onSuccess(T value) {
                     if(!PendingSdkReads.SHARED.complete(physical.id))return;
                     synchronized(lock) {
@@ -302,6 +323,8 @@ public final class TelemetryProvider {
                                 || !inFlight.complete(request))return;
                         long now=SystemClock.elapsedRealtime();
                         health.success(id,now,value!=null,interval);
+                        if(value!=null && diagnosticErrors.remove(id)!=null)
+                           recordGet("fc_get_recovered",id,null,physical,requestManager,now);
                         if(value!=null)update.accept(value,now);
                     }
                 }
@@ -312,6 +335,9 @@ public final class TelemetryProvider {
                                 || !inFlight.complete(request))return;
                         pollFailures++; lastPollError=key+": "+error; lastPollErrorMs=SystemClock.elapsedRealtime();
                         health.failed(id,lastPollErrorMs,error.errorCode(),error.toString());
+                        String previous=diagnosticErrors.put(id,error.errorCode());
+                        if(!java.util.Objects.equals(error.errorCode(),previous))
+                            recordGet("fc_get_failed",id,error.errorCode(),physical,requestManager,lastPollErrorMs);
                     }
                 }
             });
@@ -321,9 +347,36 @@ public final class TelemetryProvider {
                 if(session==generation && inFlight.complete(request)) {
                     pollFailures++;lastPollError=error.toString();lastPollErrorMs=SystemClock.elapsedRealtime();
                     health.failed(id,lastPollErrorMs,"SDK_SUBMISSION_UNCERTAIN");
+                    recordGet("fc_get_submission_uncertain",id,"SDK_SUBMISSION_UNCERTAIN",
+                            physical,null,lastPollErrorMs);
                 }
             }
         }
+    }
+
+    private Map<String,Object> diagnosticSnapshot(long now) {
+        Map<String,Object> event=new LinkedHashMap<>();
+        event.put("connection_generation",PcBridge.connectionGeneration());
+        event.put("source_generation",sourceGeneration);
+        event.put("telemetry_generation",generation);
+        event.put("product_connected",PcBridge.productConnected());
+        event.put("started",started);
+        event.put("listener_manager_id",System.identityHashCode(listenerManager));
+        event.put("fc_health",health.diagnosticSnapshot(now));
+        event.put("pending_reads",PendingSdkReads.SHARED.snapshot(now));
+        event.put("is_flying",isFlying);event.put("are_motors_on",areMotorsOn);
+        event.put("flying_age_ms",flyingMs==0?null:Math.max(0,now-flyingMs));
+        event.put("motors_age_ms",motorsMs==0?null:Math.max(0,now-motorsMs));
+        return event;
+    }
+
+    private void recordGet(String event,String id,String code,PendingSdkReads.Read read,
+                           KeyManager manager,long now) {
+        Map<String,Object> fields=diagnosticSnapshot(now);
+        fields.put("key",id);fields.put("error_code",code);fields.put("request_id",read.id);
+        fields.put("latency_ms",Math.max(0,now-read.submittedMs));
+        fields.put("request_manager_id",System.identityHashCode(manager));
+        FieldDiagnostics.event(event,fields);
     }
 
     public FcHealthTracker healthTracker() { return health; }
@@ -364,7 +417,7 @@ public final class TelemetryProvider {
         long now;
         JSONObject json = new JSONObject();
         try {
-            json.put("bridge_build_id", "5.18-connectivity.20260910.6");
+            json.put("bridge_build_id", "5.18-connectivity.20260913.1");
             json.put("bridge_health", com.msdkremote.PcBridge.diagnostics());
             json.put("max_tilt_angle_deg", StickControlManager.MAX_TILT_ANGLE_DEG);
             JSONObject video = com.msdkremote.livevideo.VideoServerManager.getInstance().diagnostics();

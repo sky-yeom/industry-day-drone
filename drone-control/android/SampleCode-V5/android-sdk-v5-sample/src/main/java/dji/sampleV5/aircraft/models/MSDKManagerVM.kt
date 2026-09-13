@@ -10,6 +10,7 @@ import dji.v5.manager.interfaces.SDKManagerCallback
 import dji.v5.manager.ldm.LDMManager
 import dji.v5.network.DJINetworkManager
 import dji.v5.utils.common.ContextUtil
+import com.msdkremote.diagnostics.FieldDiagnostics
 
 class MSDKManagerVM : ViewModel() {
     // The data is held in livedata mode, but you can also save the results of the sdk callbacks any way you like.
@@ -21,38 +22,47 @@ class MSDKManagerVM : ViewModel() {
     var isInit = false
 
     fun initMobileSDK(appContext: Context) {
+        FieldDiagnostics.start(appContext)
+        FieldDiagnostics.callSite("sdk_init_requested")
         // Initialize and set the sdk callback, which is held internally by the sdk until destroy() is called
         SDKManager.getInstance().init(appContext, object : SDKManagerCallback {
             override fun onRegisterSuccess() {
+                FieldDiagnostics.event("sdk_registered", emptyMap())
                 lvRegisterState.postValue(Pair(true, null))
                 // PC bridge: TCP servers for control, video and key queries.
                 com.msdkremote.PcBridge.start(dji.sampleV5.aircraft.BuildConfig.OPERATOR_ARM_TOKEN)
             }
 
             override fun onRegisterFailure(error: IDJIError) {
+                FieldDiagnostics.event("sdk_registration_failed", mapOf("error_code" to error.errorCode()))
                 lvRegisterState.postValue(Pair(false, error))
             }
 
             override fun onProductDisconnect(productId: Int) {
+                FieldDiagnostics.event("sdk_product_disconnected", mapOf("product_id" to productId))
                 lvProductConnectionState.postValue(Pair(false, productId))
                 com.msdkremote.PcBridge.onProductDisconnected(productId)
             }
 
             override fun onProductConnect(productId: Int) {
+                FieldDiagnostics.event("sdk_product_connected", mapOf("product_id" to productId))
                 lvProductConnectionState.postValue(Pair(true, productId))
                 com.msdkremote.PcBridge.onProductConnected(productId)
             }
 
             override fun onProductChanged(productId: Int) {
+                FieldDiagnostics.event("sdk_product_changed", mapOf("product_id" to productId))
                 lvProductChanges.postValue(productId)
                 com.msdkremote.PcBridge.onProductChanged(productId)
             }
 
             override fun onInitProcess(event: DJISDKInitEvent, totalProcess: Int) {
+                FieldDiagnostics.event("sdk_init_progress", mapOf("event" to event.name, "progress" to totalProcess))
                 lvInitProcess.postValue(Pair(event, totalProcess))
                 // Don't forget to call the registerApp()
                 if (event == DJISDKInitEvent.INITIALIZE_COMPLETE) {
                     isInit = true
+                    FieldDiagnostics.event("sdk_register_requested", mapOf("source" to "initialize_complete"))
                     SDKManager.getInstance().registerApp()
                 }
             }
@@ -65,14 +75,19 @@ class MSDKManagerVM : ViewModel() {
 //        LDMManager.getInstance().enableLDM(ContextUtil.getContext(),null)
 
         DJINetworkManager.getInstance().addNetworkStatusListener { isAvailable ->
+            FieldDiagnostics.event("sdk_network_status", mapOf("available" to isAvailable,
+                "initialized" to isInit, "registered" to SDKManager.getInstance().isRegistered))
             if (isInit && isAvailable && !SDKManager.getInstance().isRegistered) {
+                FieldDiagnostics.event("sdk_register_requested", mapOf("source" to "network_available"))
                 SDKManager.getInstance().registerApp()
             }
         }
     }
 
     fun destroyMobileSDK() {
+        FieldDiagnostics.callSite("sdk_destroy_requested")
         SDKManager.getInstance().destroy()
+        FieldDiagnostics.event("sdk_destroy_returned", emptyMap())
     }
 
 }

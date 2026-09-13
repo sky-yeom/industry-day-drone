@@ -1,0 +1,23 @@
+gradle.beforeProject { project ->
+    if (project.name == "sample") {
+        def fileName = System.getenv("DRONE_ANDROID_PROPERTIES")
+        if (!fileName) throw new GradleException("DRONE_ANDROID_PROPERTIES is required")
+        def values = new Properties()
+        new File(fileName).withInputStream { values.load(it) }
+        ["DJI_API_KEY", "OPERATOR_ARM_TOKEN", "STORE_FILE", "STORE_PASSWORD",
+         "KEY_ALIAS", "KEY_PASSWORD"].each { name ->
+            if (!values.getProperty(name)?.trim() || values.getProperty(name) == "REPLACE_ME") {
+                throw new GradleException("Missing private property: " + name)
+            }
+            project.ext.set(name, values.getProperty(name))
+        }
+        if (!new File(values.getProperty("STORE_FILE")).isAbsolute()
+                || !new File(values.getProperty("STORE_FILE")).isFile()) {
+            throw new GradleException("STORE_FILE must be an existing absolute keystore path")
+        }
+        project.ext.AIRCRAFT_API_KEY = values.getProperty("DJI_API_KEY")
+        ["GMAP_API_KEY", "MAPLIBRE_TOKEN"].each { name ->
+            if (values.containsKey(name)) project.ext.set(name, values.getProperty(name))
+        }
+    }
+}

@@ -7,7 +7,8 @@ param(
     [ValidateRange(1024,65535)][int]$RelayPort = 8080,
     [ValidateRange(1024,65535)][int]$WebPort = 3000,
     [string]$RelayPython = '',
-    [string]$ControlPython = ''
+    [string]$ControlPython = '',
+    [string]$VoiceTraceDirectory = ''
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
@@ -56,6 +57,10 @@ foreach ($key in $settings.Keys) {
 }
 # Keep the selected UI branch's voice/persona/VAD defaults; only connection settings are imported.
 $connection['DRONE_RUN_MODE'] = $modeValue
+if ($VoiceTraceDirectory) {
+    Assert-DroneNonSyncedPath -Path $VoiceTraceDirectory
+    $connection['RELAY_VOICE_TRACE_DIRECTORY'] = [IO.Path]::GetFullPath($VoiceTraceDirectory)
+}
 $connection['DRONE_REAL_TRANSPORT'] = 'local'
 $connection['DRONE_CONTROL_TRANSPORT'] = 'local'
 $connection['DRONE_CONTROL_USE_TOOLS'] = '1'

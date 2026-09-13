@@ -2,16 +2,44 @@
 import base64
 import builtins
 import hashlib
+import io
 from pathlib import Path
 import threading
+import struct
+import zlib
 import unittest
 from unittest.mock import patch
 
 from drone_nav.tool_control.service import CaptureMockAdapter
-from drone_nav.tool_control.fixtures import fixture_frames
+from drone_nav.tool_control.fixtures import SIGNATURE, _chunk, _decode, _row, fixture_frames, fixture_preview
 
 
 class CaptureFixtureTests(unittest.TestCase):
+    def test_rgb_and_rgba_variants_preserve_pixels_below_banner_and_resize_preview(self):
+        for channels, color in ((3, 2), (4, 6)):
+            with self.subTest(channels=channels):
+                width, height = 96, 64
+                pixel = bytes((30, 120, 70, 255))[:channels]
+                raw = (b"\0" + pixel * width) * height
+                original = (SIGNATURE + _chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, color, 0, 0, 0))
+                            + _chunk(b"IDAT", zlib.compress(raw)) + _chunk(b"IEND", b""))
+                with patch.object(Path, "open", side_effect=lambda *_a, **_k: io.BytesIO(original)):
+                    first, second = fixture_frames("fixture.png")
+                    preview = fixture_preview("fixture.png", max_edge=48, max_bytes=512 * 1024)
+                self.assertEqual(first, original)
+                self.assertNotEqual(first, second)
+                _, _, _, _, changed = _decode(second)
+                stride = width * channels
+                previous = bytearray(stride)
+                for y in range(height):
+                    row = _row(changed, y, width, channels, previous)
+                    previous = row
+                    if y >= 32:
+                        self.assertEqual(row, pixel * width)
+                _, w, h, c, data = _decode(preview)
+                self.assertEqual((w, h, c), (48, 32, channels))
+                self.assertEqual(data, (b"\0" + pixel * 48) * 32)
+
     def test_mock_capture_has_no_vision_dependency_and_retains_canonical_identity(self):
         real_import = builtins.__import__
         def without_vision(name, *args, **kwargs):

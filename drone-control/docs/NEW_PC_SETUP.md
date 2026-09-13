@@ -1,4 +1,85 @@
-# 새 PC 준비 — feat/drone
+# 새 PC 준비 — 2026-09-13 인계
+
+## 최신 인계 경로
+
+현재 인계 브랜치는 `handoff/drone-backend-20260913`입니다. 최신 `main`의 UI/UX #7을
+유지하면서 PC 영상 초기 수신 복구, 실제 출발 준비 검사, Voice 원문 기록,
+Android의 영구 진단 로그를 포함합니다. 아래의 이전 `feat/drone` 안내보다 이 절을 우선합니다.
+
+```powershell
+git clone --branch handoff/drone-backend-20260913 https://github.com/sky-yeom/industry-day-drone.git
+Set-Location industry-day-drone
+npm.cmd ci
+python -m venv relay\.venv
+& .\relay\.venv\Scripts\python.exe -m pip install -r .\relay\requirements.lock.txt
+python -m venv drone-control\.venv
+& .\drone-control\.venv\Scripts\python.exe -m pip install -e '.\drone-control[vision]'
+$env:NEXT_PUBLIC_RELAY_HTTP = 'http://127.0.0.1:8080'
+$env:NEXT_PUBLIC_RELAY_WS = 'ws://127.0.0.1:8080/ws'
+npm.cmd run build
+az login
+```
+
+토큰·서명 키·실측 설정·APK·실제 로그는 GitHub에 포함하지 않습니다. 별도 로컬
+`private-handoff` 묶음을 이 PC의 **OneDrive 밖**으로 복사한 뒤 실행합니다.
+Azure 로그인 캐시는 이식하지 않으므로 `az login`은 새 PC에서 필요합니다.
+
+```powershell
+.\scripts\import-private-handoff.ps1 -Bundle 'D:\private-handoff' -PhoneIp '10.244.155.20'
+.\scripts\start-integrated.ps1 -Mode Real -CheckOnly `
+  -EnvFile "$env:LOCALAPPDATA\IndustryDayDrone\handoff-config\field-live.env"
+.\scripts\start-integrated.ps1 -Mode Real `
+  -EnvFile "$env:LOCALAPPDATA\IndustryDayDrone\handoff-config\field-live.env" `
+  -VoiceTraceDirectory "$env:LOCALAPPDATA\IndustryDayDrone\logs\voice-trace"
+```
+
+IP는 예시이며 현재 폰 주소를 사용합니다. 가져오기는 개인 설정 안의 이전 PC 경로를 새
+위치로 바꿉니다. 기존 파일을 덮어쓰지 않으며 현장 확인값을 새로 만들어 내지 않습니다.
+이전 임무 DB는 이력으로 보존하되 새 PC에서 재개하지 않습니다. 기체가 실제로 정지한
+상태인지 RC로 확인하고, 미해결 임무를 재전송하지 마세요.
+
+### Android 업데이트와 로그
+
+필요한 앱은 `com.ms.voice`, **`5.18-connectivity.20260913.1`**입니다.
+PC `BUILD_ID`와 private site의 `expected_bridge_build_id`가 일치해야 합니다.
+기존 서명으로 `adb install -r`만 사용하며 삭제·데이터 초기화·서명 변경은 하지 않습니다.
+APK는 로컬 인계 묶음에 포함하거나 다음 명령으로 재생성합니다.
+
+```powershell
+.\scripts\build-android.ps1 `
+  -PrivateProperties "$env:LOCALAPPDATA\IndustryDayDrone\handoff-config\android-private\build.local.properties"
+```
+
+이 스크립트는 고정된 DJI 원본 revision을 받아 Git의 overlay를 적용하므로 Gradle wrapper와
+원본 sample이 누락되지 않습니다. JDK17, Android SDK35 및 SDK 라이선스 승인이 필요합니다.
+원본 다운로드 없이 로컬의 깨끗한 동일 revision을 쓰려면 `-SourceRoot`를 지정합니다.
+실제 키는 외부 properties에서 주입하고 빌드 폴더도 Git·OneDrive 밖에 생성합니다.
+
+앱의 private `files/field-diagnostics/field-0.jsonl`부터 `field-3.jsonl`에
+SDK 초기화·해제 호출 위치, product/USB/activity 이벤트, FC 첫 오류·회복과 상태가 기록됩니다.
+최대 4개×2MiB 순환 기록이며 raw 오류문·토큰·좌표·영상은 새 기록에 넣지 않습니다.
+
+```powershell
+adb devices -l
+.\scripts\collect-phone-diagnostics.ps1 -Serial '<ADB 목록의 장치 ID>'
+```
+
+이 기록기는 내부 저장소에 쓰므로 RC에 USB로 연결하는 동안 PC 연결이 없어도 기록됩니다.
+무선 ADB는 선택사항이며 자동 활성화하지 않습니다. PC 수집 파일도 Git에 넣지 마세요.
+
+### 미해결 사항과 인계 범위
+
+실제 FC `REQUEST_HANDLER_NOT_FOUND`의 최초 발생 원인은 아직 입증되지 않았습니다.
+진단 앱은 상태 변화를 보존하기 위한 변경이며 SDK 근본 해결 완료나 실비행 성공을 뜻하지
+않습니다. 자동 SDK 복구·강제 지상 판정·자동 이륙 재시도는 추가하지 않았습니다.
+실제 영상 수신이 정체된 경우에만 지상에서 초기 스트림을 한 번 교체하는 PC 동작과,
+FC 상태가 나쁜 경우 임무 접수 전에 막는 동작을 구분합니다.
+
+개인화 MAI 이미지와 이전 VLM 실험 산출물은 로컬 인계 묶음의 실험 자료입니다.
+현재 UI에 개인화 workflow가 연결된 것은 아니며 원본 `public\monitors`는 유지합니다.
+별도 Astra 원인 분석은 완료 보고서가 확보되지 않았으므로 결과가 있다고 가정하지 마세요.
+
+## 이전 환경 안내 (참고용)
 
 이 브랜치는 PC 드론 제어, 7개 HTTP 도구, Speech 연결, Android 수정 소스,
 태그 없는 COEX 시험 코드와 가상 시나리오를 포함합니다. 클론만으로 실비행을
@@ -6,7 +87,7 @@
 
 ## 1. 저장소와 실행 환경
 
-최신 통합 브랜치는 `feat/drone`입니다. `feat/drone-control`은 이전 브랜치입니다.
+아래 `feat/drone`은 이전 통합 브랜치입니다. 현재 인계에는 위 명령을 사용합니다.
 
 ```powershell
 git clone --branch feat/drone --single-branch https://github.com/sky-yeom/industry-day-drone.git

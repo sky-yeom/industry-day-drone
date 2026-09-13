@@ -76,7 +76,7 @@ class FieldAdapter(LiveAdapter):
                 or type(site["home_tag_id"]) is not int or site["home_tag_id"] != 6
                 or site["target_height_m"] != 1.5
                 or site["expected_bridge_build_id"] != BUILD_ID):
-            raise ValueError("Field site requires APK.6, floor0, Home6, 1.5m and left-to-right [3,2,1,6]")
+            raise ValueError(f"Field site requires {BUILD_ID}, floor0, Home6, 1.5m and left-to-right [3,2,1,6]")
         self.profile_id = identifier(site["profile_id"])
         self.site_revision = identifier(site["site_revision"])
         self.profile = shuttle.load_profile(profile_path)

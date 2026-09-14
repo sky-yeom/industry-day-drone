@@ -337,7 +337,12 @@ class ShuttleClient(MissionClient):
 
     def observe_frame(self, snapshot):
         if snapshot is None or not _number(time.monotonic() - snapshot.received_s, 0., FRESH_S):
-            raise InterruptedError("Detected camera frame expired before command dispatch")
+            # Nothing has reached the wire yet and the next pass decodes a new
+            # frame, so a stale one asks for a new observation rather than a new
+            # mission. One 344 ms network stall out of 1099 round trips once
+            # ended an otherwise healthy 59 s flight through this path.
+            raise FramingCorrectionDeferred(
+                "Detected camera frame expired before command dispatch")
         if self.video_generation is None:
             self.video_generation = snapshot.key[0]
         elif snapshot.key[0] != self.video_generation:
@@ -764,7 +769,11 @@ def _climb(client, limiter, stream, detector, logger, config, target):
                 previous_key = key
         else:
             held, previous_key = None, None
-            client.attitude(0., 0., up, 0.)
+            try:
+                client.attitude(0., 0., up, 0.)
+            except FramingCorrectionDeferred as exc:
+                # CLIMB_TIMEOUT_S still bounds a camera that never recovers.
+                client.log_event("standalone_climb_deferred", {"reason": str(exc)})
     raise RuntimeError(f"{target:g}m downward height target not confirmed within {CLIMB_TIMEOUT_S:g}s; no lateral command")
 
 
@@ -841,7 +850,15 @@ def traverse_horizontal(client, limiter, stream, detector, logger, config, profi
         })
         # The sole motion-producing call in the wall traversal has one axis.
         if right:
-            client.attitude(0., right, 0., 0.)
+            try:
+                client.attitude(0., right, 0., 0.)
+            except FramingCorrectionDeferred as exc:
+                # Refused before the wire write: hold still and re-observe. The
+                # leg deadline still bounds a camera that never recovers.
+                client.zero()
+                client.log_event("standalone_horizontal_deferred", {
+                    "reason": str(exc), "expected_id": expected,
+                    "requested_right_tilt_deg": right, "frame_age_s": age})
         else:
             client.zero()
         if confirmed is not None:

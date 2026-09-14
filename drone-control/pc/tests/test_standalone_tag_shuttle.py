@@ -798,6 +798,32 @@ class DispatchBoundaryTests(StandaloneTestCase):
                 client.send("attitude", {"forward_tilt_deg": 0., "right_tilt_deg": 0.,
                                          "up_mps": .1, "yaw_rate_rps": 0.})
 
+    def test_stale_frame_defers_the_command_while_a_new_generation_ends_the_mission(self):
+        # A stale frame heals on the next decode, so it must not end a healthy
+        # flight: one 344 ms stall out of 1099 round trips used to abort at 59 s.
+        # A changed generation means the video reconnected and never heals.
+        clock = [100.]
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]):
+            client = self.client(clock)
+            client.phase = "climb"
+            payload = {"forward_tilt_deg": 0., "right_tilt_deg": 0.,
+                       "up_mps": .1, "yaw_rate_rps": 0.}
+            fresh = client.stream.last_detection_snapshot
+            clock[0] += shuttle.FRESH_S + .01
+            with self.assertRaisesRegex(shuttle.FramingCorrectionDeferred,
+                                        "frame expired before command dispatch"):
+                client.send("attitude", dict(payload))
+            # Deferral stays an InterruptedError so existing handlers still catch it.
+            self.assertIsInstance(shuttle.FramingCorrectionDeferred(""), InterruptedError)
+            client.stream.last_detection_snapshot = SimpleNamespace(
+                key=fresh.key, received_s=clock[0])
+            client._guard_dispatch("attitude", dict(payload))
+            client.stream.last_detection_snapshot = SimpleNamespace(
+                key=(fresh.key[0] + 1, 1), received_s=clock[0])
+            with self.assertRaises(InterruptedError) as caught:
+                client._guard_dispatch("attitude", dict(payload))
+            self.assertNotIsInstance(caught.exception, shuttle.FramingCorrectionDeferred)
+
 
 if __name__ == "__main__":
     unittest.main()

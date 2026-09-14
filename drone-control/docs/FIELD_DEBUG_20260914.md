@@ -512,3 +512,165 @@ venv는 형제 저장소 `industry-day-drone`에 있다 (handoff 저장소가 �
 5. 경로 완주 후 Voice 관문 가시화 (§4.3)
 
 성공 판정: `visited_ids`가 `[6]`을 넘어 늘어나는 것.
+
+---
+
+## 9. 외부 리뷰 교차검증 — `MAIN_FIELD_DEBUG_REVIEW_20260914`
+
+`origin/feat/drone`에 다른 PC(`WhoAmI125`, `a2c49ee`)가 올린 리뷰 문서를 우리 코드와
+한 줄씩 대조했다. 문서를 믿지 않고 전부 원본 코드에서 확인했다.
+
+| 주장 | 검증 결과 | 조치 |
+|---|---|---|
+| `ShuttleClient.arm`이 권한을 2초만 기다린다 | **사실**. `live.py:27` 주석은 "현장에서 3.3초까지 관측"인데 `standalone_tag_shuttle.py:317`은 `+ 2.`였다. `AUTHORITY_HANDOFF_GRACE_S = 4.0`은 `if self._armed` 뒤라 `arm()` 대기 중에는 아예 안 탄다 | `ARM_AUTHORITY_TIMEOUT_S = 5.0` (커밋 `1d1d57a`) |
+| 캡처 훅이 `FramingCorrectionDeferred`를 안 잡는다 | **사실**. `023f363`에서 내가 만든 예외가 `on_capture` 경로로 새어나갔고, `field.py`는 사진 한 장당 `observe_frame()`을 3번 부른다 | try/except 추가 + 회귀 테스트 (커밋 `1d1d57a`) |
+| lease 읽기 한 번 실패로 기체를 세운다 | **사실** | §9.1 |
+| 시나리오 시계가 실비행을 죽인다 | **사실** | §9.2 |
+| 경로 6개 순열을 다 받아준다 | **사실이지만 고치면 안 됨** | §9.3 |
+| 셋업 문서의 APK 버전이 틀렸다 | **사실**, 2개 문서 3곳 | §9.4 |
+| `RELAY_SCENARIO_FILE`로 시나리오를 바꿀 수 있다 | **거짓**. 그 환경변수는 우리 main에 없었다. 리뷰 작성자의 커밋 안 된 작업 트리 기준 | 우리가 새로 만듦 (§9.2) |
+
+### 9.1 lease 읽기 한 번 실패로 비행이 끝났다
+
+`_renew_lease()`는 2초마다 `drone_get_mission`을 읽어 lease를 갱신한다. 이건 **워치독**이지
+명령이 아니다. 그런데 이 읽기가 한 번이라도 던지면 `except Exception → _fail(exc)`로 가서
+임무를 중단하고 비행 중인 기체에 정지를 보냈다. 로컬 HTTP 호출이 한 번 거절된 것은
+기체 상태에 대해 아무것도 말해주지 않는데도 그랬다.
+
+`TRANSPORT_ERROR` / `INVALID_RESPONSE`만 `read_retry_budget_seconds`(6초) 안에서
+0.3초 간격으로 재시도한다. 진짜 임무 실패 상태는 예전처럼 즉시 올린다.
+
+6초인 이유: 서비스 lease가 10초(`service.py:114`)이고 갱신 주기가 2초다.
+`2 + 6 = 8 < 10`이라 재시도 중에 lease가 만료되지 않는다.
+
+회귀 테스트는 예산을 `0.0`으로 두면 실패하고 `1.0`이면 통과하는 것까지 확인했다
+(빈 통과가 아님을 증명).
+
+### 9.2 모의 시나리오 시계가 실비행을 45초에 끊는다
+
+`data/emergency-triage.json`의 데드라인은 18 / 28 / 45초다. 45초에 3명 전원이
+`too_late`가 되고 → `_finish_if_resolved()`가 `complete`로 바꾸고 →
+`live_mission.py:_watch_deadlines`가 `expired_terminal`을 보고 `_stop_hardware()`를
+호출하며 `_work`를 취소한다. **실비행은 3구간에 77–100초**다. 45초면 기체는 아직 공중이다.
+
+지금까지 안 터진 이유: 최근 비행은 전부 `%TEMP%\fly3.py`로 `:8766`을 직접 불러서
+릴레이를 거치지 않았다. **Voice/UI로 처음 띄우는 순간 터진다.**
+
+#### 왜 제어 흐름을 안 고쳤나
+
+처음엔 `_watch_deadlines`를 고쳐 "실기가 떠 있으면 시나리오 데드라인으로는 세우지 않는다"로
+바꿨다. 그랬더니 `test_deadline_stops_actual_mission`이 깨졌다. 이 테스트는 live 모드에서
+시계를 60초 돌리고 `drone_stop_mission`이 정확히 1번 불리는 걸 **의도적으로** 검증한다.
+즉 저자가 일부러 그렇게 만든 안전 동작이다. 내 변경은 "실기를 안 세우는" 쪽 —
+덜 보수적인 방향 — 이었고, 그걸 혼자 판단해서 바꾸는 건 월권이라 **되돌렸다.**
+
+진짜 결함은 제어 흐름이 아니라 **데이터**다. 18/28/45는 모의 타임라인
+(`travelMs 7000 + captureMs 1000 + mockAnalysisMs 2000` × 3 ≈ 30초)에 맞춰진 숫자다.
+
+#### 실제 조치 — 데이터와 설정으로
+
+```
+RELAY_SCENARIO_FILE=<path>   # relay/config.py:SCENARIO_FILE
+```
+
+기본값은 커밋된 `data/emergency-triage.json` 그대로다. 기본 파일을 그 자리에서 고치면
+모의 데모와 `test_scenario_contract.py`가 같이 깨지므로 건드리지 않았다.
+
+새로 만든 `data/emergency-triage-live.json`은 데드라인만 다르다:
+
+| 대상 | 모의 | 라이브 | 근거 |
+|---|---|---|---|
+| person-3 (가장 촉박) | 18 s | 72 s | 1~2번째로 가야만 구조 가능 |
+| person-1 | 28 s | 112 s | |
+| person-2 (가장 여유) | 45 s | 180 s | 전체 경로(≈102 s)보다 길다 |
+| `injuryWindowMs` | 5 s | 20 s | 비율 유지 |
+
+우선순위 관계(`people[2] < people[0] < people[1]`)는 그대로 둬서 훈련 의미가 안 변한다.
+가장 촉박한 창(72 s)은 여전히 `3 × 34 s`보다 짧아서 **마지막에 가면 못 구한다** —
+선택의 무게가 유지된다.
+
+`34 s`는 현장 실측 1구간 최악값(전체 77–100초 / 3구간)을 올림한 값이다.
+
+새 `LiveScenarioContractTests`가 (1) 기본값이 여전히 모의 파일인지 (2) 라이브 파일이
+데드라인 말고 **한 글자도** 다르지 않은지 (3) 실비행 시간을 넘기는지를 검사한다.
+
+#### 쓰는 법
+
+```powershell
+$env:RELAY_SCENARIO_FILE = "$repo\data\emergency-triage-live.json"
+# 릴레이 재시작 (모듈 로드 시점에 읽는다)
+```
+
+### 9.3 경로 기하 — 고치지 않은 이유
+
+리뷰는 "`field.py`에 `supported_ordered_sequences`를 넣어 검증된 순서 1개만 허용하라"고
+제안했다. 실제로 넣어봤고 **되돌렸다.** 두 가지가 깨진다:
+
+- `contracts/drone-tools/v1/contract.schema.json:93` — `"minItems":6,"maxItems":6`.
+  공개 계약이 6개를 **요구**한다.
+- `pc/tests/test_tool_field.py:290` — 6개 순열을 전부 실제로 비행시키는 기존 테스트.
+
+또 경로는 데이터가 정하지 않는다. `survey.py:187`의 `add_destination`으로 **조종자가
+음성으로 앞의 두 곳을 고르고** 세 번째는 `MONITOR_IDS` 순서로 자동으로 붙는다.
+데드라인은 LLM의 판단 재료일 뿐 경로를 강제하지 않는다.
+
+그래서 이건 코드가 아니라 **운용 지침**이다:
+
+> 벽은 왼쪽부터 `[3, 2, 1, 6]`, 집은 6번이다.
+> `tag-1 → tag-2 → tag-3` (= 6→1→2→3)만 모든 구간이 **이웃 간 이동**이다.
+> 실제로 난 경로 6→3→1→2→6은 구간 길이가 태그 3칸/2칸/1칸/2칸이다.
+> 페어 게이트는 다음 태그 쪽으로만 기울고 지나치는 태그는 무시하며,
+> **전후축은 한 번도 명령되지 않는다**(`forward_tilt_deg`가 늘 0).
+> 따라서 태그를 건너뛰는 구간은 그 길이 내내 실명 상태로 날고 벽과의 거리가 보정 없이 표류한다.
+> §4.1(태그 2·3 미검출, 실명 9.3초 ≈ 2.8 m)의 유력 용의자다.
+
+### 9.4 빌드 ID 문서 드리프트
+
+코드의 진실은 `.20260913.3`이다 (`live.py:25`, `build.gradle:14`,
+`TelemetryProvider.java:420`, `site.example.json:9`). 그런데 문서는:
+
+| 위치 | 있던 값 |
+|---|---|
+| `docs/NEW_PC_SETUP.md:43` | `.20260913.1` |
+| `docs/NEW_PC_SETUP.md:139` | `.20260910.6` |
+| `android/README.md:17` | `.20260913.1` |
+
+`live.py:432`와 `field.py:85`가 이 값으로 **출발을 거절**한다. 문서대로 설치하면
+현장에서 이유 모르고 거절당한다. 세 곳을 고치고, 다시 어긋나지 않도록
+`BuildIdDriftTests`를 추가했다 — APK versionName, telemetry 문자열, site 예시,
+두 문서를 모두 읽어 `BUILD_ID` 외의 `5.18-connectivity.*` 토큰이 하나라도 있으면 실패한다.
+
+`trials/`는 일부러 제외했다. 그 스크립트들은 당시 비행한 빌드에 고정돼 있어야 한다.
+
+### 9.5 리뷰가 지적했지만 손대지 않은 것
+
+| 항목 | 위치 | 왜 안 했나 |
+|---|---|---|
+| VLM 분석 실패가 비행을 중단시킨다 | `live_mission.py` `_run_live`의 `vision.analyze → _fail` | 결과 판정 의미가 바뀐다. 사용자 승인 필요 |
+| 브라우저 WS 끊김 → `_stop_hardware()` | `live_mission.py` | 안전 정책 결정이다. 혼자 정할 문제가 아님 |
+| `voice_turns.authorize()`의 무음 거절 | `relay/voice_turns.py:227` `{"silent": True}` | 아직 직접 검증 못 함 |
+| 출발 후 voice tool 누락 | `relay/server.py:963` | 아직 직접 검증 못 함 |
+| `drone_get_captures`가 매 tick마다 누적 전체(≤6 × ≤4 MiB base64) 반환 | | 성능 문제, 비행 차단 요인 아님 |
+
+### 9.6 이번 커밋
+
+| 파일 | 내용 |
+|---|---|
+| `relay/live_mission.py` | 일시적 lease 읽기 실패 재시도 (§9.1) |
+| `relay/config.py` | `SCENARIO_FILE` + `RELAY_SCENARIO_FILE` (§9.2) |
+| `relay/survey.py`, `relay/camera.py` | 하드코딩 경로 → `config.SCENARIO_FILE` |
+| `data/emergency-triage-live.json` | 실비행용 데드라인 (신규) |
+| `relay/test_scenario_contract.py` | `LiveScenarioContractTests` |
+| `relay/test_live_mission.py` | 재시도 회귀 테스트 |
+| `drone-control/pc/tests/test_tool_live_boundary.py` | `BuildIdDriftTests` |
+| `drone-control/docs/NEW_PC_SETUP.md`, `drone-control/android/README.md` | 빌드 ID 정정 (§9.4) |
+
+**되돌린 것**: `live_mission.py:_watch_deadlines` (§9.2),
+`field.py:supported_ordered_sequences` (§9.3).
+
+**테스트**: 릴레이 전 모듈 314개 중 실패 10건은 HEAD 워크트리 기준선과 동일한
+사전 존재/환경 의존 항목이다(Node·배포 복사 레이아웃 계열). 내가 건드린 모듈
+(`test_scenario_contract` 포함 6개 71개)은 전부 통과.
+`RELAY_SCENARIO_FILE` 오버라이드는 `survey`·`camera` 양쪽이 같은 파일을 읽고
+`deteriorationMs`가 92000/0/52000으로 맞게 파생되는 것까지 실행으로 확인했다.
+

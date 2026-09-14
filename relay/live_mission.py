@@ -23,6 +23,13 @@ except ImportError:
 STATES = {"accepted", "preflight", "taking_off", "running", "returning",
     "awaiting_rc_landing", "completed", "stop_requested", "stopped", "failed", "outcome_unknown"}
 TERMINAL_FLIGHT = {"completed", "stopped", "failed", "outcome_unknown"}
+# Read failures that say nothing about the flight: the call never reached the
+# service, or its answer was unreadable. Writes are excluded on purpose; they
+# surface as OUTCOME_UNKNOWN and must never be repeated.
+TRANSIENT_READ_FAILURES = {"TRANSPORT_ERROR", "INVALID_RESPONSE"}
+# The service lease is 10s and this renews every 2s, so retrying for 6s leaves
+# the lease intact even when every attempt inside the budget fails.
+READ_RETRY_BUDGET_S = 6.0
 log = logging.getLogger("relay.tool_mission")
 PREFLIGHT_FAILURES = {
     "RuntimeError: Fresh video not confirmed before takeoff": (
@@ -42,6 +49,7 @@ class LiveMissionRunner(MissionRunner):
         if expected_mode not in {"mock", "live"}:
             raise DroneError("MODE_MISMATCH")
         self.expected_mode, self.allow_mock_tools = expected_mode, allow_mock_tools
+        self.read_retry_budget_seconds = READ_RETRY_BUDGET_S
         self.label = "MOCK 도구" if expected_mode == "mock" else "실제 드론"
         self.session.data["droneToolExecution"] = expected_mode
         self.drone = drone_client
@@ -255,7 +263,7 @@ class LiveMissionRunner(MissionRunner):
                 await asyncio.sleep(self.lease_seconds)
                 if self._closing or self._stop_task is not None:
                     return
-                response = await self.drone.call("drone_get_mission", {"mission_id": self._mission_id})
+                response = await self._read_mission_retrying()
                 if self._stop_task is not None:
                     return
                 mission = self._mission(response)
@@ -271,6 +279,25 @@ class LiveMissionRunner(MissionRunner):
             if self._work and not self._work.done():
                 self._work.cancel()
                 await asyncio.gather(self._work, return_exceptions=True)
+
+    async def _read_mission_retrying(self):
+        # This read is a watchdog, not a command. One refused local HTTP call
+        # used to abort the flight and ask the aircraft to stop, so a transient
+        # transport fault was as fatal as a real mission failure. Reported
+        # failure states still raise immediately; only the transport retries,
+        # and the budget plus the tick stays inside the service lease so a
+        # retry can never be the reason the lease expires.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.read_retry_budget_seconds
+        while True:
+            try:
+                return await self.drone.call("drone_get_mission", {"mission_id": self._mission_id})
+            except DroneError as exc:
+                if (exc.code not in TRANSIENT_READ_FAILURES or loop.time() >= deadline
+                        or self._closing or self._stop_task is not None):
+                    raise
+                log.warning("Mission lease read hit %s; retrying inside the lease", exc.code)
+                await asyncio.sleep(0.3)
 
     async def _watch_deadlines(self, run_id):
         expired_terminal = False

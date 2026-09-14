@@ -6,7 +6,6 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 import json
 import math
-from pathlib import Path
 import time
 from uuid import uuid4
 
@@ -17,9 +16,12 @@ except ImportError:
     from appearance import (REVISION_REQUEST, fixture_prompt_constraints,
                             validate_constraints, validate_search_prompt)
 
-SCENARIO = json.loads(
-    (Path(__file__).resolve().parents[1] / "data/emergency-triage.json").read_text("utf-8")
-)
+try:
+    from . import config
+except ImportError:
+    import config
+
+SCENARIO = json.loads(config.SCENARIO_FILE.read_text("utf-8"))
 MONITOR_IDS = [p["monitorId"] for p in SCENARIO["people"]]
 LABELS = {person["monitorId"]: person["label"] for person in SCENARIO["people"]}
 TERMINAL = {"complete", "aborted"}

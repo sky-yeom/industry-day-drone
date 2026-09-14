@@ -19,7 +19,7 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_ROOT = ROOT / "public"
-SCENARIO = json.loads((ROOT / "data" / "emergency-triage.json").read_text("utf-8"))
+SCENARIO = json.loads(config.SCENARIO_FILE.read_text("utf-8"))
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 

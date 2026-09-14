@@ -40,12 +40,14 @@ class Backend:
         self.execution_mode = "live"
         self.active_request = None
         self.fail_reads = False
+        self.fail_reads_once = False
         self.status_patch = {}
 
     async def call(self, name, envelope):
         self.calls.append((name, deepcopy(envelope)))
         await asyncio.sleep(0)
-        if name == "drone_get_mission" and self.fail_reads:
+        if name == "drone_get_mission" and (self.fail_reads or self.fail_reads_once):
+            self.fail_reads_once = False
             raise OSError("fake read transport failure")
         if name == "drone_get_capabilities":
             value = live_response(live_ready=True, profile_id="site-v1", site_revision="rev-1",
@@ -278,6 +280,7 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_lease_renews_during_blocked_analysis_and_failure_stops(self):
         self.runner.lease_seconds = 0.002
+        self.runner.read_retry_budget_seconds = 0.01
         self.backend.arrived = True
         self.vision.block = asyncio.Event()
         await self.runner.launch()
@@ -293,6 +296,27 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.phase, "aborted")
         self.assertEqual(len(self.commands("drone_stop_mission")), 1)
         self.assertTrue(self.runner._work.done())
+
+    async def test_transient_lease_read_failure_retries_instead_of_stopping_the_flight(self):
+        # The lease read is a watchdog, not a command: a refused local HTTP call
+        # says nothing about the aircraft. It used to abort the mission and ask
+        # a flying drone to stop, so one 5s timeout ended the run.
+        self.runner.lease_seconds = 0.002
+        self.runner.read_retry_budget_seconds = 1.0
+        self.backend.arrived = True
+        self.vision.block = asyncio.Event()
+        await self.runner.launch()
+        await settle(lambda: len(self.vision.calls) == 1)
+        before = len(self.commands("drone_get_mission"))
+        self.backend.fail_reads_once = True
+        async def recovered():
+            while len(self.commands("drone_get_mission")) <= before + 1:
+                await asyncio.sleep(0.002)
+        await asyncio.wait_for(recovered(), timeout=2)
+        self.assertFalse(self.backend.fail_reads_once, "The failing read was never attempted")
+        self.assertFalse(self.runner._lease.done())
+        self.assertEqual(self.commands("drone_stop_mission"), [])
+        self.assertNotEqual(self.session.phase, "aborted")
 
     async def test_mock_control_response_or_mock_analysis_never_starts_live_flight(self):
         self.backend.execution_mode = "mock"

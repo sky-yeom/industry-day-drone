@@ -14,7 +14,7 @@
 
 JDK17, Android SDK35/최소24, 기존 Gradle 설정 및 로컬 signing/API properties를 맞춘 뒤 `android-sdk-v5-as`에서 `:bridge:testDebugUnitTest :uxsdk:testDebugUnitTest :sample:assembleDebug`를 실행합니다. 값은 local Gradle 설정으로 관리하며 `AIRCRAFT_API_KEY`, `OPERATOR_ARM_TOKEN`, map/signing property를 코드에 박아 넣지 않습니다. 2026-09-10에는 원본 v2를 변경하지 않는 별도 전체 sample 복사본에 overlay를 적용해 APK를 빌드했습니다. 휴대폰 설치·실기 확인 상태는 검증 기록에서 별도로 확인합니다.
 
-현재 source build ID는 **`5.18-connectivity.20260913.1`**, versionCode **20260913**입니다. APK의 versionName, telemetry의 `bridge_build_id`, PC의 `BUILD_ID`, 개인 site 설정의 `expected_bridge_build_id`를 같은 값으로 맞춰야 합니다. 이전 `.6` APK를 유지한 채 PC 설정만 바꾸면 실제 출발이 거절됩니다.
+현재 source build ID는 **`5.18-connectivity.20260913.3`**, versionCode **20260913**입니다. APK의 versionName, telemetry의 `bridge_build_id`, PC의 `BUILD_ID`, 개인 site 설정의 `expected_bridge_build_id`를 같은 값으로 맞춰야 합니다. 이전 `.6` APK를 유지한 채 PC 설정만 바꾸면 실제 출발이 거절됩니다. 이 문서와 코드가 어긋나면 현장에서 원인을 찾기 어려우므로 `test_tool_live_boundary.py`가 두 값을 함께 검사합니다.
 
 이번 빌드는 SDK/USB/FC 진단 기록을 추가하며, `.6`의 첫 기체 연결 후 구독 설치와 모터 상태 200ms 조회를 유지합니다. TCP 연결·SDK 등록 성공과 실제 기체 연결은 별개입니다. 실제 기체는 `bridge_health.product_connected`로 확인하며, 미확인 값을 연결 성공으로 표시하지 않습니다. 자동 SDK 복구와 자동 출발·재개는 활성화하지 않습니다. [첫 연결 실기 점검](../docs/STANDALONE_TAG_SHUTTLE.md)과 [기존 구현 검증 기록](../docs/IMPLEMENTATION_VALIDATION_20260910.md)을 구분해서 확인합니다.
 

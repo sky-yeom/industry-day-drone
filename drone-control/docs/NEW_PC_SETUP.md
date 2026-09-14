@@ -40,7 +40,7 @@ IP는 예시이며 현재 폰 주소를 사용합니다. 가져오기는 개인 
 
 ### Android 업데이트와 로그
 
-필요한 앱은 `com.ms.voice`, **`5.18-connectivity.20260913.1`**입니다.
+필요한 앱은 `com.ms.voice`, **`5.18-connectivity.20260913.3`**입니다.
 PC `BUILD_ID`와 private site의 `expected_bridge_build_id`가 일치해야 합니다.
 기존 서명으로 `adb install -r`만 사용하며 삭제·데이터 초기화·서명 변경은 하지 않습니다.
 APK는 로컬 인계 묶음에 포함하거나 다음 명령으로 재생성합니다.
@@ -136,7 +136,7 @@ Ctrl+C로 종료한 뒤 빌드·재실행합니다.
 
 Git에 없는 항목:
 
-- 휴대폰 APK: `com.ms.voice`, `5.18-connectivity.20260910.6` (첫 연결·모터 상태 갱신 수정).
+- 휴대폰 APK: `com.ms.voice`, `5.18-connectivity.20260913.3` (`.20260910.6`의 첫 연결·모터 상태 갱신을 유지하고 SDK/USB/FC 진단 기록을 추가). `live.py`의 `BUILD_ID`와 정확히 같아야 하며, 다르면 실제 출발이 거절됩니다.
 - PC의 실제 `config.local.json`: 휴대폰 IP, 앱 arm token, 카메라·태그 실측/보정값.
 - 실제 site 설정과 공유 PC API token, Azure 로그인 또는 개인 자격 증명.
 - 실제 이미지 분석용 Azure endpoint/deployment 설정.

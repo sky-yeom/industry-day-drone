@@ -13,6 +13,7 @@ model deployment that supports structured outputs.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from urllib.parse import urlsplit
 
 try:
@@ -72,6 +73,16 @@ DRONE_REMOTE_SINGLE_REPLICA = os.getenv("DRONE_REMOTE_SINGLE_REPLICA", "0") == "
 RELAY_OPERATOR_TOKEN = os.getenv("RELAY_OPERATOR_TOKEN", "").strip()
 RELAY_PUBLIC_ORIGIN = os.getenv("RELAY_PUBLIC_ORIGIN", "").strip()
 RELAY_LOCAL_DIRECT = os.getenv("RELAY_LOCAL_DIRECT", "0") == "1"
+# The scenario file carries both the triage deadlines and, through them, the
+# route the operator confirms. The committed default is tuned to the mock
+# timeline (travelMs + captureMs + mockAnalysisMs, about 30s for three visits).
+# A real flight takes 77-100s, so pointing this at a live scenario is the only
+# supported way to change those numbers; editing the default in place would
+# break the mock demo and the scenario contract test.
+SCENARIO_FILE = Path(
+    os.getenv("RELAY_SCENARIO_FILE", "").strip()
+    or Path(__file__).resolve().parents[1] / "data" / "emergency-triage.json"
+)
 AZURE_VISION_ENDPOINT = os.getenv("AZURE_VISION_ENDPOINT", "").strip()
 AZURE_VISION_DEPLOYMENT = os.getenv("AZURE_VISION_DEPLOYMENT", "").strip()
 AZURE_VISION_API_VERSION = os.getenv("AZURE_VISION_API_VERSION", "v1").strip()

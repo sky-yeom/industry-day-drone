@@ -5,12 +5,19 @@ import hashlib
 from pathlib import Path
 import struct
 import unittest
+from relay import config
 from relay.fixture_observations import FIXTURE_OBSERVATIONS
 from relay.vision import validate_evidence
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SCENARIO = json.loads((ROOT / "data" / "emergency-triage.json").read_text("utf-8"))
+LIVE_SCENARIO = json.loads((ROOT / "data" / "emergency-triage-live.json").read_text("utf-8"))
+# One real stop measured in the field: fly the leg, hold the pair gate, shoot the
+# proof pair, then wait on Azure. The full three-stop route ran 77-100s, so this
+# is the worst observed stop rounded up. The mock timeline is a third of it,
+# which is why the two scenarios cannot share one set of deadlines.
+LIVE_STOP_MS = 34000
 
 
 class ScenarioContractTests(unittest.TestCase):
@@ -71,6 +78,50 @@ class ScenarioContractTests(unittest.TestCase):
             for person in SCENARIO["people"]
         }
         self.assertEqual(len(positive), 3)
+
+
+class LiveScenarioContractTests(unittest.TestCase):
+    """The live scenario exists because the mock clock kills real flights.
+
+    All three mock deadlines expire at 45s, which marks the run complete and
+    stops a drone that is still 30-55s from home. Only the deadlines may differ:
+    everything else is the same training run, so any other drift is a bug.
+    """
+
+    def test_default_stays_the_committed_mock_scenario(self):
+        self.assertEqual(config.SCENARIO_FILE, ROOT / "data" / "emergency-triage.json")
+
+    def test_live_scenario_differs_from_the_mock_one_only_in_its_clock(self):
+        timing = {"deadlineMs"}
+        self.assertEqual(set(LIVE_SCENARIO), set(SCENARIO))
+        for key, value in SCENARIO.items():
+            if key not in ("people", "injuryWindowMs"):
+                with self.subTest(key=key):
+                    self.assertEqual(LIVE_SCENARIO[key], value)
+        self.assertEqual(len(LIVE_SCENARIO["people"]), len(SCENARIO["people"]))
+        for live, mock in zip(LIVE_SCENARIO["people"], SCENARIO["people"]):
+            with self.subTest(monitor=mock["monitorId"]):
+                self.assertEqual(set(live), set(mock))
+                self.assertEqual({k: v for k, v in live.items() if k not in timing},
+                                 {k: v for k, v in mock.items() if k not in timing})
+
+    def test_live_windows_outlast_a_real_flight_without_losing_the_triage_order(self):
+        people = LIVE_SCENARIO["people"]
+        self.assertLess(people[2]["deadlineMs"], people[0]["deadlineMs"])
+        self.assertLess(people[0]["deadlineMs"], people[1]["deadlineMs"])
+        for person in people:
+            with self.subTest(monitor=person["monitorId"]):
+                self.assertGreater(person["deadlineMs"], LIVE_SCENARIO["injuryWindowMs"])
+                self.assertGreater(person["deadlineMs"], LIVE_STOP_MS)
+        by_monitor = {person["monitorId"]: person for person in people}
+        for position, monitor in enumerate(("monitor-3", "monitor-1", "monitor-2"), 1):
+            self.assertLess(position * LIVE_STOP_MS, by_monitor[monitor]["deadlineMs"])
+        # The whole route has to be survivable, or the watchdog lands the drone
+        # mid-flight exactly as the mock clock did.
+        self.assertGreater(max(p["deadlineMs"] for p in people), 3 * LIVE_STOP_MS)
+        # ...but it still has to hurt: the tightest window must be unreachable
+        # if it is visited last, or the triage choice carries no weight.
+        self.assertLess(by_monitor["monitor-3"]["deadlineMs"], 3 * LIVE_STOP_MS)
 
 
 if __name__ == "__main__":

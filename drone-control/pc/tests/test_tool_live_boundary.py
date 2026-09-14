@@ -4,6 +4,7 @@ import io
 import itertools
 import json
 from pathlib import Path
+import re
 import sys
 import tempfile
 import threading
@@ -748,6 +749,40 @@ class LiveCaptureBoundaryTest(unittest.TestCase):
                 self.assertIsNone(error)
                 self.assertGreaterEqual(self.clock, .6)
                 self.assertEqual(set(effects), {"zero"})
+
+
+class BuildIdDriftTests(unittest.TestCase):
+    """The build ID is a refusal gate, so a stale copy of it grounds the drone.
+
+    live.py compares BUILD_ID against the versionName the phone reports, and
+    field.py compares it against the site file. Nothing checked that the APK we
+    tell people to install actually carries that string, and the setup docs
+    drifted to .1 while the code moved to .3. That mismatch only shows up on the
+    flight line as a refused takeoff, which is the worst place to debug it.
+    """
+
+    ROOT = Path(__file__).resolve().parents[2]
+    ANDROID = ROOT / "android" / "SampleCode-V5"
+    SOURCES = {
+        "apk versionName": ANDROID / "android-sdk-v5-sample" / "build.gradle",
+        "telemetry bridge_build_id": (ANDROID / "android-sdk-v5-bridge" / "src" / "main" / "java"
+                                      / "com" / "msdkremote" / "livecontrol" / "advanced"
+                                      / "TelemetryProvider.java"),
+        "site example": ROOT / "integration" / "site.example.json",
+        "pc setup doc": ROOT / "docs" / "NEW_PC_SETUP.md",
+        "android doc": ROOT / "android" / "README.md",
+    }
+    # trials/ is deliberately excluded: those scripts are pinned to the build
+    # they were flown against and must not be dragged forward.
+    STAMP = re.compile(r"5\.18-connectivity\.\d+\.\d+")
+
+    def test_every_place_that_states_the_bridge_build_agrees_with_the_code(self):
+        for label, path in self.SOURCES.items():
+            with self.subTest(source=label):
+                self.assertTrue(path.is_file(), f"{path} is missing")
+                found = set(self.STAMP.findall(path.read_text(encoding="utf-8")))
+                self.assertIn(BUILD_ID, found, f"{label} never states {BUILD_ID}")
+                self.assertEqual(found, {BUILD_ID}, f"{label} also states {sorted(found - {BUILD_ID})}")
 
 
 if __name__ == "__main__":

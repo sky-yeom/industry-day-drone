@@ -392,6 +392,34 @@ class CapturePostAckTests(StandaloneTestCase):
                 key=(original.key[0], original.key[1]+1), received_s=clock[0], frame=original.frame)
         self.capture_with_zero_change(replace_snapshot, expect_abort=True)
 
+    def test_capture_hook_deferral_asks_for_a_new_frame_instead_of_ending_the_mission(self):
+        # The HTTP capture hook proves freshness itself, so it raises the same
+        # deferral a dispatch does. Uncaught, that ended the flight on the very
+        # first photo of every Voice mission.
+        clock, client, logger = [100.], FakeClient(), MagicMock()
+        client.raw.update(airborne_raw())
+        client.pair_mode = True
+        stream = fake_stream(clock)
+        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .1))
+        gate = SimpleNamespace(update=lambda *args: (0., args[0][0]),
+                               diagnostic={"capture_ready": True, "footprint": {"fits": True}})
+        logger.save_confirmation_photo.return_value = Path("offline-ID1.jpg")
+        seen = []
+        def hook(_client, _stream, snapshot, _confirmed, _diagnostic):
+            seen.append(snapshot.key)
+            if len(seen) == 1:
+                raise shuttle.FramingCorrectionDeferred(
+                    "Detected camera frame expired before command dispatch")
+            return True
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                patch.object(shuttle.time, "perf_counter", lambda: clock[0]), \
+                redirect_stdout(io.StringIO()):
+            shuttle.capture_id1_pair(client, limiter, stream, None, logger, config(), profile(),
+                                     gate, on_capture=hook)
+        self.assertEqual(len(seen), 2, "The deferred capture never asked for a newer frame")
+        self.assertNotEqual(seen[0], seen[1], "The retry reused the frame that was refused")
+        logger.save_confirmation_photo.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

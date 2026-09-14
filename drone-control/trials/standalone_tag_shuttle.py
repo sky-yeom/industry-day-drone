@@ -61,6 +61,13 @@ CLIMB_TAG_MISS_GRACE_S = 1.0
 # flight-controller handler fault lost the whole run before its telemetry ages
 # went current, so a healthy grounded aircraft never got to take off.
 GROUND_PROOF_TIMEOUT_S = 30.0
+# DJI hands flight-control authority to MSDK some time after arm() acknowledges.
+# live.py records up to ~3.3s in the field and the current phone build confirms
+# in 1.6-3.3s, so a 2s deadline here ended healthy arms as TimeoutError and left
+# the aircraft hovering at its automatic-takeoff height with no climb. Authority
+# is still mandatory -- no attitude command leaves while _armed is False -- and
+# this stays under _acquire_tag's 12s budget; only the waiting moves.
+ARM_AUTHORITY_TIMEOUT_S = 5.0
 TAKEOFF_SETTLE_TIMEOUT_S = 20.
 TAKEOFF_STABLE_HOLD_S = 2.
 PROFILE_FIELDS = {
@@ -314,7 +321,7 @@ class ShuttleClient(MissionClient):
             # This local flag means motion-ready, not merely arm ACK received.
             # The arming phase permits no attitude commands while callbacks lag.
             self._armed = False
-            deadline = time.monotonic() + 2.
+            deadline = time.monotonic() + ARM_AUTHORITY_TIMEOUT_S
             while time.monotonic() < deadline:
                 self.status("standalone_wait_arm_authority")
                 raw, t = self.raw, self.last_telemetry
@@ -333,7 +340,8 @@ class ShuttleClient(MissionClient):
                 if ready:
                     return
                 time.sleep(.1)
-            raise TimeoutError("Virtual Stick authority did not become ready within 2s; no re-arm")
+            raise TimeoutError("Virtual Stick authority did not become ready within "
+                               f"{ARM_AUTHORITY_TIMEOUT_S:g}s; no re-arm")
         finally:
             self._armed = ready
             self.phase = previous_phase
@@ -1006,8 +1014,17 @@ def capture_id1_pair(client, limiter, stream, detector, logger, config, profile,
                     continue
             # The HTTP hook encodes these exact undistorted detection pixels,
             # before any optional JPEG logging can consume their freshness budget.
-            if on_capture is not None and not on_capture(client, stream, snapshot, confirmed, diagnostic):
-                continue
+            # Its own freshness proof can defer the same way a dispatch does; that
+            # asks for a newer frame, not for the end of the mission.
+            if on_capture is not None:
+                try:
+                    accepted = on_capture(client, stream, snapshot, confirmed, diagnostic)
+                except FramingCorrectionDeferred as exc:
+                    client.log_event("id1_pair_capture_deferred", {"reason": str(exc),
+                        "stage": "capture_hook", "tag_id": expected})
+                    continue
+                if not accepted:
+                    continue
             photo = logger.save_confirmation_photo(stream, confirmed, phase=PatrolPhase.OUTBOUND)
             if photo is None and on_capture is None:
                 raise RuntimeError(f"ID{expected} framing was ready but its required photo was not saved")

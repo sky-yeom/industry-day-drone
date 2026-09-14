@@ -77,8 +77,8 @@ class ArmTransitionTests(StandaloneTestCase):
                 client.arm("offline-fixture-token")
             self.assertFalse(client._armed)
             self.assertFalse(client.failed)
-            self.assertGreaterEqual(clock[0], 102.)
-            self.assertLess(clock[0], 102.5)
+            self.assertGreaterEqual(clock[0], 105.)
+            self.assertLess(clock[0], 105.5)
             client.cleaning = True
             client.zero()
             client.disarm()

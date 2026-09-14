@@ -40,6 +40,7 @@ export default function Home() {
   const [returnScene, setReturnScene] = useState<ReturnScene | null>(null);
   const [resultsVisible, setResultsVisible] = useState(false);
   const [sceneError, setSceneError] = useState<string | null>(null);
+  const [halted, setHalted] = useState<string | null>(null);
   const sessionRef = useRef<VoiceSession | null>(null);
   const markerRef = useRef<HTMLDivElement>(null);
   const boardedRef = useRef(false);
@@ -89,6 +90,14 @@ export default function Home() {
     sessionRef.current?.markResultsReady(scene.runId);
   }, []);
 
+  // A failed run parks on the map instead of the debrief. The operator asked for
+  // it, so leave the way through open rather than deciding for them.
+  const showResults = useCallback(() => {
+    if (advancedToResultsRef.current) return;
+    advancedToResultsRef.current = true;
+    beginReturn(latestStateRef.current);
+  }, [beginReturn]);
+
   useEffect(() => {
     let active = true;
     void fetchRelayConfig().then((value) => { if (active) setConfig(value); });
@@ -134,6 +143,7 @@ export default function Home() {
     setReturnScene(null);
     setResultsVisible(false);
     setSceneError(null);
+    setHalted(null);
   }, []);
 
   const start = useCallback(() => {
@@ -171,12 +181,19 @@ export default function Home() {
         }
         if (!advancedToResultsRef.current &&
             terminal) {
-          advancedToResultsRef.current = true;
-          if (next.missionPhase === "complete" && !boardedRef.current) {
-            pendingReturnRef.current = next;
-            if (!advancedToRouteRef.current) setStep("route");
+          if (next.missionPhase === "aborted" && next.error) {
+            // A single failure used to jump straight to the debrief, which reads
+            // as "the run is over" when the aircraft is merely stopped. Hold the
+            // map and let the operator choose the next move.
+            setHalted(next.error);
           } else {
-            beginReturn(next);
+            advancedToResultsRef.current = true;
+            if (next.missionPhase === "complete" && !boardedRef.current) {
+              pendingReturnRef.current = next;
+              if (!advancedToRouteRef.current) setStep("route");
+            } else {
+              beginReturn(next);
+            }
           }
         }
         const receivedAt = performance.now();
@@ -258,6 +275,13 @@ export default function Home() {
         <button type="button" onClick={() => sessionRef.current?.sendCommand("retry_mission")} className="pixel-button bg-white px-3 py-1.5">다시 시도</button>
         <button type="button" onClick={() => sessionRef.current?.sendCommand("abort_mission")} className="pixel-button bg-white px-3 py-1.5">작전 중단</button>
       </div> : <p className="mt-2">계속하려면 “다시 시도해 줘”, 중단하려면 “작전을 중단해 줘”라고 말해주세요.</p>)}
+      {halted && <div className="mt-2">
+        <p className="text-xs leading-5">실제 비행 오류 뒤에는 자동으로 이어서 날지 않습니다. 기체가 멈춘 것을 확인한 뒤 새 작전을 시작해 주세요.</p>
+        <div className="mt-2 flex gap-3">
+          <button type="button" onClick={reset} className="pixel-button bg-white px-3 py-1.5">새 작전 시작</button>
+          <button type="button" onClick={showResults} className="pixel-button bg-white px-3 py-1.5">결과 보기</button>
+        </div>
+      </div>}
     </div>}
     {error && status !== "error" && <p role="alert" className="pixel-panel bg-white p-2 text-sm text-[#091f2c]">{error}</p>}
     {status === "error" && <div className="pixel-panel bg-white p-3">

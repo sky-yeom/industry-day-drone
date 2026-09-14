@@ -57,7 +57,10 @@ CLIMB_TAG_MISS_GRACE_S = 1.0
 # zero poll failures), so a single-shot ground gate rejects a healthy aircraft
 # as GROUND_UNVERIFIED. Poll for a genuinely fresh proof instead of accepting a
 # stale one: the safety requirement is unchanged, only the deadline moves.
-GROUND_PROOF_TIMEOUT_S = 4.0
+# 4s was short enough that a bridge still settling after a reconnect or a
+# flight-controller handler fault lost the whole run before its telemetry ages
+# went current, so a healthy grounded aircraft never got to take off.
+GROUND_PROOF_TIMEOUT_S = 30.0
 TAKEOFF_SETTLE_TIMEOUT_S = 20.
 TAKEOFF_STABLE_HOLD_S = 2.
 PROFILE_FIELDS = {
@@ -907,6 +910,7 @@ def capture_id1_pair(client, limiter, stream, detector, logger, config, profile,
     client.log_event("standalone_leg", {"from": departure, "to": expected, "direction": direction,
         "phase_scope": f"first_ID{expected}_pair_framing"})
     print(f"ID{departure} -> ID{expected}: frame ID{expected} and the entire left-hand mock", flush=True)
+    blind_images, blind_last_s = 0, 0.
     while time.monotonic() < deadline:
         limiter.wait()
         client.status("id1_pair_framing")
@@ -914,6 +918,19 @@ def capture_id1_pair(client, limiter, stream, detector, logger, config, profile,
         tags, age = _observe(client, stream, detector, logger, PatrolPhase.OUTBOUND, expected, direction)
         snapshot = stream.last_detection_snapshot
         shape = () if snapshot is None else snapshot.frame.shape
+        if not tags and snapshot is not None and blind_images < 12 and time.monotonic() - blind_last_s >= 1.5:
+            # A leg that sees nothing for seconds leaves no way to tell a missing
+            # tag from a camera pointed away from the wall. Keep a bounded strip
+            # of those frames. Diagnostic only: it gates and passes nothing.
+            blind_last_s = time.monotonic()
+            blind_images += 1
+            try:
+                path = logger.photo_root / f"diagnostic_blind_{blind_images:02d}_to_ID{expected}.jpg"
+                write_image(path, snapshot.frame)
+                client.log_event("id1_pair_blind_image", {"tag_id": expected, "photo_path": str(path),
+                    "frame_key": snapshot.key, "diagnostic_only": True, "capture_passed": False})
+            except Exception as exc:
+                client.log_event("id1_diagnostic_image_error", {"error_type": type(exc).__name__})
         if not first_id1_recorded and snapshot is not None and any(tag.tag_id == expected for tag in tags):
             first_id1_recorded = True
             # Persist the exact first detection, rather than relying on the
@@ -936,7 +953,8 @@ def capture_id1_pair(client, limiter, stream, detector, logger, config, profile,
         client.log_event("id1_pair_framing_sample", {**diagnostic, "tag_id": expected,
             "visible_ids": [tag.tag_id for tag in tags], "right_tilt_deg": right,
             "frame_key": _snapshot_key(stream), "frame_age_s": age,
-            "horizontal_speed_mps": speed, "velocity_age_s": velocity_age})
+            "horizontal_speed_mps": speed, "velocity_age_s": velocity_age,
+            "height_m": None if client.last_telemetry is None else client.last_telemetry.height_m})
         pulse_deadline = diagnostic.get("motion_valid_until_s")
         client.motion_valid_until_s = pulse_deadline
         if right:

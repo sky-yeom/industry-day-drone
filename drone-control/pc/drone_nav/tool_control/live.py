@@ -48,7 +48,10 @@ def ground_verified(raw):
 # zero poll failures), so a single-shot gate reports GROUND_UNVERIFIED for a
 # healthy grounded aircraft. Keep requiring a genuinely fresh proof; only allow
 # more time to obtain one.
-GROUND_PROOF_TIMEOUT_S = 4.0
+# 4s was short enough that a bridge still settling after a reconnect or a
+# flight-controller handler fault lost the whole run before its telemetry ages
+# went current, so a healthy grounded aircraft never got to take off.
+GROUND_PROOF_TIMEOUT_S = 30.0
 
 
 def await_ground_proof(client, label, timeout_s=GROUND_PROOF_TIMEOUT_S):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import socket
 import threading
 import time
@@ -194,7 +195,12 @@ class AprilTagDetector:
                 "`pip install -e .[vision]`"
             ) from exc
         self._cv2, self._np = cv2, np
-        self._detector = Detector(families="tag36h11")
+        # One thread left the 8-core field laptop at 85 ms per 1080p pass, which
+        # alone consumed a sixth of the 500 ms dispatch freshness budget. Four
+        # is the measured optimum here; more threads regress on this CPU.
+        self._detector = Detector(families="tag36h11",
+                                  nthreads=max(1, min(4, os.cpu_count() or 1)))
+        self._maps = self._maps_shape = None
         self._camera = config.camera
         self._matrix = np.array(
             [
@@ -217,8 +223,27 @@ class AprilTagDetector:
             rays, self._np.zeros(3), self._np.zeros(3), self._matrix, self._distortion)
         return tuple((float(x), float(y)) for x, y in pixels.reshape(4, 2))
 
+    def undistort(self, frame: Any) -> Any:
+        """Pixel-identical to cv2.undistort, without rebuilding the maps.
+
+        cv2.undistort recomputes the rectify maps on every call, which measured
+        50 ms per 1080p frame. The shuttle undistorts twice per detection, so
+        caching the maps returns ~84 ms of the dispatch freshness budget.
+        """
+        shape = frame.shape[:2]
+        if self._maps is None or self._maps_shape != shape:
+            height, width = shape
+            self._maps = self._cv2.initUndistortRectifyMap(
+                self._matrix, self._distortion, None, self._matrix,
+                (width, height), self._cv2.CV_16SC2)
+            self._maps_shape = shape
+        return self._cv2.remap(frame, self._maps[0], self._maps[1], self._cv2.INTER_LINEAR)
+
     def detect(self, frame: Any) -> list[TagDetection]:
-        frame = self._cv2.undistort(frame, self._matrix, self._distortion)
+        return self.detect_undistorted(self.undistort(frame))
+
+    def detect_undistorted(self, frame: Any) -> list[TagDetection]:
+        """Pose pass over pixels a caller already undistorted."""
         gray = (
             self._cv2.cvtColor(frame, self._cv2.COLOR_BGR2GRAY)
             if getattr(frame, "ndim", 0) == 3

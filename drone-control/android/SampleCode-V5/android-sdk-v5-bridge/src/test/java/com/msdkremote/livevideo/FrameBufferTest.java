@@ -112,4 +112,40 @@ public class FrameBufferTest {
             assertTrue(buffer.getBufferSize() <= 250);
         }
     }
+
+    @Test(timeout=2000) public void reconnectDeliversTheBufferedKeyframeInsteadOfWaitingForTheNextOne() throws Exception {
+        FrameBuffer buffer = new FrameBuffer(1000, () -> 1000L);
+        buffer.addFrame(frame(40, false));
+        Frame buffered = frame(50, true);
+        buffer.addFrame(buffered);
+        buffer.addFrame(frame(30, false));
+        long reader = buffer.openReader();
+        assertSame("Reconnect must resync on the I-frame already in hand",
+                buffered, buffer.getFrame(reader));
+    }
+
+    @Test(timeout=2000) public void repeatedReconnectsNeverStarveWhileAnIFrameIsBuffered() throws Exception {
+        FrameBuffer buffer = new FrameBuffer(1000, () -> 1000L);
+        Frame key = frame(50, true);
+        buffer.addFrame(key);
+        for (int i = 0; i < 20; i++) {
+            long reader = buffer.openReader();
+            assertSame("Ground-video retry must not discard the buffered I-frame",
+                    key, buffer.getFrame(reader));
+            buffer.addFrame(key = frame(50, true));
+        }
+    }
+
+    @Test(timeout=2000) public void overflowResyncsOnTheNewestKeyframeNotTheStaleGop() throws Exception {
+        FrameBuffer buffer = new FrameBuffer(300, () -> 1000L);
+        long reader = buffer.openReader();
+        buffer.addFrame(frame(60, true));
+        buffer.addFrame(frame(60, false));
+        Frame newest = frame(60, true);
+        buffer.addFrame(newest);
+        buffer.addFrame(frame(60, false));
+        buffer.addFrame(frame(60, false));
+        buffer.addFrame(frame(60, false));
+        assertSame("Overflow must resync on the newest I-frame", newest, buffer.getFrame(reader));
+    }
 }

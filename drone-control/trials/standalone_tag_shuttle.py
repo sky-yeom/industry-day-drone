@@ -16,6 +16,7 @@ from pathlib import Path
 import sys
 import threading
 import time
+import traceback
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "pc"))
@@ -234,7 +235,7 @@ class MixedDetector:
 
     def detect(self, frame):
         base = self.base
-        pixels = base._cv2.undistort(frame, base._matrix, base._distortion)
+        pixels = base.undistort(frame)
         self.last_input_frame, self.last_detection_frame = frame, pixels
         gray = (base._cv2.cvtColor(pixels, base._cv2.COLOR_BGR2GRAY)
                 if getattr(pixels, "ndim", 0) == 3 else pixels)
@@ -251,7 +252,9 @@ class MixedDetector:
                                   margin if math.isfinite(margin) else None, int(item.hamming)))
         # No wall tag is returned with a pose, even if a stale prior wall size
         # exists in the user's config. With no ID0 visible there is no pose pass.
-        floor = ([tag for tag in base.detect(frame) if tag.tag_id == 0]
+        # The pose pass reuses these exact undistorted pixels; re-undistorting
+        # the raw frame cost a second 50 ms for a byte-identical image.
+        floor = ([tag for tag in base.detect_undistorted(pixels) if tag.tag_id == 0]
                  if any(int(item.tag_id) == 0 for item in raw) else [])
         return [*floor, *walls]
 
@@ -1158,8 +1161,16 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
         if config.network.confirmation_token:
             message = message.replace(config.network.confirmation_token, "<redacted>")
         error = f"{type(exc).__name__}: {message}"
+        # Without the frames the operator only sees e.g. "error: Unknown C++
+        # exception from OpenCV code", which names no call site and made real
+        # field failures unattributable. Same redaction as the message.
+        frames = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        if config.network.confirmation_token:
+            frames = frames.replace(config.network.confirmation_token, "<redacted>")
         try:
-            client.log_event("standalone_interrupted", {"error": error, "visited_ids": visited})
+            client.log_event("standalone_interrupted", {
+                "error": error, "visited_ids": visited,
+                "traceback": frames.splitlines()[-40:]})
         except Exception as log_error:
             diagnostic_errors.append(f"interruption_log:{type(log_error).__name__}")
     finally:

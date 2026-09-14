@@ -144,6 +144,14 @@ class FrameBuffer
 
             // Retain one large frame plus the pending-data budget. Previously
             // every single I-frame >1 MB evicted itself, preventing decoding.
+            if (this.bufferSize > queueBudget()) {
+                // Overflow breaks the GOP, so the reader has to resync either way.
+                // Resync onto the newest buffered I-frame rather than re-arming and
+                // waiting for DJI's next one: at 30 fps the 1 MB budget overflows
+                // every ~1 s while I-frames arrive every ~2.7 s, so the old path
+                // re-armed faster than it could ever converge and delivery starved.
+                trimToNewestKeyFrame();
+            }
             while (this.bufferSize > queueBudget()) {
                 Frame removedFrame = this.frames.poll();
                 droppedFrames++;
@@ -170,9 +178,38 @@ class FrameBuffer
     public long openReader() {
         synchronized (lock) {
             readerGeneration++;
-            nextKeyFrame();
+            trimToNewestKeyFrame();
             return readerGeneration;
         }
+    }
+
+    /**
+     * Drop everything older than the newest buffered I-frame instead of discarding
+     * the queue. Clearing made every reconnect wait a full DJI I-frame interval
+     * (~2.7 s measured), and the mission's ground-video retry reconnected sooner
+     * than that, so the reader never locked on and the socket wrote zero bytes.
+     * Delivery still starts on an I-frame, so decode integrity is unchanged.
+     */
+    private void trimToNewestKeyFrame() {
+        this.nextKeyFrame = true;
+        int keep = -1, index = 0;
+        for (Frame frame : frames) {
+            if (frame.isKeyFrame()) keep = index;
+            index++;
+        }
+        if (keep < 0) {
+            droppedFrames += frames.size();
+            frames.clear();
+            bufferSize = 0;
+        } else {
+            for (int i = 0; i < keep; i++) {
+                Frame removed = frames.poll();
+                droppedFrames++;
+                if (removed == null) { bufferSize = 0; break; }
+                bufferSize -= removed.getSize();
+            }
+        }
+        lock.notifyAll();
     }
 
     private Frame getNextKeyFrame() throws InterruptedException

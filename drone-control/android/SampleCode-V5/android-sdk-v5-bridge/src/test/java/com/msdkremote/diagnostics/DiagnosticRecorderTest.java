@@ -37,16 +37,28 @@ public class DiagnosticRecorderTest {
         }
         assertTrue(bytes <= 16384);
         File active = new File(directory, "field-0.jsonl");
-        String before = Files.readString(active.toPath());
+        String before = readUtf8(active);
         DiagnosticRecorder second = recorder(directory, limits);
         second.record("second", Collections.emptyMap(), 1, 1, "test", 1);
         second.start();
         second.stopAccepting();
         assertTrue(second.awaitStopped(10, TimeUnit.SECONDS));
-        String retained = Files.readString(active.toPath());
+        String retained = readUtf8(active);
         assertTrue(retained.contains("\"name\":\"second\""));
         assertTrue(retained.startsWith(before)
-                || Files.readString(new File(directory, "field-1.jsonl").toPath()).equals(before));
+                || readUtf8(new File(directory, "field-1.jsonl")).equals(before));
+    }
+
+    // android.jar has no Files.readString; readAllBytes keeps the same bytes.
+    private static String readUtf8(File file) throws IOException {
+        return new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+    }
+
+    // android.jar has no String.repeat either.
+    private static String repeated(char value, int count) {
+        char[] buffer = new char[count];
+        java.util.Arrays.fill(buffer, value);
+        return new String(buffer);
     }
 
     @Test public void queueOverflowAndDiskFailureAreVisible() throws Exception {
@@ -67,7 +79,7 @@ public class DiagnosticRecorderTest {
     @Test public void oversizedFieldsProduceBoundedValidRecord() throws Exception {
         File directory = temporary.newFolder();
         DiagnosticRecorder recorder = recorder(directory, new DiagnosticRecorder.Limits(4, 2, 4096, 2048));
-        recorder.record("large", Collections.singletonMap("data", "x".repeat(5000)), 0, 0, "test", 1);
+        recorder.record("large", Collections.singletonMap("data", repeated('x', 5000)), 0, 0, "test", 1);
         recorder.start();
         recorder.stopAccepting();
         assertTrue(recorder.awaitStopped(10, TimeUnit.SECONDS));

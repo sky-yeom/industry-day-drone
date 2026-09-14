@@ -353,9 +353,13 @@ class PixelAndFloorSeparationTests(StandaloneTestCase):
             hamming=0, decision_margin=90.) for tag_id in raw_ids]
         backend = MagicMock()
         backend.detect.return_value = raw
+        undistorts = []
         base = SimpleNamespace(_detector=backend, _matrix=[], _distortion=[],
             _cv2=SimpleNamespace(undistort=lambda frame, matrix, distortion: frame),
+            undistort=lambda frame: (undistorts.append(frame), frame)[1],
+            detect_undistorted=MagicMock(return_value=list(floor_outputs)),
             detect=MagicMock(return_value=list(floor_outputs)))
+        base.undistort_calls = undistorts
         factory = MagicMock(return_value=base)
         cfg = config()
         cfg = replace(cfg, tags=tuple(replace(item, size_m=.19 if item.id == 0 else .31)
@@ -372,7 +376,21 @@ class PixelAndFloorSeparationTests(StandaloneTestCase):
         self.assertEqual([t.id for t in factory.call_args.args[0].tags], [0])
         self.assertEqual(factory.call_args.args[0].tag_map[0].size_m, .19)
         base._detector.detect.assert_called_once_with(unittest.mock.ANY, estimate_tag_pose=False)
+        base.detect_undistorted.assert_not_called()
         base.detect.assert_not_called()
+        self.assertEqual(len(base.undistort_calls), 1)
+
+    def test_floor_pose_pass_reuses_the_wall_pass_pixels_instead_of_undistorting_twice(self):
+        # Undistortion cost 50 ms per 1080p frame and ran twice per detection,
+        # which alone spent a fifth of the 500 ms dispatch freshness budget.
+        floor = TagDetection(0, identity(), .002, (100., 100.))
+        detector, base, _ = self.detector([0], [floor])
+        frame = SimpleNamespace(ndim=2)
+        detector.detect(frame)
+        self.assertEqual(len(base.undistort_calls), 1)
+        self.assertIs(base.undistort_calls[0], frame)
+        base.detect.assert_not_called()
+        base.detect_undistorted.assert_called_once_with(detector.last_detection_frame)
 
     def test_floor_keeps_real_pose_while_wall_pose_is_explicitly_unknown(self):
         floor = TagDetection(0, identity(), .002, (100., 100.))
@@ -395,7 +413,7 @@ class PixelAndFloorSeparationTests(StandaloneTestCase):
             telemetry=None, direction=None)
         self.assertTrue(floor_log["metric_pose_available"])
         self.assertEqual(floor_log["camera_to_tag_transform"], [list(row) for row in floor.T_C_T])
-        base.detect.assert_called_once()
+        base.detect_undistorted.assert_called_once()
 
     def test_full_pixel_route_including_home6_needs_no_home_size_configuration(self):
         cfg = config()

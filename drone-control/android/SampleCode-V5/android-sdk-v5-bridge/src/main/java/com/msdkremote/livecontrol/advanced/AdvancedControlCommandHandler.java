@@ -81,7 +81,8 @@ public final class AdvancedControlCommandHandler implements CommandHandler {
         // Link activity is diagnostic only; it cannot renew the motion lease.
         stickManager.touchKeepalive();
         if(java.util.Arrays.asList("arm","takeoff","land","heartbeat","stick_mode","velocity",
-                "attitude","zero","disarm","emergency_stop","gimbal","obstacle_avoidance","status").contains(type)) {
+                "attitude","zero","disarm","emergency_stop","gimbal","obstacle_avoidance","status",
+                "ground_ack").contains(type)) {
             java.util.Map<String,Object> diagnostic=new java.util.LinkedHashMap<>();
             diagnostic.put("type",type);diagnostic.put("sequence",sequence);
             diagnostic.put("connection_epoch",connectionEpoch);
@@ -182,6 +183,15 @@ public final class AdvancedControlCommandHandler implements CommandHandler {
             case "status":
                 send(server, connectionEpoch, sequence, true,
                         stickManager.isArmed() ? "status_armed" : "status_disarmed");
+                break;
+            case "ground_ack":
+                // Explicit operator acknowledgement; the bridge still re-reads the aircraft itself.
+                if (!isTokenValid(payload)) {
+                    send(server, connectionEpoch, sequence, false, "invalid_confirmation_token");
+                } else {
+                    com.msdkremote.PcBridge.acknowledgeGround((success, detail) ->
+                            send(server, connectionEpoch, sequence, success, detail));
+                }
                 break;
             default:
                 send(server, connectionEpoch, sequence, false, "unknown_type");

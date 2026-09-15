@@ -23,6 +23,8 @@ class MSDKManagerVM : ViewModel() {
 
     fun initMobileSDK(appContext: Context) {
         FieldDiagnostics.start(appContext)
+        // Android reclaims a backgrounded process and sleeps its radios; the TCP servers die with it.
+        com.msdkremote.lifecycle.BridgeForegroundService.start(appContext)
         FieldDiagnostics.callSite("sdk_init_requested")
         // Initialize and set the sdk callback, which is held internally by the sdk until destroy() is called
         SDKManager.getInstance().init(appContext, object : SDKManagerCallback {

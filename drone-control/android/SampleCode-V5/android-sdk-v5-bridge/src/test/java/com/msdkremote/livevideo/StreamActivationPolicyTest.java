@@ -30,11 +30,34 @@ public class StreamActivationPolicyTest {
         assertEquals(StreamActivationPolicy.State.WAIT_ENABLE_REPORT, p.state());
         p.report(true);
         assertEquals(StreamActivationPolicy.State.WAIT_RAW, p.state());
+        now = 2999;
+        assertEquals(StreamActivationPolicy.State.WAIT_RAW, p.state());
+        assertEquals(StreamActivationPolicy.Effect.NONE, p.reconcile());
         now = 3000;
         assertEquals(StreamActivationPolicy.State.STALLED, p.state());
-        assertEquals(StreamActivationPolicy.Effect.NONE, p.reconcile());
         p.raw(now);
         assertEquals(StreamActivationPolicy.State.STREAMING, p.state());
+    }
+    @Test public void aStaleEnableReportIsRetriedInsteadOfTrustedForever() {
+        StreamActivationPolicy p = policy();
+        assertEquals(StreamActivationPolicy.Effect.ENABLE, p.reconcile());
+        p.report(true);
+        now = 1000; p.raw(now);
+        assertEquals(StreamActivationPolicy.State.STREAMING, p.state());
+        // Frames stop while the SDK still claims the stream is enabled.
+        now = 4000;
+        assertEquals(StreamActivationPolicy.State.STALLED, p.state());
+        assertEquals(StreamActivationPolicy.Effect.ENABLE, p.reconcile());
+        assertEquals(StreamActivationPolicy.Effect.NONE, p.reconcile());
+        // Retries stay bounded by the same backoff a missing report already uses.
+        now = 6999;
+        assertEquals(StreamActivationPolicy.Effect.NONE, p.reconcile());
+        now = 7000;
+        assertEquals(StreamActivationPolicy.Effect.ENABLE, p.reconcile());
+        // Recovered video stops the retries again.
+        now = 11000; p.raw(now);
+        assertEquals(StreamActivationPolicy.State.STREAMING, p.state());
+        assertEquals(StreamActivationPolicy.Effect.NONE, p.reconcile());
     }
     @Test public void falseReportsCannotBypassBackoff() {
         StreamActivationPolicy p = policy();

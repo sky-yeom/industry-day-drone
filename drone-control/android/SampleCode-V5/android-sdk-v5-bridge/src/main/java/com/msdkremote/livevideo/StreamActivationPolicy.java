@@ -47,7 +47,10 @@ final class StreamActivationPolicy {
         if (!running || !managerAvailable || !cameraAvailable || now < nextActivationAt)
             return Effect.NONE;
         boolean freshRaw = lastRawAt >= 0 && now - lastRawAt < 3000;
-        if (Boolean.TRUE.equals(reportedEnabled) || (reportedEnabled == null && freshRaw))
+        // A stale enable report is not evidence of video. Trusting it forever is why a
+        // camera that stops producing can only be revived by restarting the whole app.
+        boolean stalled = lastRawAt >= 0 ? !freshRaw : now - selectedAt >= 3000;
+        if ((Boolean.TRUE.equals(reportedEnabled) && !stalled) || (reportedEnabled == null && freshRaw))
             return Effect.NONE;
         // Reserve the attempt before the adapter enters the SDK (which may call back inline).
         long delay = Math.min(30000L, 3000L << Math.min(consecutiveAttempts, 4));

@@ -49,9 +49,11 @@ public final class PcBridge {
     private static final String PROCESS_START_ID=java.util.UUID.randomUUID().toString();
     private static final long PROCESS_STARTED_MS=SystemClock.elapsedRealtime();
     private static long eventSerial;
-    // No UI toggle until every manual sample mutation entry point is also gated.
-    private static final boolean AUTOMATIC_FC_RECOVERY=false;
+    // Recovery only ever re-subscribes telemetry, and only behind a fresh ground proof
+    // with motors off and virtual sticks explicitly disabled. It cannot move the aircraft.
+    private static final boolean AUTOMATIC_FC_RECOVERY=true;
     private static FcRecoveryCoordinator recovery;
+    private static GroundProof groundProof;
     public static String processStartId(){return PROCESS_START_ID;}
     public static long connectionGeneration(){return connectionGeneration;}
     public static Boolean productConnected(){return productConnected;}
@@ -125,10 +127,34 @@ public final class PcBridge {
                     @Override public void onFailure(@NonNull IDJIError error){callback.done(null,error.errorCode());}
                 }),KeyTools.createKey(FlightControllerKey.KeyIsFlying),
                 KeyTools.createKey(FlightControllerKey.KeyAreMotorsOn),PendingSdkReads.SHARED);
+        groundProof=proof;
         recovery=new FcRecoveryCoordinator(AUTOMATIC_FC_RECOVERY,MaintenanceGate.SHARED,proof,
             TelemetryProvider.getInstance().healthTracker(),worker,SystemClock::elapsedRealtime,
             PcBridge::connectionGeneration,()->{TelemetryProvider.getInstance().stop();TelemetryProvider.getInstance().start();});
         worker.scheduleWithFixedDelay(()->recovery.tick(),200,200,TimeUnit.MILLISECONDS);
+    }
+
+    /** Clears a latched unsafe intent, but only on an explicit operator request that is
+     * backed by an independently re-read ground proof. Never called by the bridge itself. */
+    public static void acknowledgeGround(java.util.function.BiConsumer<Boolean,String> result) {
+        worker.execute(()->{
+            ensureRecovery();
+            GroundProof proof=groundProof;
+            if(proof==null){result.accept(false,"GROUND_PROOF_UNAVAILABLE");return;}
+            if(!Boolean.TRUE.equals(productConnected)){result.accept(false,"PRODUCT_NOT_CONNECTED");return;}
+            final long source=connectionGeneration;
+            if(!proof.start(source,(grounded,when,why)->{
+                if(!grounded){result.accept(false,why);return;}
+                if(SystemClock.elapsedRealtime()-when>500){result.accept(false,"GROUND_PROOF_STALE");return;}
+                boolean cleared=MaintenanceGate.SHARED.acknowledgeGround(source,true);
+                java.util.Map<String,Object> diagnostic=new java.util.LinkedHashMap<>();
+                diagnostic.put("cleared",cleared);diagnostic.put("generation",source);
+                diagnostic.put("block_reason",MaintenanceGate.SHARED.maintenanceBlockReason(source));
+                FieldDiagnostics.event("bridge_ground_acknowledged",diagnostic);
+                result.accept(cleared,cleared?"ground_acknowledged"
+                        :MaintenanceGate.SHARED.maintenanceBlockReason(source));
+            }))result.accept(false,"GROUND_PROOF_BUSY");
+        });
     }
 
     private static void step(String name, Runnable action) {
@@ -173,6 +199,8 @@ public final class PcBridge {
         j.put("recovery_state",recoveryState());
         j.put("recovery_reason",recoveryReason());
         j.put("unsafe_intent_latched",MaintenanceGate.SHARED.unsafeIntent());
+        j.put("maintenance_block_reason",MaintenanceGate.SHARED.maintenanceBlockReason(connectionGeneration));
+        j.put("process_keepalive",new JSONObject(BridgeForegroundService.status()));
         j.put("product_connected", productConnected == null ? JSONObject.NULL : productConnected);
         j.put("product_id", productId);
         j.put("connection_generation", connectionGeneration);

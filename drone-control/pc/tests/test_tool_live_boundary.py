@@ -111,9 +111,32 @@ class LiveTransportBoundaryTest(unittest.TestCase):
                 client.takeoff("offline-fixture")
             self.assertEqual(raw.writes, [])
 
+    def test_ground_acknowledgement_is_dispatchable_but_is_not_a_flight_action(self):
+        client, raw = self.client()
+        self.ground_proof(client)
+        client.ground_ack("offline-fixture")
+        self.assertEqual([r["type"] for r in raw.writes], ["ground_ack"])
+        self.assertEqual(raw.writes[0]["payload"], {"confirmation_token": "offline-fixture"})
+        # A latch enquiry mutates nothing, so it must not claim a flight action was tried.
+        self.assertFalse(client.attempted_action)
+        self.assertFalse(client.failed)
+
+    def test_refused_ground_acknowledgement_raises_and_leaves_the_transport_usable(self):
+        client, raw = self.client()
+        self.ground_proof(client)
+        raw.ok, raw.detail = False, "NOT_CONFIRMED_GROUND"
+        with self.assertRaises(PermissionError):
+            client.ground_ack("offline-fixture")
+        self.assertFalse(client.failed)
+        self.assertFalse(client.attempted_action)
+        raw.ok, raw.detail = True, "status_disarmed"
+        client.status("offline_after_refusal")
+        self.assertEqual([r["type"] for r in raw.writes], ["ground_ack", "status"])
+
     def test_cleanup_bypass_only_allows_zero_disarm_status(self):
         commands = [("takeoff", {"confirmation_token": "offline-fixture"}),
                     ("arm", {"confirmation_token": "offline-fixture"}),
+                    ("ground_ack", {"confirmation_token": "offline-fixture"}),
                     ("gimbal", {"pitch_deg": 0}),
                     ("attitude", {"forward_tilt_deg": 0, "right_tilt_deg": 1,
                                   "up_mps": 0, "yaw_rate_rps": 0})]

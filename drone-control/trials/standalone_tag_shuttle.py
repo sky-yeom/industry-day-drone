@@ -695,9 +695,34 @@ def _await_ground_proof(client, label, cancel=None, timeout_s=GROUND_PROOF_TIMEO
         time.sleep(.2)
 
 
+def _clear_latched_unsafe_intent(client, confirmation_token):
+    """Ask the bridge to retire a latched unsafe intent, but only when one is latched.
+
+    Every takeoff and every query mutation latches that flag for the life of the
+    app process, which permanently blocks flight-controller recovery. Asking costs
+    four extra SDK reads, so a bridge reporting no latch is never disturbed, and a
+    bridge too old to know the request is simply left alone.
+    """
+    health = (client.raw or {}).get("bridge_health")
+    if not isinstance(health, dict) or not health.get("unsafe_intent_latched"):
+        return False
+    request = getattr(client, "ground_ack", None)
+    if request is None or not confirmation_token:
+        return False
+    try:
+        request(confirmation_token)
+    except PermissionError as refusal:
+        client.log_event("standalone_ground_ack_refused", {"detail": str(refusal)})
+        return False
+    except (OSError, ConnectionError, ValueError, AttributeError) as error:
+        client.log_event("standalone_ground_ack_unavailable", {"error": repr(error)})
+        return False
+    client.log_event("standalone_ground_ack_cleared", {})
+    return True
+
+
 class GroundVideoUnavailable(RuntimeError):
     pass
-
 
 def _wait_ground_video(client, limiter, stream, detector, logger):
     # At ground height the downward camera can crop the printed floor tag.
@@ -1322,6 +1347,7 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
         client.deadline = time.perf_counter() + profile["total_timeout_s"]
         if not _await_ground_proof(client, "standalone_preflight", cancel, ground_proof_s):
             raise RuntimeError(f"Fresh motors-off grounded RC state and bridge {BUILD_ID} required")
+        _clear_latched_unsafe_intent(client, config.network.confirmation_token)
         if client.raw.get("bridge_build_id") != BUILD_ID:
             raise RuntimeError(f"Fresh motors-off grounded RC state and bridge {BUILD_ID} required")
         if not process_identity(client.raw) or client.raw.get("telemetry_generation") is None:

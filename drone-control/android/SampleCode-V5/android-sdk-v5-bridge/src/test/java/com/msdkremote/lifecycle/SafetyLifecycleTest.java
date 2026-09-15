@@ -145,6 +145,45 @@ public class SafetyLifecycleTest {
         recovery.tick();scheduler.until(0);gate.beginRelease();scheduler.until(200);
         assertEquals("WAIT_OPERATOR",recovery.state());assertEquals(0,binds[0]);assertFalse(gate.maintenanceActive());
     }
+    @Test public void latchedUnsafeIntentIsNamedAndBlocksRecoveryUntilAcknowledged() {
+        int[] binds={0};MaintenanceGate gate=new MaintenanceGate();gate.sourceChanged(1);gate.controlState(false,false,false);
+        gate.completeMutation(gate.beginMutation("TAKEOFF",true,false));
+        assertEquals("UNSAFE_INTENT_LATCHED",gate.maintenanceBlockReason(1));
+        GroundProof p=proof((key,cb)->cb.done(false,null));
+        FcRecoveryCoordinator recovery=new FcRecoveryCoordinator(true,gate,p,handlerFault(),scheduler,()->scheduler.now,()->generation,()->binds[0]++);
+        recovery.tick();scheduler.until(10000);
+        assertEquals("WAIT_OPERATOR",recovery.state());assertEquals("UNSAFE_INTENT_LATCHED",recovery.reason());
+        assertEquals(0,binds[0]);
+        // An operator acknowledgement backed by a fresh ground proof is the only way back.
+        assertTrue(gate.acknowledgeGround(1,true));assertEquals("NONE",gate.maintenanceBlockReason(1));
+        recovery.tick();scheduler.until(20000);assertEquals(1,binds[0]);
+    }
+    @Test public void enabledRecoveryRefusesWhileArmedOrWithUnknownVirtualSticks() {
+        int[] reads={0},binds={0};MaintenanceGate gate=new MaintenanceGate();gate.sourceChanged(1);
+        GroundProof p=proof((key,cb)->{reads[0]++;cb.done(false,null);});
+        FcRecoveryCoordinator recovery=new FcRecoveryCoordinator(true,gate,p,handlerFault(),scheduler,()->scheduler.now,()->generation,()->binds[0]++);
+        gate.controlState(false,false,null);
+        recovery.tick();scheduler.until(1000);assertEquals("VIRTUAL_STICK_STATE_UNKNOWN",recovery.reason());
+        gate.controlState(true,false,false);
+        recovery.tick();scheduler.until(40000);assertEquals("VIRTUAL_STICKS_ARMED",recovery.reason());
+        assertEquals(0,reads[0]);assertEquals(0,binds[0]);
+    }
+    @Test public void groundAcknowledgementNeedsFreshProofAndASafeControlState() {
+        MaintenanceGate gate=new MaintenanceGate();gate.sourceChanged(1);gate.controlState(false,false,false);
+        long gimbal=gate.beginMutation("GIMBAL_PITCH",false,false);
+        assertEquals("SDK_MUTATION_PENDING",gate.maintenanceBlockReason(1));
+        assertFalse(gate.acknowledgeGround(1,true));
+        gate.completeMutation(gimbal);assertEquals("NONE",gate.maintenanceBlockReason(1));
+        long takeoff=gate.beginMutation("TAKEOFF",true,false);
+        assertFalse(gate.acknowledgeGround(1,true));
+        gate.completeMutation(takeoff);
+        assertEquals("UNSAFE_INTENT_LATCHED",gate.maintenanceBlockReason(1));
+        assertFalse(gate.acknowledgeGround(1,false));
+        gate.controlState(true,false,false);assertFalse(gate.acknowledgeGround(1,true));
+        gate.controlState(false,false,null);assertFalse(gate.acknowledgeGround(1,true));
+        gate.controlState(false,false,false);assertFalse(gate.acknowledgeGround(2,true));
+        assertTrue(gate.acknowledgeGround(1,true));assertEquals("NONE",gate.maintenanceBlockReason(1));
+    }
     static class PerceptionAdapter implements PerceptionBinding.Adapter {
         Consumer<Map<String,Object>> info;Consumer<PerceptionBinding.Range> range;
         int addInfo,addRange,removeInfo,removeRange;boolean inline,addThrows,removeThrows;

@@ -34,7 +34,7 @@ public final class FcRecoveryCoordinator {
         if(!"HANDLER_FAULT".equals(current)||attempted||now-lastAttempt<30000
                 ||state.equals("PROVING")||state.equals("VERIFYING"))return;
         source=generation.getAsLong();ticket=gate.reserveMaintenance(source);
-        if(ticket==0){state="WAIT_OPERATOR";reason="GROUND_OR_CONTROL_STATE_NOT_SAFE";return;}
+        if(ticket==0){state="WAIT_OPERATOR";reason=gate.maintenanceBlockReason(source);return;}
         attempted=true;lastAttempt=now;state="PROVING";
         if(!proof.start(source,(ok,when,why)->{
             if(!ok){fail(why);return;}

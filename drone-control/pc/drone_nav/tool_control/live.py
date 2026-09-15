@@ -190,7 +190,8 @@ class MissionClient(NDJSONClient):
             raise RuntimeError("Only mission worker may own control socket")
         if self.failed or self._socket is None:
             raise ConnectionError("Control transport failed; no reconnect/replay")
-        if kind not in {"status", "zero", "attitude", "gimbal", "takeoff", "arm", "disarm", "stick_mode"}:
+        if kind not in {"status", "zero", "attitude", "gimbal", "takeoff", "arm", "disarm",
+                        "stick_mode", "ground_ack"}:
             raise PermissionError("Command not exposed by the physical mission profile")
         if not self.cleaning and (self.cancel.is_set() or (self.deadline and time.perf_counter() >= self.deadline)):
             raise InterruptedError("Mission cancelled/deadline reached; no resume")
@@ -199,7 +200,10 @@ class MissionClient(NDJSONClient):
         if self._file.buffer:
             self.failed = True
             raise ConnectionError("Unsolicited ACK; new action refused")
-        budget = {"takeoff": 3., "arm": 3., "gimbal": 2., "stick_mode": 3., "disarm": 1.}.get(kind, .4)
+        # The bridge re-reads two flight-controller keys twice before answering a
+        # ground acknowledgement, so it needs far more than a motion command's budget.
+        budget = {"takeoff": 3., "arm": 3., "gimbal": 2., "stick_mode": 3., "disarm": 1.,
+                  "ground_ack": 6.}.get(kind, .4)
         self._socket.deadline = time.perf_counter() + budget
         prior_raw, prior_received = copy.deepcopy(self.raw), self.received
         self.last_telemetry = None
@@ -220,7 +224,9 @@ class MissionClient(NDJSONClient):
                 if elapsed_ms < 0 or not ground_verified(proof):
                     raise PermissionError("Fresh motors-off ground proof expired before takeoff write")
             self.write_started = True
-            if kind not in {"status", "zero", "disarm"}:
+            # A ground acknowledgement mutates no aircraft state, so it must not
+            # count as an attempted flight action in the post-run report.
+            if kind not in {"status", "zero", "disarm", "ground_ack"}:
                 self.attempted_action = True
         self._socket.before_write = before_write
         reserved_sequence, reserved_timestamp = self.protocol._out_sequence, self.protocol._out_timestamp

@@ -18,6 +18,7 @@ from .controller import Velocity
 MESSAGE_TYPES = {
     "arm", "takeoff", "land", "heartbeat", "velocity", "attitude", "zero", "gimbal",
     "status", "disarm", "emergency_stop", "stick_mode", "obstacle_avoidance",
+    "ground_ack",
     "ack",
 }
 
@@ -43,6 +44,7 @@ def _validate_payload(kind: str, payload: Any) -> None:
         "emergency_stop": set(),
         "stick_mode": {"mode"},
         "obstacle_avoidance": set(),
+        "ground_ack": {"confirmation_token"},
         "ack": {"ok", "detail"},
     }[kind]
     supplied = set(payload)
@@ -63,7 +65,7 @@ def _validate_payload(kind: str, payload: Any) -> None:
                 raise ValueError(f"ack {name} must be a string")
     elif supplied != expected:
         raise ValueError(f"invalid {kind} payload fields")
-    if kind in {"arm", "takeoff", "land"} and (
+    if kind in {"arm", "takeoff", "land", "ground_ack"} and (
         not isinstance(payload["confirmation_token"], str)
         or not payload["confirmation_token"]
     ):
@@ -960,6 +962,21 @@ class NDJSONClient:
             raise PermissionError("takeoff confirmation token is required")
         self.send(
             "takeoff",
+            {"confirmation_token": confirmation_token},
+            timeout_s=SLOW_COMMAND_TIMEOUT_S,
+        )
+
+    def ground_ack(self, confirmation_token: str) -> "Message":
+        """Ask the bridge to re-read the aircraft and clear a latched unsafe intent.
+
+        The bridge refuses unless its own fresh read says the aircraft is grounded
+        with motors off, so this only records that an operator asked. A refusal
+        raises PermissionError and is informative, not fatal.
+        """
+        if not confirmation_token:
+            raise PermissionError("ground acknowledgement token is required")
+        return self.send(
+            "ground_ack",
             {"confirmation_token": confirmation_token},
             timeout_s=SLOW_COMMAND_TIMEOUT_S,
         )

@@ -41,6 +41,18 @@ public final class MaintenanceGate {
                 || !explicitVsDisabled || releasePending || unsafeIntent || !mutations.isEmpty())return 0;
         maintenance=++serial; return maintenance;
     }
+    /** Names the first condition refusing a maintenance ticket, so the field is never told only "not safe". */
+    public synchronized String maintenanceBlockReason(long expectedGeneration) {
+        if(generation!=expectedGeneration)return "SOURCE_CHANGED";
+        if(maintenance!=0)return "MAINTENANCE_ALREADY_HELD";
+        if(armed)return "VIRTUAL_STICKS_ARMED";
+        if(enabling)return "VIRTUAL_STICKS_ENABLING";
+        if(!explicitVsDisabled)return "VIRTUAL_STICK_STATE_UNKNOWN";
+        if(releasePending)return "RELEASE_PENDING";
+        if(unsafeIntent)return "UNSAFE_INTENT_LATCHED";
+        if(!mutations.isEmpty())return "SDK_MUTATION_PENDING";
+        return "NONE";
+    }
     public synchronized boolean valid(long ticket,long expectedGeneration) {
         return ticket!=0 && maintenance==ticket && generation==expectedGeneration
                 && !armed && !enabling && explicitVsDisabled && !releasePending && !unsafeIntent && mutations.isEmpty();

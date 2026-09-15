@@ -280,8 +280,6 @@ class MissionClient(NDJSONClient):
             raise InterruptedError("RC override: mission cancelled")
         if t.height_m is None or not .5 <= t.height_m <= 1.8:
             raise InterruptedError("Height outside validated corridor envelope")
-        if up_mps > 0 and t.height_m >= 1.6 or up_mps < 0 and t.height_m <= 1.0:
-            raise InterruptedError("Vertical correction exceeds corridor envelope")
         if t.battery_percent is None or t.battery_percent < 30:
             raise InterruptedError("Battery below configured 30% mission minimum")
         if self.stream is None or not 0 <= self.stream.read()[2] <= .5:

@@ -26,7 +26,18 @@ CAPTURE_HOLD_S = .5
 STILL_SPEED_MPS = .08
 MAX_REVERSE_PULSES = 3
 MISSING_RECOVERY_S = 6.
+# One 6 s seek was the entire search budget, and the 19:00 flight showed what
+# that costs: ID1 left the right edge, recovery_sign=1.0 was on file, the seek
+# closed its window, and the leg then held zero for 32 s until the operator
+# took the RC. Three bounded seeks cost about 18 s of flight and are still
+# fully bounded, where one seek plus an endless hover is not a search at all.
+MAX_RECOVERY_PULSES = 3
 RECOVERY_MOTION_EVIDENCE_S = 1.5
+# Recovery only picks a search direction; it is not an arrival decision, so it
+# splits the frame at the middle. Keying it to the arrival band left everything
+# between 15% and 85% with no direction at all, and a tag lost there froze the
+# leg at zero until the aircraft lost authority.
+RECOVERY_SIDE_FRACTION = .5
 
 
 class PairFramingError(RuntimeError):
@@ -147,13 +158,19 @@ class PairFramingGate:
     motion_valid_until_s is always None: the caller must not chop commands.
     Any raised PairFramingError requires caller cleanup, never automatic retry.
     """
-    def __init__(self, reference, direction="left", arrival_band=None, tag_id=1):
+    def __init__(self, reference, direction="left", arrival_band=None, tag_id=1, layout=None):
         _reference(reference)
         if direction not in {"left", "right"}:
             raise ValueError("Direction must be left or right")
         if type(tag_id) is not int or tag_id < 0:
             raise ValueError("A non-negative integer tag id is required")
         self.tag_id = tag_id
+        if layout is not None:
+            layout = tuple(layout)
+            if (len(layout) < 2 or any(type(v) is not int or v < 0 for v in layout)
+                    or len(set(layout)) != len(layout) or tag_id not in layout):
+                raise ValueError("Layout must be distinct non-negative wall ids including the target")
+        self.layout = layout
         if arrival_band is not None and (not isinstance(arrival_band, (list, tuple))
                 or len(arrival_band) != 2 or not all(_finite(v) for v in arrival_band)
                 or not 0. < arrival_band[0] < arrival_band[1] < 1.):
@@ -218,6 +235,23 @@ class PairFramingGate:
         self._correction_sign = self._recovery_sign = None
         self._needs_settle = True
 
+    def _layout_direction(self, visible_ids):
+        """Side of the target read off the surveyed wall order, not off vision history.
+
+        The wall order is a contract: the route may visit the ids in any
+        sequence, but planning never moves the walls. So any other wall tag in
+        frame fixes which side the target is on, and unlike an image trend that
+        fact cannot go stale while the aircraft hovers. Neighbours on both sides
+        mean the target is between them and merely failing to decode, so that
+        stays ambiguous on purpose.
+        """
+        if self.layout is None:
+            return None
+        target = self.layout.index(self.tag_id)
+        sides = {1. if self.layout.index(v) < target else -1.
+                 for v in visible_ids if v in self.layout and v != self.tag_id}
+        return sides.pop() if len(sides) == 1 else None
+
     @staticmethod
     def _proportional(amount, width, cap, floor):
         return min(cap, max(floor, cap*amount/(.2*width)))
@@ -225,30 +259,35 @@ class PairFramingGate:
     def _remember_tag_for_recovery(self, center, width, now):
         fraction = center[0] / width
         previous = self._last_tag_observation
-        trend = (None if previous is None or not 0. <= now-previous["now_s"] <= RECOVERY_MOTION_EVIDENCE_S
+        trend = (None if previous is None or previous["center_fraction"] is None
+                 or not 0. <= now-previous["now_s"] <= RECOVERY_MOTION_EVIDENCE_S
                  else fraction - previous["center_fraction"])
         recent_motion = (self._last_nonzero_motion is not None
                          and 0. <= now-self._last_nonzero_motion[1] <= RECOVERY_MOTION_EVIDENCE_S)
         tilt = self._last_nonzero_motion[0] if recent_motion else 0.
         sign, evidence = None, None
-        if fraction >= self.arrival_band[0] and (tilt < 0. or trend is not None and trend >= .005):
-            sign, evidence = 1., "last_tag_near_right_with_left_motion_or_rightward_image_trend"
-        elif fraction <= 1.-self.arrival_band[0] and (tilt > 0. or trend is not None and trend <= -.005):
-            sign, evidence = -1., "last_tag_near_left_with_right_motion_or_leftward_image_trend"
+        if fraction >= RECOVERY_SIDE_FRACTION and (tilt < 0. or trend is not None and trend >= .005):
+            sign, evidence = 1., "last_tag_right_of_centre_with_left_motion_or_rightward_image_trend"
+        elif fraction <= RECOVERY_SIDE_FRACTION and (tilt > 0. or trend is not None and trend <= -.005):
+            sign, evidence = -1., "last_tag_left_of_centre_with_right_motion_or_leftward_image_trend"
         self._last_tag_observation = {"now_s": now, "center_fraction": fraction,
                                       "recovery_sign": sign, "evidence": evidence}
 
-    def _recover_missing_tag(self, now, speed):
+    def _recover_missing_tag(self, now, speed, layout_sign=None):
         """Bounded reacquire seek toward where the tag left the frame.
 
         The aircraft is first brought to a standstill, then tilted back in the
         evidence direction continuously until the tag is seen again or the
-        recovery window after the last observation closes. Running out of the
-        window is not fatal: the gate waits at zero for a fresh view.
+        recovery window after the last observation closes. A closed window
+        re-arms another bounded seek whenever a direction is still known - from
+        the fixed wall order, or from the last observation the hover cannot have
+        invalidated. Only exhausting the pulse budget, or having no direction at
+        all, leaves the gate waiting at zero, and that is not fatal.
         """
         observation = self._last_tag_observation
         self._stable_since, self._stable_frames = None, 0
         self._diagnostic.update(target_visible=False, recovery_pulses_used=self._recovery_pulses,
+            recovery_pulse_limit=MAX_RECOVERY_PULSES, layout_direction_sign=layout_sign,
             recovery_window_s=MISSING_RECOVERY_S, recovery_tilt_deg=RECOVERY_SEEK_DEG,
             last_tag_observation=copy.deepcopy(observation))
         if not self._missing_active:
@@ -259,7 +298,22 @@ class PairFramingGate:
                   and 0. <= now-observation["now_s"] < MISSING_RECOVERY_S)
         if not recent:
             self._cancel_pulse()
-            return self._zero(now, "WAIT_TARGET", "no_recent_direction_evidence_for_missing_target")
+            carried = None if observation is None else observation["recovery_sign"]
+            sign = carried if layout_sign is None else layout_sign
+            if sign is None or self._recovery_pulses >= MAX_RECOVERY_PULSES:
+                return self._zero(now, "WAIT_TARGET", "no_recent_direction_evidence_for_missing_target")
+            # An aircraft holding zero cannot invalidate the direction it last
+            # saw the tag leave, and it certainly cannot move a surveyed wall,
+            # so a window that closed while stationary is the leg giving up
+            # rather than the evidence going stale. Re-arm the seek from here;
+            # the pulse budget still bounds the whole search.
+            observation = self._last_tag_observation = {"now_s": now,
+                "center_fraction": None if observation is None else observation["center_fraction"],
+                "recovery_sign": sign,
+                "evidence": ("fixed_wall_order_places_target_beyond_visible_neighbour"
+                             if layout_sign is not None else observation["evidence"])}
+            self._diagnostic.update(recovery_rearmed_from_stationary_hold=True,
+                                    last_tag_observation=copy.deepcopy(observation))
         if self._recovery_sign is None:
             self._zero(now, "REACQUIRE_SETTLE", "zero_and_low_speed_before_missing_target_correction")
             if now-self._zero_since < RECOVERY_SETTLE_S-1e-9 or speed > STILL_SPEED_MPS:
@@ -326,7 +380,8 @@ class PairFramingGate:
             if self._seen or self._done:
                 if self.arrival_band is not None:
                     self._done = False
-                    return self._recover_missing_tag(now_s, horizontal_speed_mps)
+                    return self._recover_missing_tag(now_s, horizontal_speed_mps,
+                                                     self._layout_direction(self._diagnostic["visible_ids"]))
                 self._cancel_pulse()
                 return self._zero(now_s, "WAIT_TARGET", f"ID{self.tag_id}_missing_or_decoding_quality_invalid")
             return self._motion(self._planned*SEEK_MAX_DEG, now_s, f"SEEK_ID{self.tag_id}")

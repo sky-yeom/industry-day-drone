@@ -43,6 +43,11 @@ def tag(tag_id, x=640., y=360.):
 
 
 class FakeClient:
+    # Bind the real implementation so this double cannot drift from the guard
+    # it stands in for; the zero bound is a profile without height_hold.
+    hold_up_bound = 0.
+    hold_up = shuttle.ShuttleClient.hold_up
+
     def __init__(self):
         self.raw = {"is_flying": False, "are_motors_on": False,
                     "is_flying_age_ms": 10., "are_motors_on_age_ms": 10.,
@@ -783,6 +788,38 @@ class DispatchBoundaryTests(StandaloneTestCase):
                 payload = dict(zip(("forward_tilt_deg", "right_tilt_deg", "up_mps", "yaw_rate_rps"), axes))
                 with self.subTest(phase=phase, axes=axes), self.assertRaises(PermissionError):
                     client.send("attitude", payload)
+
+    def test_cruise_hold_admits_bounded_lift_and_never_ends_a_lateral_leg(self):
+        # The 15:30 flight reached ID6 and then died on the first framing tick
+        # that asked for +0.04 m/s: the lateral axis was fine, the assist was
+        # not admissible. The assist must clamp itself instead of raising.
+        clock = [100.]
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]):
+            client = self.client(clock)
+            client.phase, client.hold_up_bound = "lateral", .18
+            for up in (0., .04, .18):
+                payload = {"forward_tilt_deg": 0., "right_tilt_deg": -.6,
+                           "up_mps": up, "yaw_rate_rps": 0.}
+                with self.subTest(up=up):
+                    client._guard_dispatch("attitude", dict(payload))
+            for up in (.19, -.04, None):
+                payload = {"forward_tilt_deg": 0., "right_tilt_deg": -.6,
+                           "up_mps": up, "yaw_rate_rps": 0.}
+                with self.subTest(rejected=up), self.assertRaises(PermissionError):
+                    client._guard_dispatch("attitude", dict(payload))
+                # ...but hold_up() turns every one of those into a plain zero,
+                # so the leg keeps flying on its own axis.
+                self.assertEqual(client.hold_up(up), 0.)
+            self.assertEqual(client.hold_up(.04), .04)
+            # A profile without height_hold leaves the bound at zero: the leg
+            # then dispatches exactly the commands it always did.
+            client.hold_up_bound = 0.
+            self.assertEqual(client.hold_up(.04), 0.)
+            client.hold_up_bound = .18
+            for phase in ("climb", "hover", "preflight"):
+                client.phase = phase
+                with self.subTest(phase=phase):
+                    self.assertEqual(client.hold_up(.04), 0.)
 
     def test_video_generation_stays_pinned_across_phases(self):
         clock = [100.]

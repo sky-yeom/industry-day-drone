@@ -84,5 +84,72 @@ class ClimbFreshnessTests(StandaloneTestCase):
         self.assertEqual(self.confirmation[0][1]["velocity_down_mps"], 0.)
 
 
+class ClimbSetpointContinuityTests(StandaloneTestCase):
+    """The aircraft disables Virtual Stick when no setpoint arrives for ~1 s.
+
+    A 1.045 s setpoint gap handed authority back to the RC mid-climb while
+    status polling kept flowing, so every path that re-observes instead of
+    commanding has to refresh the setpoint on its way round the loop.
+    """
+
+    def drive(self, *, floor_seen=True, defer_attitude=False, height_m=1.1):
+        clock, client, logger = [100.], FakeClient(), MagicMock()
+        client.raw.update(is_flying=True, are_motors_on=True, armed=True,
+                          vs_enabled=True, vs_advanced_enabled=True, vs_authority="MSDK")
+        client.last_telemetry.height_m = height_m
+        stream = SimpleNamespace(last_detection_snapshot=None)
+        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .1))
+        # Every call records the clock so a setpoint gap is measurable.
+        setpoints, original_zero, original_attitude = [], client.zero, client.attitude
+        def zero():
+            original_zero()
+            setpoints.append(clock[0])
+            client.last_telemetry.height_age_s = .01
+            client.last_telemetry.velocity_age_s = .01
+        def attitude(*axes):
+            if defer_attitude:
+                raise shuttle.FramingCorrectionDeferred(
+                    "Detected camera frame expired before command dispatch")
+            original_attitude(*axes)
+            setpoints.append(clock[0])
+        def detect(detector, max_age):
+            old = stream.last_detection_snapshot
+            stream.last_detection_snapshot = SimpleNamespace(
+                key=(1, 1 if old is None else old.key[1]+1), received_s=clock[0])
+            clock[0] += .25
+            return ([SimpleNamespace(tag_id=0)] if floor_seen else []), .25
+        stream.detect_latest = detect
+        client.zero, client.attitude = zero, attitude
+        self.client, self.setpoints = client, setpoints
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                patch.object(shuttle.time, "perf_counter", lambda: clock[0]), \
+                patch.object(shuttle, "_visual_floor_height_m", return_value=height_m), \
+                redirect_stdout(io.StringIO()):
+            with self.assertRaises(RuntimeError):
+                shuttle._climb(client, limiter, stream, None, logger, config(), 1.6,
+                               {"timeouts": {"climb_s": 5.}})
+
+    def longest_gap(self):
+        return max(b - a for a, b in zip(self.setpoints, self.setpoints[1:]))
+
+    def test_deferred_correction_still_refreshes_the_setpoint(self):
+        self.drive(defer_attitude=True)
+        self.assertTrue(any(event == "standalone_climb_deferred"
+                            for event, _ in self.client.events))
+        self.assertIn("zero", self.client.calls)
+        self.assertGreaterEqual(len(self.setpoints), 2)
+        self.assertLess(self.longest_gap(), 1.,
+                        "a deferred climb correction left Virtual Stick uncommanded")
+
+    def test_floor_tag_miss_grace_still_refreshes_the_setpoint(self):
+        self.drive(floor_seen=False)
+        self.assertTrue(any(event == "standalone_climb_tag_miss"
+                            for event, _ in self.client.events))
+        self.assertIn("zero", self.client.calls)
+        self.assertGreaterEqual(len(self.setpoints), 2)
+        self.assertLess(self.longest_gap(), shuttle.CLIMB_TAG_MISS_GRACE_S,
+                        "the tag-miss grace outlasted the Virtual Stick watchdog")
+
+
 if __name__ == "__main__":
     unittest.main()

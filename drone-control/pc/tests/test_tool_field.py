@@ -261,9 +261,16 @@ class FieldTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 self.adapter()
         self.site_path.write_text(json.dumps(SITE), encoding="utf-8")
-        self.reference_path.write_text(json.dumps({**REFERENCE, "arrival_center_x_fraction": [.84, .94]}))
+        self.reference_path.write_text(json.dumps({**REFERENCE, "arrival_center_x_fraction": [.95, .85]}))
         with self.assertRaises(ValueError):
             self.adapter()
+        self.reference_path.write_text(json.dumps(
+            {k: v for k, v in REFERENCE.items() if k != "arrival_center_x_fraction"}))
+        with self.assertRaises(ValueError):
+            self.adapter()
+        # The band is a site tunable, so any ordered edge band is accepted.
+        self.reference_path.write_text(json.dumps({**REFERENCE, "arrival_center_x_fraction": [.8, .92]}))
+        self.assertEqual(self.adapter().arrival_band, [.8, .92])
         self.reference_path.write_text(json.dumps(REFERENCE))
         private = json.loads(self.config_path.read_text())
         for change in ({"actual_measurements_confirmed": False},

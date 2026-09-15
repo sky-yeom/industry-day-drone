@@ -108,5 +108,107 @@ class ArmTransitionTests(StandaloneTestCase):
                 self.assertEqual([request["type"] for request in wire.writes], ["arm", "status"])
 
 
+class AuthorityReacquireTests(StandaloneTestCase):
+    """A watchdog handback is recoverable; a pilot's is not, ever."""
+    timing = ArmTransitionTests.timing
+
+    def build(self, clock, handbacks, **handback_fields):
+        client = shuttle.ShuttleClient(shuttle.configure_execution(config(), profile()),
+                                       threading.Event(), lambda snapshot: None)
+        client.owner, client.phase = threading.get_ident(), "takeoff"
+        client.stream = SimpleNamespace(last_detection_snapshot=SimpleNamespace(key=(1, 1), received_s=clock[0]),
+                                        read=lambda: (True, None, .01))
+        ready = airborne_raw()
+        # armed=False is what the bridge reports once the aircraft disables
+        # Virtual Stick, and it is also what takes the arm handoff grace out of
+        # the picture so the post-check is genuinely exercised.
+        handback = airborne_raw(armed=False, vs_enabled=False, vs_advanced_enabled=False,
+                                vs_authority="RC", **handback_fields)
+        remaining, events = [handbacks], []
+        original_log = client.log_event
+        client.log_event = lambda event, data: (events.append((event, data)), original_log(event, data))[1]
+        class Wire(AckSocket):
+            def __init__(self):
+                super().__init__(clock, ready)
+
+            def sendall(self, data):
+                # Only a status outside the arm transition hands control back,
+                # so every re-arm sees a healthy aircraft as it would in flight.
+                if (json.loads(data)["type"] == "status"
+                        and client.phase != "arming" and remaining[0]):
+                    remaining[0] -= 1
+                    self.raw = handback
+                else:
+                    self.raw = ready
+                super().sendall(data)
+        wire = Wire()
+        client._socket = client._file = DeadlineTransport(wire)
+        return client, wire, events
+
+    @staticmethod
+    def arms(wire):
+        return [request["type"] for request in wire.writes].count("arm")
+
+    def test_sdk_initiated_handback_is_undone_and_the_mission_continues(self):
+        clock = [100.]
+        with self.timing(clock):
+            client, wire, events = self.build(clock, 1, vs_change_reason="MSDK_REQUEST")
+            client.arm("offline-fixture-token")
+            client.status("standalone_bounded_sonar_climb")
+        self.assertTrue(client._armed)
+        self.assertEqual(client.raw["vs_authority"], "MSDK")
+        self.assertEqual(client.reacquisitions, 1)
+        self.assertEqual(self.arms(wire), 2)
+        self.assertIn("standalone_authority_reacquired", [event for event, _ in events])
+        self.assertEqual(client.phase, "takeoff")
+
+    def test_rc_override_during_handback_is_never_contested(self):
+        clock = [100.]
+        with self.timing(clock):
+            client, wire, events = self.build(clock, 1, vs_change_reason="MSDK_REQUEST",
+                                              rc_override_age_ms=100.)
+            client.arm("offline-fixture-token")
+            with self.assertRaises(InterruptedError):
+                client.status("standalone_bounded_sonar_climb")
+        self.assertEqual(client.reacquisitions, 0)
+        self.assertEqual(self.arms(wire), 1)
+        self.assertEqual(dict(events)["standalone_authority_handback"]["refusal"], "rc_override_active")
+
+    def test_handback_without_an_sdk_reason_still_ends_the_flight(self):
+        for reason in ({}, {"vs_change_reason": "RC_REQUEST"}):
+            clock = [100.]
+            with self.subTest(reason=reason), self.timing(clock):
+                client, wire, events = self.build(clock, 1, **reason)
+                client.arm("offline-fixture-token")
+                with self.assertRaises(InterruptedError):
+                    client.status("standalone_bounded_sonar_climb")
+                self.assertEqual(client.reacquisitions, 0)
+                self.assertEqual(self.arms(wire), 1)
+                self.assertEqual(dict(events)["standalone_authority_handback"]["refusal"],
+                                 "reason_not_sdk_initiated")
+
+    def test_repeated_handbacks_stop_at_the_reacquire_limit(self):
+        clock = [100.]
+        with self.timing(clock):
+            client, wire, events = self.build(clock, 9, vs_change_reason="MSDK_REQUEST")
+            client.arm("offline-fixture-token")
+            with self.assertRaises(InterruptedError):
+                client.status("standalone_bounded_sonar_climb")
+        self.assertEqual(client.reacquisitions, shuttle.AUTHORITY_REACQUIRE_LIMIT)
+        self.assertEqual(self.arms(wire), 1 + shuttle.AUTHORITY_REACQUIRE_LIMIT)
+        self.assertEqual(dict(events)["standalone_authority_handback"]["refusal"],
+                         "reacquire_limit_reached")
+
+    def test_cleanup_never_re_arms(self):
+        clock = [100.]
+        with self.timing(clock):
+            client, wire, _ = self.build(clock, 1, vs_change_reason="MSDK_REQUEST")
+            client.arm("offline-fixture-token")
+            client.cleaning = True
+            client.status("standalone_release_verification")
+        self.assertEqual(client.reacquisitions, 0)
+        self.assertEqual(self.arms(wire), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -52,6 +52,17 @@ FLIGHT_STATE_FRESH_S = 1.5
 # clipped by the FOV as attitude shifts) recovers within one or two 100 ms
 # ticks. Only a sustained miss is a real loss, mirroring FLIGHT_STATE_FRESH_S.
 CLIMB_TAG_MISS_GRACE_S = 1.0
+# DJI disables Virtual Stick when no setpoint arrives for about a second and
+# reports the handback as vs_change_reason=MSDK_REQUEST. Measured on the 18:12
+# flight: command_sequence froze at 99, command_age_s ran 0.61 -> 1.045, then
+# authority read RC with the pilot never having touched a stick. That is the
+# aircraft withdrawing control, not a human taking it, and it is the only
+# reason this mission is willing to arm a second time. Every other handback,
+# and any reason the bridge does not report, still ends the flight.
+AUTHORITY_REACQUIRE_REASONS = frozenset({"MSDK_REQUEST"})
+# Two recoveries bound a genuine transient. A third means something is holding
+# authority down and re-arming into it would be fighting the aircraft.
+AUTHORITY_REACQUIRE_LIMIT = 2
 # The first STATUS read on a fresh connection can carry telemetry the phone
 # gathered before the socket existed (observed are_motors_on_age_ms=1735 with
 # zero poll failures), so a single-shot ground gate rejects a healthy aircraft
@@ -76,6 +87,20 @@ PROFILE_FIELDS = {
     "leg_timeout_s", "total_timeout_s", "layout_confirmed", "wall_measurement",
     "floor_size_source",
 }
+# Height hold is data, not control flow: a profile without it flies exactly as
+# it did before. Tuning the cruise hold must not require touching this file.
+OPTIONAL_PROFILE_FIELDS = {"height_hold", "timeouts"}
+# The aircraft does not climb at a constant rate. A 15:12 flight rose 1.1->1.4m
+# in 2.8s and then held 1.4m for 4.4s while still commanding 0.16m/s, so the 8s
+# ceiling ended a climb that was still progressing. These are patience, not
+# safety: every authority, freshness, RC-override and battery check runs on the
+# same tick regardless of how long the deadline is.
+TIMEOUT_BOUNDS = (("climb_s", 5., 90.), ("takeoff_settle_s", 10., 120.),
+                  ("arm_authority_s", 3., 30.), ("ground_proof_s", 10., 180.))
+HEIGHT_HOLD_BOUNDS = (("deadband_m", .02, .5), ("gain_mps_per_m", .05, 1.5),
+                      # live.py rejects anything past .18 on the wire, so reject
+                      # it here instead of mid-leg.
+                      ("max_up_mps", .05, .18))
 
 
 def _number(value, low, high):
@@ -84,7 +109,8 @@ def _number(value, low, high):
 
 
 def validate_profile(profile):
-    if not isinstance(profile, dict) or set(profile) != PROFILE_FIELDS:
+    if (not isinstance(profile, dict) or not PROFILE_FIELDS <= set(profile)
+            or not set(profile) <= PROFILE_FIELDS | OPTIONAL_PROFILE_FIELDS):
         raise ValueError("Standalone shuttle profile fields do not match schema 2")
     for key, expected in (("schema_version", 2), ("floor_tag_id", 0), ("home_tag_id", 6)):
         if type(profile[key]) is not int or profile[key] != expected:
@@ -101,11 +127,56 @@ def validate_profile(profile):
     for key, low, high in (
         ("target_height_m", 1.4, 1.6),
         ("max_tilt_deg", .1, 1.5), ("visit_pause_s", 0., 10.),
-        ("leg_timeout_s", 1., 45.), ("total_timeout_s", 10., 240.),
+        ("leg_timeout_s", 1., 180.), ("total_timeout_s", 10., 900.),
     ):
         if not _number(profile[key], low, high):
             raise ValueError(f"{key} must be finite and within [{low}, {high}]")
+    hold = profile.get("height_hold")
+    if hold is not None:
+        if not isinstance(hold, dict) or set(hold) != {name for name, _, _ in HEIGHT_HOLD_BOUNDS}:
+            raise ValueError("height_hold must set deadband_m, gain_mps_per_m and max_up_mps")
+        for key, low, high in HEIGHT_HOLD_BOUNDS:
+            if not _number(hold[key], low, high):
+                raise ValueError(f"height_hold.{key} must be finite and within [{low}, {high}]")
+    waits = profile.get("timeouts")
+    if waits is not None:
+        if not isinstance(waits, dict) or set(waits) != {name for name, _, _ in TIMEOUT_BOUNDS}:
+            raise ValueError("timeouts must set climb_s, takeoff_settle_s, "
+                             "arm_authority_s and ground_proof_s")
+        for key, low, high in TIMEOUT_BOUNDS:
+            if not _number(waits[key], low, high):
+                raise ValueError(f"timeouts.{key} must be finite and within [{low}, {high}]")
     return profile
+
+
+def phase_timeout_s(profile, name, fallback):
+    """Profile patience for one phase, or the value this trial has always used."""
+    waits = (profile or {}).get("timeouts") or {}
+    value = waits.get(name)
+    return float(value) if _number(value, 0., 1e4) else float(fallback)
+
+
+def height_hold_up_mps(client, profile):
+    """Vertical speed that cancels the sink a wall leg accumulates.
+
+    The legs only ever commanded zero on this axis, so the aircraft drifted down
+    under its own weight and carried the target out of the top of the frame. This
+    only ever pushes back up: sinking is the failure that was observed, and a
+    downward term would fight the operator rather than hold the hover. A profile
+    without height_hold, a telemetry read without a height, or any height at or
+    above the cruise band all command exactly zero.
+    """
+    hold = profile.get("height_hold")
+    telemetry = client.last_telemetry
+    if not hold or telemetry is None:
+        return 0.
+    height = getattr(telemetry, "height_m", None)
+    if not _number(height, -1e3, 1e3):
+        return 0.
+    sink = profile["target_height_m"] - height
+    if sink < hold["deadband_m"]:
+        return 0.
+    return min(hold["max_up_mps"], sink * hold["gain_mps_per_m"])
 
 
 def load_profile(path):
@@ -144,8 +215,8 @@ def plan(profile, pair_reference=None, continue_patrol=False):
                  for a, b in zip(ROUTE_IDS, ROUTE_IDS[1:])],
         "required_bridge_build_id": BUILD_ID,
         "height_source": "downward_ultrasonic_display_with_floor_ID0_visual_crosscheck",
-        "climb_timeout_s": CLIMB_TIMEOUT_S,
-        "takeoff_settle_timeout_s": TAKEOFF_SETTLE_TIMEOUT_S,
+        "climb_timeout_s": phase_timeout_s(profile, "climb_s", CLIMB_TIMEOUT_S),
+        "takeoff_settle_timeout_s": phase_timeout_s(profile, "takeoff_settle_s", TAKEOFF_SETTLE_TIMEOUT_S),
         "takeoff_stable_hold_s": TAKEOFF_STABLE_HOLD_S,
         "wall_home_visibility_margin_fraction": .03,
         "wall_capture_bounds_fraction": {"x_min": .15, "x_max": .85, "y_min": .15, "y_max": .85},
@@ -308,11 +379,23 @@ class ShuttleClient(MissionClient):
         self.motion_valid_until_s = None
         self.pair_mode = False
         self._pair_dispatch_proof = None
+        # Set from the profile once it is loaded; the constant stays the default
+        # so a profile without a timeouts block arms exactly as before.
+        self.arm_authority_timeout_s = ARM_AUTHORITY_TIMEOUT_S
+        # Zero admits only up == 0 on a lateral leg, which is what every flight
+        # before the cruise hold dispatched.
+        self.hold_up_bound = 0.
+        # Set at arm so a watchdog handback can be undone without the caller
+        # having to thread the token back through every phase.
+        self._confirmation_token = None
+        self._reacquiring = False
+        self.reacquisitions = 0
 
     def arm(self, confirmation_token):
         """Arm once, then admit motion only after the SDK authority callback."""
         if self._armed:
             raise PermissionError("Already armed; no automatic re-arm")
+        self._confirmation_token = confirmation_token
         previous_phase = self.phase
         self.phase = "arming"
         ready = False
@@ -321,7 +404,7 @@ class ShuttleClient(MissionClient):
             # This local flag means motion-ready, not merely arm ACK received.
             # The arming phase permits no attitude commands while callbacks lag.
             self._armed = False
-            deadline = time.monotonic() + ARM_AUTHORITY_TIMEOUT_S
+            deadline = time.monotonic() + self.arm_authority_timeout_s
             while time.monotonic() < deadline:
                 self.status("standalone_wait_arm_authority")
                 raw, t = self.raw, self.last_telemetry
@@ -341,10 +424,57 @@ class ShuttleClient(MissionClient):
                     return
                 time.sleep(.1)
             raise TimeoutError("Virtual Stick authority did not become ready within "
-                               f"{ARM_AUTHORITY_TIMEOUT_S:g}s; no re-arm")
+                               f"{self.arm_authority_timeout_s:g}s; no re-arm")
         finally:
             self._armed = ready
             self.phase = previous_phase
+
+    def _watchdog_handback(self, exc, kind):
+        """Decide whether the aircraft, not the operator, released control."""
+        if (self._reacquiring or self.cleaning or self.phase == "arming"
+                or kind in {"arm", "takeoff", "disarm", "stick_mode"}
+                or "Control authority changed" not in str(exc)):
+            return False
+        raw, t = self.raw, self.last_telemetry
+        elapsed = time.perf_counter() - self.received
+        reason = getattr(t, "vs_change_reason", None)
+        override = getattr(t, "rc_override_age_s", None)
+        if self.reacquisitions >= AUTHORITY_REACQUIRE_LIMIT:
+            refusal = "reacquire_limit_reached"
+        elif t is None or not _number(elapsed, 0., FRESH_S):
+            refusal = "no_fresh_telemetry"
+        elif reason not in AUTHORITY_REACQUIRE_REASONS:
+            # An unreported reason is not evidence of a watchdog handback.
+            refusal = "reason_not_sdk_initiated"
+        elif override is not None and 0 <= override < 5:
+            refusal = "rc_override_active"
+        elif raw.get("is_flying") is not True or not fresh(
+                raw, "is_flying", max(0., (FLIGHT_STATE_FRESH_S-elapsed)*1000)):
+            refusal = "not_airborne"
+        elif not self._confirmation_token:
+            refusal = "no_arm_token"
+        else:
+            refusal = None
+        self.log_event("standalone_authority_handback", {
+            "recoverable": refusal is None, "refusal": refusal,
+            "vs_change_reason": reason, "rc_override_age_s": override,
+            "vs_authority": raw.get("vs_authority"), "armed": raw.get("armed"),
+            "kind": kind, "reacquisitions": self.reacquisitions})
+        return refusal is None
+
+    def _reacquire_authority(self, reason):
+        self.reacquisitions += 1
+        self._reacquiring = True
+        try:
+            # Clearing the flag first is what suspends the authority post-check:
+            # the re-arm's own dispatches have to cross a socket that currently
+            # reports RC, and a nested recovery attempt is refused outright.
+            self._armed = False
+            self.arm(self._confirmation_token)
+        finally:
+            self._reacquiring = False
+        self.log_event("standalone_authority_reacquired",
+                       {"reason": reason, "attempt": self.reacquisitions})
 
     def observe_frame(self, snapshot):
         if snapshot is None or not _number(time.monotonic() - snapshot.received_s, 0., FRESH_S):
@@ -359,6 +489,19 @@ class ShuttleClient(MissionClient):
         elif snapshot.key[0] != self.video_generation:
             raise InterruptedError("Video generation changed during shuttle; no automatic resume")
 
+    def hold_up(self, value):
+        """Clamp the cruise hold into what this phase admits, never raising.
+
+        A lateral leg is the mission; the vertical hold is an assist on top of
+        it. The 15:30 flight ended on PermissionError the first tick the hold
+        asked for +0.04 m/s, so the assist must never be able to reject a leg:
+        anything the guard would not admit becomes a plain zero and the leg
+        keeps its own axis.
+        """
+        if self.phase != "lateral" or not _number(value, 0., self.hold_up_bound):
+            return 0.
+        return value
+
     def _guard_dispatch(self, kind, payload):
         if kind != "attitude":
             return
@@ -368,7 +511,11 @@ class ShuttleClient(MissionClient):
         if self.phase == "climb":
             permitted = forward == right == yaw == 0. and _number(up, 0., .18)
         elif self.phase == "lateral":
-            permitted = forward == up == yaw == 0. and _number(right, *self.lateral_bounds)
+            # The cruise hold only ever pushes up, and never past the profile's
+            # own ceiling, so a profile without height_hold leaves this bound at
+            # zero and admits exactly the same commands as before.
+            permitted = (forward == yaw == 0. and _number(right, *self.lateral_bounds)
+                         and _number(up, 0., self.hold_up_bound))
         else:
             permitted = False
         if not permitted:
@@ -396,7 +543,18 @@ class ShuttleClient(MissionClient):
             self._pair_dispatch_proof = (speed, age, time.perf_counter())
         try:
             self._guard_dispatch(kind, payload)
-            return super().send(kind, payload, timeout_s)
+            try:
+                return super().send(kind, payload, timeout_s)
+            except InterruptedError as exc:
+                # The authority post-check runs after the ACK is accepted and
+                # the telemetry stored, so recovering here leaves no
+                # half-written state, and no caller reads a motion ACK.
+                if not self._watchdog_handback(exc, kind):
+                    raise
+                self._reacquire_authority(str(exc))
+                # Routed back through this method so a second, independent
+                # handback is bounded by the limit rather than ending the run.
+                return self.send("status", {"state": "standalone_authority_reacquired"})
         finally:
             self._pair_dispatch_proof = None
 
@@ -656,14 +814,15 @@ def _takeoff_observation(client):
             "flight_mode": t.flight_mode, "velocity_down_mps": t.velocity_down_mps}
 
 
-def _wait_takeoff_settled(client, limiter):
+def _wait_takeoff_settled(client, limiter, profile=None):
     """Wait for completion of DJI's automatic takeoff before the sole arm.
 
     GPS_NORMAL is the observed position/idle mode name on this firmware; it
     does not assert that a GNSS fix is in use. No arm retries are performed.
     """
     client.phase = "takeoff"
-    deadline, stable_since = time.monotonic() + TAKEOFF_SETTLE_TIMEOUT_S, None
+    budget = phase_timeout_s(profile, "takeoff_settle_s", TAKEOFF_SETTLE_TIMEOUT_S)
+    deadline, stable_since = time.monotonic() + budget, None
     while time.monotonic() < deadline:
         limiter.wait()
         client.status("standalone_takeoff_settle")
@@ -683,12 +842,13 @@ def _wait_takeoff_settled(client, limiter):
                 return
         else:
             stable_since = None
-    raise TimeoutError("DJI takeoff did not settle within 20s; no arm retry; RC landing required")
+    raise TimeoutError(f"DJI takeoff did not settle within {budget:g}s; no arm retry; RC landing required")
 
 
-def _climb(client, limiter, stream, detector, logger, config, target):
+def _climb(client, limiter, stream, detector, logger, config, target, profile=None):
     client.phase = "climb"
-    deadline, held, previous_key = time.monotonic() + CLIMB_TIMEOUT_S, None, None
+    budget = phase_timeout_s(profile, "climb_s", CLIMB_TIMEOUT_S)
+    deadline, held, previous_key = time.monotonic() + budget, None, None
     generation = None
     tag_miss_since = None
     def require_frame(snapshot):
@@ -725,6 +885,11 @@ def _climb(client, limiter, stream, detector, logger, config, target):
                 client.log_event("standalone_climb_tag_miss",
                                  {"frame_age_s": age, "floor_seen": floor is not None})
             if now - tag_miss_since < CLIMB_TAG_MISS_GRACE_S:
+                # Waiting for a decode is not a reason to stop commanding. This
+                # grace is a full second and the aircraft disables Virtual Stick
+                # at about that age, so re-observing without a setpoint would
+                # hand authority back to the RC before the grace even expires.
+                client.zero()
                 continue
             raise RuntimeError("Fresh floor ID0 unavailable during climb")
         tag_miss_since = None
@@ -783,9 +948,17 @@ def _climb(client, limiter, stream, detector, logger, config, target):
             try:
                 client.attitude(0., 0., up, 0.)
             except FramingCorrectionDeferred as exc:
-                # CLIMB_TIMEOUT_S still bounds a camera that never recovers.
+                # Refused before the wire write: hold still and re-observe, the
+                # same way the wall traversal does. The setpoint must still
+                # reach the aircraft. Virtual Stick is disabled by the aircraft
+                # when no stick command arrives for about a second, and status
+                # polling does not count: a deferred climb correction once left
+                # the setpoint untouched for 1.045 s and the flight controller
+                # handed authority back to the RC mid-climb. The climb deadline
+                # still bounds a camera that never recovers.
+                client.zero()
                 client.log_event("standalone_climb_deferred", {"reason": str(exc)})
-    raise RuntimeError(f"{target:g}m downward height target not confirmed within {CLIMB_TIMEOUT_S:g}s; no lateral command")
+    raise RuntimeError(f"{target:g}m downward height target not confirmed within {budget:g}s; no lateral command")
 
 
 def _pause(client, limiter, stream, detector, logger, seconds, phase, expected):
@@ -850,6 +1023,7 @@ def traverse_horizontal(client, limiter, stream, detector, logger, config, profi
         except (RuntimeError, InterruptedError):
             client.zero()
             raise
+        up = client.hold_up(height_hold_up_mps(client, profile))
         client.log_event("standalone_horizontal_sample", {
             "expected_id": expected, "visible_ids": [tag.tag_id for tag in tags],
             "frame_age_s": age, "frame_key": _snapshot_key(stream),
@@ -857,12 +1031,14 @@ def traverse_horizontal(client, limiter, stream, detector, logger, config, profi
             "expected_center_px": gate.expected_center_px, "framing_action": gate.framing_action,
             "view_bounds_fraction": wall_view_bounds(config.patrol),
             "frame_size_px": [frame_shape[1], frame_shape[0]] if len(frame_shape) >= 2 else None,
-            "forward_tilt_deg": 0., "up_mps": 0., "yaw_rate_rps": 0.,
+            "forward_tilt_deg": 0., "up_mps": up, "yaw_rate_rps": 0.,
+            "height_m": None if client.last_telemetry is None else client.last_telemetry.height_m,
         })
-        # The sole motion-producing call in the wall traversal has one axis.
-        if right:
+        # The sole motion-producing call in the wall traversal has one horizontal
+        # axis; the vertical term only ever holds the declared cruise height.
+        if right or up:
             try:
-                client.attitude(0., right, 0., 0.)
+                client.attitude(0., right, up, 0.)
             except FramingCorrectionDeferred as exc:
                 # Refused before the wire write: hold still and re-observe. The
                 # leg deadline still bounds a camera that never recovers.
@@ -958,16 +1134,18 @@ def capture_id1_pair(client, limiter, stream, detector, logger, config, profile,
         right, confirmed = gate.update(tags, time.monotonic(), age, _snapshot_key(stream),
                                        shape, speed, velocity_age)
         diagnostic = dict(gate.diagnostic)
+        up = client.hold_up(height_hold_up_mps(client, profile))
         client.log_event("id1_pair_framing_sample", {**diagnostic, "tag_id": expected,
             "visible_ids": [tag.tag_id for tag in tags], "right_tilt_deg": right,
             "frame_key": _snapshot_key(stream), "frame_age_s": age,
             "horizontal_speed_mps": speed, "velocity_age_s": velocity_age,
+            "up_mps": up,
             "height_m": None if client.last_telemetry is None else client.last_telemetry.height_m})
         pulse_deadline = diagnostic.get("motion_valid_until_s")
         client.motion_valid_until_s = pulse_deadline
-        if right:
+        if right or up:
             try:
-                client.attitude(0., right, 0., 0.)
+                client.attitude(0., right, up, 0.)
                 if pulse_deadline is not None:
                     # This is the requested PC pulse duration. An ACK delay can
                     # outlast it; physical duration is not asserted from this timer.
@@ -1104,7 +1282,8 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
         from id1_pair_framing import PairFramingGate
         first_tag = 1 if external_route is None else external_route[1]
         pair_gate = PairFramingGate(pair_reference, direction="left",
-            arrival_band=pair_reference.get("arrival_center_x_fraction"), tag_id=first_tag)
+            arrival_band=pair_reference.get("arrival_center_x_fraction"), tag_id=first_tag,
+            layout=WALL_IDS)
         profile = {**profile, "max_tilt_deg": .6}
         config = replace(config, patrol=replace(config.patrol, angle_deg=.6, recovery_max_angle_deg=.6))
     active_route = list(ROUTE_IDS) if continue_patrol or pair_gate is None else [6, 1]
@@ -1113,6 +1292,9 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
     cancel = threading.Event() if cancel is None else cancel
     emit = on_event or (lambda **event: None)
     client = ShuttleClient(config, cancel, on_snapshot or (lambda snapshot: None))
+    client.arm_authority_timeout_s = phase_timeout_s(profile, "arm_authority_s", ARM_AUTHORITY_TIMEOUT_S)
+    client.hold_up_bound = float((profile.get("height_hold") or {}).get("max_up_mps") or 0.)
+    ground_proof_s = phase_timeout_s(profile, "ground_proof_s", GROUND_PROOF_TIMEOUT_S)
     stream = logger = None
     visited, completed, error, diagnostic_errors = [], False, None, []
     release = {"control_released_to_rc": False, "ground_verified": False,
@@ -1123,7 +1305,7 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
         emit(state="preflight")
         client.connect()
         client.deadline = time.perf_counter() + profile["total_timeout_s"]
-        if not _await_ground_proof(client, "standalone_preflight", cancel):
+        if not _await_ground_proof(client, "standalone_preflight", cancel, ground_proof_s):
             raise RuntimeError(f"Fresh motors-off grounded RC state and bridge {BUILD_ID} required")
         if client.raw.get("bridge_build_id") != BUILD_ID:
             raise RuntimeError(f"Fresh motors-off grounded RC state and bridge {BUILD_ID} required")
@@ -1156,7 +1338,7 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
         client.gimbal_down()
         stream = _prepare_ground_video(client, limiter, stream, detector, logger, config, video_broker)
         client.stick_mode("advanced_angle")
-        if not _await_ground_proof(client, "standalone_immediate_takeoff_ground_proof", cancel):
+        if not _await_ground_proof(client, "standalone_immediate_takeoff_ground_proof", cancel, ground_proof_s):
             raise RuntimeError("Ground/motor state changed before takeoff")
         rc_age = client.last_telemetry.rc_override_age_s
         if rc_age is not None and 0 <= rc_age < 5:
@@ -1164,11 +1346,11 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
         print(f"TAKEOFF once; floor0 -> height{profile['target_height_m']:g}m -> wall6", flush=True)
         emit(state="taking_off")
         client.takeoff(config.network.confirmation_token)
-        _wait_takeoff_settled(client, limiter)
+        _wait_takeoff_settled(client, limiter, profile)
         client.arm(config.network.confirmation_token)
         floor = VisitGate(0, PatrolPhase.FLOOR_HOME)
         _acquire_tag(client, limiter, stream, detector, logger, floor, config.patrol)
-        _climb(client, limiter, stream, detector, logger, config, profile["target_height_m"])
+        _climb(client, limiter, stream, detector, logger, config, profile["target_height_m"], profile)
         client.gimbal(0.)
         _pause(client, limiter, stream, detector, logger, 1., PatrolPhase.WALL_HOME, 6)
         acquire_wall_home(client, limiter, stream, detector, logger, config)
@@ -1188,7 +1370,8 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
                              else external_direction(external_route, departure, expected))
                 gate = pair_gate if index == 0 else PairFramingGate(
                     pair_reference, direction=direction,
-                    arrival_band=pair_reference.get("arrival_center_x_fraction"), tag_id=expected)
+                    arrival_band=pair_reference.get("arrival_center_x_fraction"), tag_id=expected,
+                    layout=WALL_IDS)
                 capture_id1_pair(client, limiter, stream, detector, logger, config, profile, gate,
                     departure=departure, expected=expected, external_route=external_route,
                     capture_count=capture_count, on_capture=(None if on_capture is None else
@@ -1291,7 +1474,7 @@ def main(argv=None):
                           if args.id1_pair else None)
         if args.id1_pair:
             from id1_pair_framing import PairFramingGate
-            PairFramingGate(pair_reference, direction="left",
+            PairFramingGate(pair_reference, direction="left", layout=WALL_IDS,
                 arrival_band=pair_reference.get("arrival_center_x_fraction") if isinstance(pair_reference, dict) else None)
         if not args.execute and not args.check:
             print(json.dumps(plan(profile, pair_reference, args.continue_patrol), ensure_ascii=False, indent=2))
@@ -1303,7 +1486,7 @@ def main(argv=None):
             MixedDetector(config)
             if pair_reference is not None:
                 from id1_pair_framing import PairFramingGate
-                PairFramingGate(pair_reference, direction="left",
+                PairFramingGate(pair_reference, direction="left", layout=WALL_IDS,
                     arrival_band=pair_reference.get("arrival_center_x_fraction"))
             import av
             print(json.dumps({"mode": "offline_check", "setup_ready": True,

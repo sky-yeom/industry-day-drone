@@ -7,7 +7,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "trials"))
-from id1_pair_framing import PairFramingError, PairFramingGate, project_pair_footprint
+from id1_pair_framing import (MAX_RECOVERY_PULSES, MISSING_RECOVERY_S, PairFramingError,
+                              PairFramingGate, project_pair_footprint)
 
 
 REFERENCE = {"roi_tag_bounds": {"x_min": -5.090921, "x_max": 1.406036,
@@ -416,22 +417,72 @@ class GateTests(unittest.TestCase):
         self.assertIs(found, observed)
         self.assertTrue(self.gate.diagnostic["arrival_ready"])
 
+    def test_visible_neighbour_fixes_search_side_from_the_surveyed_wall_order(self):
+        """19:00 flight: ID1 lost with only ID2 in frame and [3, 2, 1, 6] on the wall."""
+        self.gate = PairFramingGate(REFERENCE, arrival_band=(.85, .95), layout=(3, 2, 1, 6))
+        self.update(0., tag(.90*1920.-100., 300., 200.))  # No trend or motion evidence at all.
+        longest_zero_hold, commanded_right = 0., 0
+        for step in range(1, 121):  # 12 s of 100 ms frames with ID2 visible and ID1 absent.
+            right, _ = self.update(step*.1, tags=[tag(tag_id=2)])
+            longest_zero_hold = max(longest_zero_hold, self.gate.diagnostic["zero_hold_s"])
+            commanded_right += right > 0.
+        self.assertEqual(self.gate.diagnostic["layout_direction_sign"], 1.)
+        self.assertIn("fixed_wall_order", self.gate.diagnostic["last_tag_observation"]["evidence"])
+        self.assertLess(longest_zero_hold, MISSING_RECOVERY_S)
+        self.assertGreater(commanded_right, 60)
+
+    def test_wall_order_stays_ambiguous_when_neighbours_sit_on_both_sides(self):
+        gate = PairFramingGate(REFERENCE, arrival_band=(.85, .95), layout=(3, 2, 1, 6))
+        self.assertEqual(gate._layout_direction([2]), 1.)
+        self.assertEqual(gate._layout_direction([6]), -1.)
+        self.assertIsNone(gate._layout_direction([2, 6]))
+        self.assertIsNone(gate._layout_direction([1, None, 99]))
+        self.assertIsNone(PairFramingGate(REFERENCE)._layout_direction([2]))
+        for bad in ((3, 2, 6), (3, 3, 1), (3, 2, 1., 6), (1,)):
+            with self.subTest(layout=bad), self.assertRaises(ValueError):
+                PairFramingGate(REFERENCE, layout=bad)
+
     def test_missing_target_recovery_seeks_until_window_closes_then_waits_not_fatal(self):
         self.start_recorded_right_loss()
         for start in (.981, 1.831, 2.681, 3.531, 6.1):
             self.assertEqual(self.update(start, tags=[])[0], .6)
+        # The window closing while the aircraft holds zero re-arms the seek
+        # instead of parking: hovering cannot move the tag off the evidence.
         self.assertEqual(self.update(6.3, tags=[]), (0., None))
+        self.assertEqual(self.gate.diagnostic["state"], "REACQUIRE_SETTLE")
+        self.assertTrue(self.gate.diagnostic["recovery_rearmed_from_stationary_hold"])
+        self.assertEqual(self.update(6.7, tags=[])[0], .6)
+        self.assertEqual(self.gate.diagnostic["recovery_pulses_used"], 2)
+        self.assertEqual(self.update(12.4, tags=[]), (0., None))
+        self.assertEqual(self.update(12.8, tags=[])[0], .6)
+        self.assertEqual(self.gate.diagnostic["recovery_pulses_used"], 3)
+        # The budget still bounds the whole search, and running out is not fatal.
+        self.assertEqual(self.update(18.5, tags=[]), (0., None))
         self.assertEqual(self.gate.diagnostic["state"], "WAIT_TARGET")
         self.assertIn("no_recent_direction_evidence", self.gate.diagnostic["reason"])
-        self.assertEqual(self.gate.diagnostic["recovery_pulses_used"], 1)
+        self.assertEqual(self.gate.diagnostic["recovery_pulses_used"], MAX_RECOVERY_PULSES)
+
+    def test_stationary_hold_after_lost_target_never_parks_within_the_pulse_budget(self):
+        """The 19:00 flight held zero 32 s with recovery_sign=1.0 still on file."""
+        self.start_recorded_right_loss()
+        longest_zero_hold, commanded = 0., 0
+        for step in range(1, 181):  # 18 s of 100 ms frames with the tag absent.
+            right, _ = self.update(.4+step*.1, tags=[tag(tag_id=2)])
+            longest_zero_hold = max(longest_zero_hold, self.gate.diagnostic["zero_hold_s"])
+            commanded += right != 0.
+        self.assertLess(longest_zero_hold, MISSING_RECOVERY_S)
+        self.assertGreater(commanded, 100)
+        self.assertEqual(self.gate.diagnostic["recovery_pulses_used"], MAX_RECOVERY_PULSES)
 
     def test_missing_target_recovery_requires_recent_direction_evidence(self):
         self.gate = PairFramingGate(REFERENCE, arrival_band=(.85, .95))
         self.update(0., tag(.90*1920.-100., 300., 200.))  # No approach/trend evidence.
         for index in range(1, 15):
             self.assertEqual(self.update(index*.1, tags=[]), (0., None))
-        self.start_recorded_right_loss()
+        # No direction was ever recorded, so the budget cannot re-arm anything.
         self.assertEqual(self.update(6.3, tags=[]), (0., None))
+        self.assertEqual(self.gate.diagnostic["state"], "WAIT_TARGET")
+        self.assertEqual(self.gate.diagnostic["recovery_pulses_used"], 0)
         self.assertIn("no_recent_direction_evidence", self.gate.diagnostic["reason"])
 
     def test_missing_target_correction_direction_follows_observed_left_exit(self):
@@ -442,7 +493,7 @@ class GateTests(unittest.TestCase):
         self.assertEqual(self.update(.7, tag(.10*1920.-50., 300., 100.)), (0., None))
         self.assertEqual(self.update(.8, tags=[]), (0., None))
         self.assertEqual(self.update(1.4, tags=[])[0], -.6)
-        self.assertIn("near_left", self.gate.diagnostic["reason"])
+        self.assertIn("left_of_centre", self.gate.diagnostic["reason"])
 
     def test_capture_ready_can_reframe_when_photo_was_deferred_by_caller(self):
         self.gate = PairFramingGate(REFERENCE, arrival_band=(.85, .95))

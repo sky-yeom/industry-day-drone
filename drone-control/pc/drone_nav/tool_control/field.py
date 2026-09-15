@@ -93,10 +93,16 @@ class FieldAdapter(LiveAdapter):
             raise ValueError(f"Site asks for {self.target_height_m:g}m but the profile "
                              f"climbs to {self.profile['target_height_m']:g}m")
         self.reference = json.loads(Path(reference_path).read_text(encoding="utf-8-sig"))
-        if (not isinstance(self.reference, dict)
-                or self.reference.get("arrival_center_x_fraction") != [.85, .95]):
-            raise ValueError("Field HTTP adapter requires the latest 85-95% edge arrival band")
-        PairFramingGate(self.reference, arrival_band=[.85, .95])
+        band = (self.reference.get("arrival_center_x_fraction")
+                if isinstance(self.reference, dict) else None)
+        # The band is a site tunable, so the adapter checks its shape and lets the
+        # gate validate the fractions; a reference without it is a pre-edge-band file.
+        if not isinstance(band, (list, tuple)) or len(band) != 2:
+            raise ValueError("Field HTTP adapter requires arrival_center_x_fraction, an ordered "
+                             "edge arrival band such as [0.85, 0.95]")
+        self.arrival_band = list(band)
+        PairFramingGate(self.reference, arrival_band=self.arrival_band,
+                        layout=self.profile["wall_ids_left_to_right"])
         self.config = shuttle.configure_execution(
             shuttle.load_config(config_path, image_only_walls=True), self.profile)
         address = ipaddress.ip_address(self.config.network.host)
@@ -166,7 +172,7 @@ class FieldAdapter(LiveAdapter):
         def capture(index, client, stream, snapshot, tag, diagnostic):
             if (tag.tag_id != route[index + 1]
                     or diagnostic.get("arrival_policy") != "tag_right_edge_band"
-                    or diagnostic.get("arrival_band_fraction") not in ([.85, .95], (.85, .95))
+                    or list(diagnostic.get("arrival_band_fraction") or []) != self.arrival_band
                     or diagnostic.get("arrival_ready") is not True
                     or diagnostic.get("capture_ready") is not True):
                 raise RuntimeError("Latest field gate did not confirm this destination")
@@ -198,7 +204,7 @@ class FieldAdapter(LiveAdapter):
                 "frame_id": snapshot.key[1], "frame_decoded_pc_monotonic_s": snapshot.received_s,
                 "aircraft_exposure_timestamp_available": False, "tv_visibility_verified": False,
                 "framing_mode": "field_tag_right_edge_band", "arrival_policy": "tag_right_edge_band",
-                "arrival_band_fraction": [.85, .95], "predicted_footprint_policy": "diagnostic_only",
+                "arrival_band_fraction": list(self.arrival_band), "predicted_footprint_policy": "diagnostic_only",
                 "framing_diagnostic": diagnostic, "capture_evidence": proof,
             }
             if not prior:

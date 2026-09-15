@@ -5,10 +5,21 @@
   "home_tag_id": 6,
   "route_ids": [6, 1, 2, 3, 2, 1, 6],
   "target_height_m": 1.6,
+  "height_hold": {
+    "deadband_m": 0.08,
+    "gain_mps_per_m": 0.4,
+    "max_up_mps": 0.18
+  },
   "max_tilt_deg": 1.5,
+  "timeouts": {
+    "climb_s": 30.0,
+    "takeoff_settle_s": 40.0,
+    "arm_authority_s": 10.0,
+    "ground_proof_s": 60.0
+  },
   "visit_pause_s": 3.0,
-  "leg_timeout_s": 45.0,
-  "total_timeout_s": 240.0,
+  "leg_timeout_s": 75.0,
+  "total_timeout_s": 420.0,
   "layout_confirmed": true,
   "wall_measurement": "image_only",
   "floor_size_source": "private_config"

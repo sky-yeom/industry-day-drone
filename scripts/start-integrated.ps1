@@ -51,11 +51,13 @@ function Start-NodeProcess {
     }
 }
 $connection = @{}
-$backendNames = '^(DRONE_|RELAY_|TRIAGE_MODE$|VOICE_LIVE_RESOURCE$|VOICE_LIVE_REGION$|AZURE_VISION_)'
+$backendNames = '^(DRONE_|RELAY_|TRIAGE_MODE$|VOICE_LIVE_RESOURCE$|VOICE_LIVE_REGION$|AZURE_VISION_|VOICE_LIVE_SILENCE_MS$|VOICE_LIVE_PREFIX_PADDING_MS$|VOICE_LIVE_SPEECH_DURATION_MS$|VOICE_LIVE_VAD_THRESHOLD$|VOICE_LIVE_VAD_TYPE$)'
 foreach ($key in $settings.Keys) {
     if ($key -match $backendNames) { $connection[$key] = $settings[$key] }
 }
-# Keep the selected UI branch's voice/persona/VAD defaults; only connection settings are imported.
+# Keep the selected UI branch's voice and persona defaults. VAD turn-taking is
+# the exception: a room decides how long a speaker pauses, so the field settings
+# file may override those thresholds without a code edit.
 $connection['DRONE_RUN_MODE'] = $modeValue
 if ($VoiceTraceDirectory) {
     Assert-DroneNonSyncedPath -Path $VoiceTraceDirectory

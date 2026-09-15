@@ -420,6 +420,53 @@ class CapturePostAckTests(StandaloneTestCase):
         self.assertNotEqual(seen[0], seen[1], "The retry reused the frame that was refused")
         logger.save_confirmation_photo.assert_called_once()
 
+    def hook_loop_dispatches(self, hook, *, expected_hook_calls):
+        """Drive capture_id1_pair and report the setpoints sent around the hook.
+
+        Every path that loops back for another frame has to leave a stick
+        command behind it. The aircraft disables Virtual Stick after about a
+        second without one, and the continuous gate never sets
+        motion_valid_until_s, so the pulse `finally` that used to cover these
+        branches never runs.
+        """
+        clock, client, logger = [100.], FakeClient(), MagicMock()
+        client.raw.update(airborne_raw())
+        client.pair_mode = True
+        stream = fake_stream(clock)
+        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .1))
+        gate = SimpleNamespace(update=lambda *args: (0., args[0][0]),
+                               diagnostic={"capture_ready": True, "footprint": {"fits": True}})
+        logger.save_confirmation_photo.return_value = Path("offline-ID1.jpg")
+        seen, sent = [], []
+        original_zero = client.zero
+        def zero():
+            sent.append(clock[0])
+            original_zero()
+        client.zero = zero
+        def wrapped(_client, _stream, snapshot, _confirmed, _diagnostic):
+            seen.append(snapshot.key)
+            # A real hook encodes a full frame, hashes it and persists an event.
+            clock[0] += .9
+            return hook(len(seen))
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                patch.object(shuttle.time, "perf_counter", lambda: clock[0]), \
+                redirect_stdout(io.StringIO()):
+            shuttle.capture_id1_pair(client, limiter, stream, None, logger, config(), profile(),
+                                     gate, on_capture=wrapped)
+        self.assertEqual(len(seen), expected_hook_calls)
+        return sent
+
+    def test_a_slow_capture_hook_never_leaves_the_sticks_unattended(self):
+        for label, hook in (("deferral", lambda n: (_ for _ in ()).throw(
+                                shuttle.FramingCorrectionDeferred("offline deferral")) if n == 1 else True),
+                            ("duplicate_image", lambda n: n != 1)):
+            with self.subTest(path=label):
+                sent = self.hook_loop_dispatches(hook, expected_hook_calls=2)
+                gaps = [b-a for a, b in zip(sent, sent[1:])]
+                self.assertTrue(sent, "No setpoint was dispatched at all")
+                self.assertLess(max(gaps, default=0.), 1.,
+                                f"{label}: {max(gaps, default=0.):.3f}s without a stick command")
+
 
 if __name__ == "__main__":
     unittest.main()

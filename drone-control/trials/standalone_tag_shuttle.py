@@ -1156,6 +1156,12 @@ def capture_id1_pair(client, limiter, stream, detector, logger, config, profile,
                 # Only a local refusal before the wire write is recoverable.
                 # ACK rejection, lost authority and uncertain transport outcomes
                 # still propagate to mission cleanup; no command is replayed.
+                # The setpoint must still reach the aircraft: Virtual Stick is
+                # disabled after about a second with no stick command. A pulse is
+                # covered by the finally below, but the continuous gate leaves
+                # motion_valid_until_s unset, and then nothing would be sent.
+                if pulse_deadline is None:
+                    client.zero()
                 client.log_event("id1_pair_correction_deferred", {
                     "reason": str(exc), "requested_right_tilt_deg": right,
                     "controller_state": diagnostic.get("state"),
@@ -1198,10 +1204,19 @@ def capture_id1_pair(client, limiter, stream, detector, logger, config, profile,
                 try:
                     accepted = on_capture(client, stream, snapshot, confirmed, diagnostic)
                 except FramingCorrectionDeferred as exc:
+                    client.zero()
                     client.log_event("id1_pair_capture_deferred", {"reason": str(exc),
                         "stage": "capture_hook", "tag_id": expected})
                     continue
+                # The hook encodes a full frame to PNG, hashes it and may persist
+                # the arrival event, which can outlast the roughly one second the
+                # aircraft waits for a stick command. Looping back for another
+                # frame must re-assert the hold first; the gate already requires
+                # standstill here, so zero is the setpoint this state holds. The
+                # accepted path is left untouched so the capture keeps the frame
+                # freshness it was just granted.
                 if not accepted:
+                    client.zero()
                     continue
             photo = logger.save_confirmation_photo(stream, confirmed, phase=PatrolPhase.OUTBOUND)
             if photo is None and on_capture is None:

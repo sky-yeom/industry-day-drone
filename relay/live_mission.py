@@ -30,6 +30,15 @@ TRANSIENT_READ_FAILURES = {"TRANSPORT_ERROR", "INVALID_RESPONSE"}
 # The service lease is 10s and this renews every 2s, so retrying for 6s leaves
 # the lease intact even when every attempt inside the budget fails.
 READ_RETRY_BUDGET_S = 6.0
+# The phone's DJI key handler drops out for a few seconds at a time and comes
+# back on its own; field samples healed in 8-25s with no human action. Rejecting
+# a launch on the first such sample turned a blink into an aborted mission, so
+# this one code is re-read for a bounded window. Every other readiness failure
+# names something a person has to fix - power, USB, SDK registration - and is
+# still refused immediately.
+TRANSIENT_READINESS_CODES = {"FLIGHT_CONTROLLER_UNAVAILABLE"}
+READINESS_RECOVERY_BUDGET_S = 30.0
+READINESS_RECOVERY_INTERVAL_S = 2.0
 log = logging.getLogger("relay.tool_mission")
 PREFLIGHT_FAILURES = {
     "RuntimeError: Fresh video not confirmed before takeoff": (
@@ -50,6 +59,7 @@ class LiveMissionRunner(MissionRunner):
             raise DroneError("MODE_MISMATCH")
         self.expected_mode, self.allow_mock_tools = expected_mode, allow_mock_tools
         self.read_retry_budget_seconds = READ_RETRY_BUDGET_S
+        self.readiness_recovery_budget_seconds = READINESS_RECOVERY_BUDGET_S
         self.label = "MOCK 도구" if expected_mode == "mock" else "실제 드론"
         self.session.data["droneToolExecution"] = expected_mode
         self.drone = drone_client
@@ -151,6 +161,8 @@ class LiveMissionRunner(MissionRunner):
                 if self._route not in caps.get("supported_ordered_sequences", []):
                     raise DroneError("ROUTE_UNSUPPORTED", "확인한 방문 순서는 현장 드론 프로파일에서 지원하지 않습니다.")
                 status = self._live_response(await self.drone.call("drone_get_status", {}))
+                if self.expected_mode == "live":
+                    status = await self._settled_status(status)
                 if self.expected_mode == "live" and (issue := live_readiness_issue(status)):
                     code, message = issue
                     self.session.data.update(droneState="idle", droneErrorCode=code,
@@ -189,6 +201,30 @@ class LiveMissionRunner(MissionRunner):
             except Exception as exc:
                 await self._fail(exc)
                 return result(False, self.session.data["error"])
+
+    async def _settled_status(self, status):
+        """Re-read status while the only complaint is one the phone heals itself.
+
+        The DJI key handler blinks out and returns without anyone touching the
+        aircraft, so the first sample is not evidence that the launch should be
+        refused. Anything else - or a blink that outlasts the budget - is
+        returned as-is and refused by the caller exactly as before. The budget is
+        counted in re-reads rather than wall time so the wait is the same length
+        whichever clock the caller injected.
+        """
+        attempts = max(0, round(self.readiness_recovery_budget_seconds / READINESS_RECOVERY_INTERVAL_S))
+        announced = False
+        for _ in range(attempts):
+            issue = live_readiness_issue(status)
+            if issue is None or issue[0] not in TRANSIENT_READINESS_CODES or self._closing:
+                return status
+            if not announced:
+                announced = True
+                log.info("waiting out transient readiness issue %s", issue[0])
+                await self._notify("폰의 비행제어 조회가 잠시 끊겨 회복을 기다립니다.")
+            await self.sleep(READINESS_RECOVERY_INTERVAL_S)
+            status = self._live_response(await self.drone.call("drone_get_status", {}))
+        return status
 
     async def retry(self):
         if self.expected_mode == "mock":

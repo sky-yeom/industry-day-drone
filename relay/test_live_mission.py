@@ -42,6 +42,7 @@ class Backend:
         self.fail_reads = False
         self.fail_reads_once = False
         self.status_patch = {}
+        self.status_patches = None
 
     async def call(self, name, envelope):
         self.calls.append((name, deepcopy(envelope)))
@@ -56,9 +57,12 @@ class Backend:
             value["execution_mode"] = self.execution_mode
             return value
         if name == "drone_get_status":
+            patch_now = self.status_patch
+            if self.status_patches:
+                patch_now = self.status_patches.pop(0)
             return live_response(**dict(connected=True, ground_verified=True,
                 active_mission_id=self.mission["mission_id"] if self.mission else None,
-                active_request=self.active_request) | self.status_patch)
+                active_request=self.active_request) | patch_now)
         if name == "drone_execute_route":
             route = envelope["arguments"]["destination_ids"]
             self.mission = dict(mission_id="live-1", state="running", destination_ids=route,
@@ -144,6 +148,38 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.commands("drone_execute_route")), 1)
         self.assertEqual(self.commands("drone_execute_route")[0][1]["arguments"]["destination_ids"],
                          ["tag-3", "tag-1", "tag-2"])
+
+    async def test_blinking_flight_controller_is_waited_out_not_refused(self):
+        """The phone's key handler drops for seconds at a time and heals itself."""
+        fault = {"raw_telemetry": {"fc_health": {"state": "HANDLER_FAULT", "error": "private"}}}
+        self.backend.status_patches = [fault, fault, fault, {}]
+        outcome = await self.runner.launch()
+        self.assertTrue(outcome["ok"], outcome["facts"])
+        self.assertIsNone(self.session.data["droneErrorCode"])
+        self.assertEqual(len(self.commands("drone_execute_route")), 1)
+        self.assertGreaterEqual(len(self.commands("drone_get_status")), 4)
+        self.assertTrue(any(event.get("type") == "mission.progress"
+                            and "비행제어" in event.get("text", "") for event in self.events))
+
+    async def test_a_fault_that_outlasts_the_budget_still_refuses_launch(self):
+        fault = {"raw_telemetry": {"fc_health": {"state": "HANDLER_FAULT", "error": "private"}}}
+        self.runner.readiness_recovery_budget_seconds = 4.0
+        self.backend.status_patches = [fault] * 8 + [{}]
+        outcome = await self.runner.launch()
+        self.assertFalse(outcome["ok"])
+        self.assertEqual(self.session.data["droneErrorCode"], "FLIGHT_CONTROLLER_UNAVAILABLE")
+        self.assertNotIn("private", outcome["facts"])
+        self.assertEqual(self.commands("drone_execute_route"), [])
+        # 4s of budget at 2s per re-read is the first sample plus two re-reads.
+        self.assertEqual(len(self.commands("drone_get_status")), 3)
+
+    async def test_a_disconnected_aircraft_is_refused_immediately_without_waiting(self):
+        self.backend.status_patches = [{"connected": False}, {}]
+        outcome = await self.runner.launch()
+        self.assertFalse(outcome["ok"])
+        self.assertEqual(self.session.data["droneErrorCode"], "DRONE_DISCONNECTED")
+        self.assertEqual(len(self.commands("drone_get_status")), 1)
+        self.assertEqual(self.commands("drone_execute_route"), [])
 
     async def test_real_response_cannot_claim_live_with_nonphysical_flag(self):
         from relay.drone_client import DroneError

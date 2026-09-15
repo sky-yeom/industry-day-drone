@@ -4,6 +4,8 @@ import json
 import hashlib
 from pathlib import Path
 import struct
+import subprocess
+import sys
 import unittest
 from relay import config
 from relay.fixture_observations import FIXTURE_OBSERVATIONS
@@ -90,6 +92,28 @@ class LiveScenarioContractTests(unittest.TestCase):
 
     def test_default_stays_the_committed_mock_scenario(self):
         self.assertEqual(config.SCENARIO_FILE, ROOT / "data" / "emergency-triage.json")
+
+    def test_real_mode_launcher_selects_the_live_scenario_by_itself(self):
+        # start-integrated.ps1 clears every RELAY_* process variable before it
+        # applies the settings file, so exporting RELAY_SCENARIO_FILE in the
+        # shell silently does nothing. Real mode has to choose the live file,
+        # or the mock stopwatch lands the drone on the first voice flight.
+        script = (ROOT / "scripts" / "start-integrated.ps1").read_text(encoding="utf-8")
+        # The name also appears in the mock branch's removal list, so anchor on
+        # its last occurrence, which is the real-mode assignment.
+        real_block = script.rsplit("DRONE_CONTROL_FIELD_REFERENCE", 1)[-1].split("\n}", 1)[0]
+        self.assertIn("RELAY_SCENARIO_FILE", real_block, "Real mode does not select a scenario")
+        self.assertIn("emergency-triage-live.json", real_block,
+                      "Real mode does not select the live scenario")
+
+    def test_a_scenario_path_that_is_not_there_is_refused_by_name(self):
+        missing = ROOT / "data" / "no-such-scenario.json"
+        self.assertFalse(missing.exists())
+        probe = (f"import os; os.environ['RELAY_SCENARIO_FILE'] = r'{missing}'; "
+                 "import sys; sys.path.insert(0, r'" + str(ROOT) + "'); from relay import config")
+        finished = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True)
+        self.assertNotEqual(finished.returncode, 0)
+        self.assertIn("RELAY_SCENARIO_FILE", finished.stderr)
 
     def test_live_scenario_differs_from_the_mock_one_only_in_its_clock(self):
         timing = {"deadlineMs"}

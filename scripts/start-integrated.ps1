@@ -84,6 +84,15 @@ $connection['DRONE_CONTROL_API_URL'] = $toolEndpoint
 if ($real) {
     $connection['DRONE_CONTROL_FIELD_PROFILE'] = Join-Path $root 'drone-control\trials\profiles\standalone_tag_6321236.json'
     $connection['DRONE_CONTROL_FIELD_REFERENCE'] = Join-Path $root 'drone-control\trials\profiles\id1_tv_pair_reference.json'
+    # The committed scenario deadlines are tuned to the mock timeline and all
+    # expire at 45s, which completes the run and stops the hardware while a real
+    # flight is still 30-55s from home. Real mode therefore defaults to the live
+    # scenario. Setting this by hand before the launcher cannot work: the loop
+    # below clears every RELAY_* process variable, so only the settings file or
+    # this line survives.
+    if (-not $connection.ContainsKey('RELAY_SCENARIO_FILE')) {
+        $connection['RELAY_SCENARIO_FILE'] = Join-Path $root 'data\emergency-triage-live.json'
+    }
 }
 $logRoot = Join-Path $env:LOCALAPPDATA ('IndustryDayDrone\logs\integrated\' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
 Push-Location $root

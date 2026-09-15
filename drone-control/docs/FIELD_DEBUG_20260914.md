@@ -592,14 +592,46 @@ RELAY_SCENARIO_FILE=<path>   # relay/config.py:SCENARIO_FILE
 `34 s`는 현장 실측 1구간 최악값(전체 77–100초 / 3구간)을 올림한 값이다.
 
 새 `LiveScenarioContractTests`가 (1) 기본값이 여전히 모의 파일인지 (2) 라이브 파일이
-데드라인 말고 **한 글자도** 다르지 않은지 (3) 실비행 시간을 넘기는지를 검사한다.
+데드라인 말고 **한 글자도** 다르지 않은지 (3) 실비행 시간을 넘기는지 (4) Real 모드
+런처가 스스로 라이브 파일을 고르는지 (5) 없는 경로를 주면 이름을 찍고 거절하는지를 검사한다.
 
-#### 쓰는 법
+#### 쓰는 법 — 아무것도 안 해도 된다
+
+처음엔 이 문서에 아래처럼 적었다. **이건 작동하지 않는다.**
 
 ```powershell
-$env:RELAY_SCENARIO_FILE = "$repo\data\emergency-triage-live.json"
-# 릴레이 재시작 (모듈 로드 시점에 읽는다)
+$env:RELAY_SCENARIO_FILE = "$repo\data\emergency-triage-live.json"   # ← 안 먹는다
 ```
+
+`start-integrated.ps1`은 스택을 띄우기 직전에 `^(DRONE_|RELAY_|TRIAGE_MODE$|VOICE_|AZURE_VISION_)`에
+걸리는 **프로세스 환경변수를 전부 지운다**. 셸에서 export한 `RELAY_SCENARIO_FILE`은 그 자리에서 사라진다.
+실제로 확인했다 — 같은 루프를 돌리면 `C:\bogus\live.json` → `<CLEARED>`.
+
+그래서 런처가 **Real 모드에서 직접** 라이브 시나리오를 고르게 했다:
+
+```powershell
+if ($real) {
+    ...
+    if (-not $connection.ContainsKey('RELAY_SCENARIO_FILE')) {
+        $connection['RELAY_SCENARIO_FILE'] = Join-Path $root 'data\emergency-triage-live.json'
+    }
+}
+```
+
+| 모드 | 시나리오 | 이유 |
+|---|---|---|
+| `-Mode Real` | `emergency-triage-live.json` (자동) | 현장에서 깜빡할 여지를 없앤다 |
+| `-Mode Test` | `emergency-triage.json` | 모의 데모는 30초 타임라인이라 그대로 둬야 한다 |
+
+바꾸고 싶으면 `%LOCALAPPDATA%\IndustryDayDrone\config\field-live.env`에
+`RELAY_SCENARIO_FILE=...` 한 줄을 넣는다. 설정 파일 값은 지워지지 않고 런처 기본값보다 우선한다.
+
+경로가 틀리면 예전엔 관계없는 import 안에서 `FileNotFoundError`가 났다. 지금은
+`RELAY_SCENARIO_FILE does not point at a file: <경로>`로 즉시 거절한다.
+
+UI는 `data/emergency-triage.json`을 **빌드타임에** import하지만(`data/scenario.ts`),
+그건 접속 전 초기 표시값일 뿐이고 릴레이가 WS로 보내는 상태에 `deadlineMs`가 들어 있어
+연결되는 순간 덮인다. **UI 재빌드는 필요 없다.**
 
 ### 9.3 경로 기하 — 고치지 않은 이유
 

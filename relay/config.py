@@ -83,6 +83,10 @@ SCENARIO_FILE = Path(
     os.getenv("RELAY_SCENARIO_FILE", "").strip()
     or Path(__file__).resolve().parents[1] / "data" / "emergency-triage.json"
 )
+if not SCENARIO_FILE.is_file():
+    # Without this the miss surfaces as a FileNotFoundError from inside an
+    # unrelated import, which is a poor thing to debug on a flight line.
+    raise SystemExit(f"RELAY_SCENARIO_FILE does not point at a file: {SCENARIO_FILE}")
 AZURE_VISION_ENDPOINT = os.getenv("AZURE_VISION_ENDPOINT", "").strip()
 AZURE_VISION_DEPLOYMENT = os.getenv("AZURE_VISION_DEPLOYMENT", "").strip()
 AZURE_VISION_API_VERSION = os.getenv("AZURE_VISION_API_VERSION", "v1").strip()

@@ -32,7 +32,7 @@
                      "ground_proof_s":  60.0
                  },
     "visit_pause_s":  3.0,
-    "leg_timeout_s":  75.0,
+    "leg_timeout_s":  110.0,
     "total_timeout_s":  420.0,
     "layout_confirmed":  true,
     "wall_measurement":  "image_only",

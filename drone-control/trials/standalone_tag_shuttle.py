@@ -31,7 +31,7 @@ from drone_nav.patrol import (
 from drone_nav.protocol import RateLimiter
 from drone_nav.observation import write_image
 from drone_nav.tool_control.live import (
-    BUILD_ID, FreshVideoStream, MissionClient, VisitGate,
+    BUILD_ID, MAX_SETPOINT_UP_MPS, FreshVideoStream, MissionClient, VisitGate,
     fresh, ground_verified, process_identity,
 )
 from drone_nav.vision import AprilTagDetector, VisionDependencyError
@@ -53,6 +53,16 @@ FLIGHT_STATE_FRESH_S = 1.5
 # clipped by the FOV as attitude shifts) recovers within one or two 100 ms
 # ticks. Only a sustained miss is a real loss, mirroring FLIGHT_STATE_FRESH_S.
 CLIMB_TAG_MISS_GRACE_S = 1.0
+# The flight controller keeps finishing its auto-takeoff hover stabilisation for
+# a moment after it hands Virtual Stick authority over, and while it does it
+# accepts roll/pitch/yaw but silently discards vertical throttle. Six field
+# flights split on this with no overlap: every flight that commanded the climb
+# within 0.82s of the authority callback never moved (0.77/0.78/0.80/0.81s,
+# velocity_down_mps pinned at 0.0), and both flights that waited longer climbed
+# on the first command (0.97s, 1.47s). The wait used to be whatever AprilTag
+# confirmation happened to cost, which is why the same build flew one minute and
+# refused the next. Hold the aircraft still until the controller has settled.
+ARM_SETTLE_S = 1.5
 # The 16:04 flight closed to 64 px of the saved anchor and then ran out of
 # clock against a 45 px radius: the aircraft was already over its pad and the
 # gate was the only thing still refusing. Landing is accepted on a box around
@@ -66,16 +76,41 @@ LANDING_CENTER_BOX_FRACTION = .30
 # floor tag was still clipped, so the home gate is a quarter of the frame.
 HOME_CENTER_BOX_FRACTION = .25
 HOME_CENTER_TIMEOUT_S = 20.
+# The tag decoder is slower than FRESH_S, so every centring run contains ticks
+# with no fresh decode at all: the 21:54 flight decoded ID6 every 0.625 s at the
+# median against a 0.5 s freshness limit, and 25 of its 30 intervals left such a
+# gap. Clearing the confirmation on those ticks made centring impossible to
+# finish rather than merely slow - ID6 sat inside the centre box for 1.11 s
+# across three consecutive decodes, at 32 px, -35 px and -170 px of a 240 px
+# half-box, and the hold was reset before any of them could count. So a gap ends
+# the hold only once it outlasts the decoder, and the confirmation is carried by
+# distinct in-box decodes instead of by wall-clock time the decoder cannot fill.
+CENTER_MISS_GRACE_S = 1.2
+CENTER_CONFIRM_FRAMES = 2
+# A tag that is gone for longer than that was not missed by the decoder, it was
+# flown past: the same flight ran ID6 from 484 px right of centre to 423 px left
+# of it and then held station for the whole twenty second timeout, because this
+# loop had no way to go back. Recovery reverses the last travel it commanded,
+# under the bounded pulse budget every other search here already uses.
+CENTER_RECOVERY_DEG = .4
+CENTER_RECOVERY_PULSE_S = .6
+MAX_CENTER_RECOVERIES = 3
 # Indoor drift pushes the aircraft backwards between the last wall capture and
 # the gimbal drop, which slides ID0 off the top of the downward view. A blind
-# search that only hovers can never recover that; short forward pulses walk the
-# tag back down into frame. Bounded so a tag that is simply absent - wrong pad,
-# covered marker - cannot creep the aircraft across the room.
+# search that only hovers can never recover that; short pulses walk the tag back
+# down into frame. Bounded so a tag that is simply absent - wrong pad, covered
+# marker - cannot creep the aircraft across the room.
 SEARCH_NUDGE_DEG = .3
 SEARCH_NUDGE_AFTER_S = 1.
 SEARCH_NUDGE_PULSE_S = .6
 SEARCH_NUDGE_GAP_S = .6
 MAX_SEARCH_NUDGES = 8
+# The drift is not always backwards. The 21:54 flight finished its wall route
+# 423 px to one side of ID6 and then spent all eight searches tilting forward,
+# which cannot undo a sideways offset, so it gave the aircraft back to the pilot
+# still airborne. The pattern walks forward, both lateral directions and back,
+# so a drift on either axis is covered inside the same bounded pulse budget.
+SEARCH_NUDGE_PATTERN = ((1., 0.), (0., -1.), (0., 1.), (-1., 0.))
 # DJI disables Virtual Stick when no setpoint arrives for about a second and
 # reports the handback as vs_change_reason=MSDK_REQUEST. Measured on the 18:12
 # flight: command_sequence froze at 99, command_age_s ran 0.61 -> 1.045, then
@@ -122,9 +157,9 @@ OPTIONAL_PROFILE_FIELDS = {"height_hold", "timeouts"}
 TIMEOUT_BOUNDS = (("climb_s", 5., 90.), ("takeoff_settle_s", 10., 120.),
                   ("arm_authority_s", 3., 30.), ("ground_proof_s", 10., 180.))
 HEIGHT_HOLD_BOUNDS = (("deadband_m", .02, .5), ("gain_mps_per_m", .05, 1.5),
-                      # live.py rejects anything past .18 on the wire, so reject
-                      # it here instead of mid-leg.
-                      ("max_up_mps", .05, .18))
+                      # live.py rejects anything past its own envelope on the
+                      # wire, so reject it here instead of mid-leg.
+                      ("max_up_mps", .05, MAX_SETPOINT_UP_MPS))
 PROFILE_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 
@@ -419,6 +454,7 @@ class ShuttleClient(MissionClient):
         self._confirmation_token = None
         self._reacquiring = False
         self.reacquisitions = 0
+        self._armed_at = None
 
     def arm(self, confirmation_token):
         """Arm once, then admit motion only after the SDK authority callback."""
@@ -456,6 +492,9 @@ class ShuttleClient(MissionClient):
                                f"{self.arm_authority_timeout_s:g}s; no re-arm")
         finally:
             self._armed = ready
+            # Re-arming restarts the settle clock: the controller re-runs the
+            # same handover, so a resumed climb has to wait it out again.
+            self._armed_at = time.monotonic() if ready else None
             self.phase = previous_phase
 
     def _watchdog_handback(self, exc, kind):
@@ -538,7 +577,7 @@ class ShuttleClient(MissionClient):
         forward, right, up, yaw = (payload.get(key) for key in
             ("forward_tilt_deg", "right_tilt_deg", "up_mps", "yaw_rate_rps"))
         if self.phase == "climb":
-            permitted = forward == right == yaw == 0. and _number(up, 0., .18)
+            permitted = forward == right == yaw == 0. and _number(up, 0., MAX_SETPOINT_UP_MPS)
         elif self.phase == "lateral":
             # The cruise hold only ever pushes up, and never past the profile's
             # own ceiling, so a profile without height_hold leaves this bound at
@@ -933,8 +972,31 @@ def _wait_takeoff_settled(client, limiter, profile=None):
     raise TimeoutError(f"DJI takeoff did not settle within {budget:g}s; no arm retry; RC landing required")
 
 
+def _settle_after_arm(client):
+    """Hold still until the controller finishes handing vertical authority over."""
+    armed_at = getattr(client, "_armed_at", None)
+    if armed_at is None:
+        return
+    remaining = ARM_SETTLE_S - (time.monotonic() - armed_at)
+    if remaining <= 0:
+        return
+    client.log_event("standalone_arm_settle_wait",
+                     {"wait_s": remaining, "settle_s": ARM_SETTLE_S})
+    deadline = time.monotonic() + remaining
+    while time.monotonic() < deadline:
+        _require_flight(client)
+        # Virtual Stick lapses at about a second without a stick command, so the
+        # wait is spent commanding a hold rather than spent silent.
+        client.zero()
+        time.sleep(.1)
+
+
 def _climb(client, limiter, stream, detector, logger, config, target, profile=None):
     client.phase = "climb"
+    # Before the clock starts: a setpoint issued into the handover is discarded
+    # by the aircraft, and spending the budget on commands it will not act on is
+    # how this used to fail.
+    _settle_after_arm(client)
     budget = phase_timeout_s(profile, "climb_s", CLIMB_TIMEOUT_S)
     deadline, held, previous_key = time.monotonic() + budget, None, None
     generation = None
@@ -1094,7 +1156,16 @@ def _center_home_tag(client, limiter, stream, detector, logger, config):
     client.phase = "lateral"
     client.lateral_bounds = (-.6, .6)
     deadline = time.monotonic() + HOME_CENTER_TIMEOUT_S
-    centered_since, last_key, last_error = None, None, None
+    centered_since, centered_frames, last_key = None, 0, None
+    last_error, last_center = None, None
+    missing_since, travelled_sign = None, 0.
+    recoveries, recovery_until = 0, None
+
+    def confirmed(now):
+        """Distinct in-box decodes that have also held for the confirm time."""
+        return (centered_since is not None and centered_frames >= CENTER_CONFIRM_FRAMES
+                and now - centered_since >= patrol.landing_confirm_s)
+
     while time.monotonic() < deadline:
         limiter.wait()
         client.status("standalone_home_centering")
@@ -1103,34 +1174,65 @@ def _center_home_tag(client, limiter, stream, detector, logger, config):
         box = _frame_center_box(detector, HOME_CENTER_BOX_FRACTION)
         home = next((tag for tag in tags if tag.tag_id == 6 and tag.center_px), None)
         key = _snapshot_key(stream)
+        now = time.monotonic()
         if home is None or box is None or key is None or not _number(age, 0., FRESH_S):
-            centered_since, last_key = None, None
-            client.zero()
+            missing_since = now if missing_since is None else missing_since
+            if now - missing_since < CENTER_MISS_GRACE_S:
+                # A decode gap is not a lost tag. Hold the aircraft and the
+                # confirmation still and let the next decode settle both.
+                client.zero()
+                if confirmed(now):
+                    break
+                continue
+            centered_since, centered_frames, last_key = None, 0, None
+            if recovery_until is not None and now < recovery_until:
+                client.attitude(0., -travelled_sign*CENTER_RECOVERY_DEG, 0., 0.)
+            elif travelled_sign and recoveries < MAX_CENTER_RECOVERIES:
+                recoveries += 1
+                recovery_until = now + CENTER_RECOVERY_PULSE_S
+                client.log_event("standalone_home_recovery_pulse", {
+                    "tag_id": 6, "pulse_index": recoveries, "missing_s": now-missing_since,
+                    "right_tilt_deg": -travelled_sign*CENTER_RECOVERY_DEG,
+                    "reason": "ID6_left_the_frame_reverse_the_travel_that_lost_it"})
+                client.attitude(0., -travelled_sign*CENTER_RECOVERY_DEG, 0., 0.)
+            else:
+                client.zero()
             continue
+        missing_since, recovery_until = None, None
         if key == last_key:
             client.zero()
+            if confirmed(now):
+                break
             continue
         last_key = key
         (center_x, _center_y), (half_width, _half_height) = box
-        last_error = home.center_px[0] - center_x
+        last_error, last_center = home.center_px[0] - center_x, list(home.center_px)
         if abs(last_error) <= half_width:
-            centered_since = time.monotonic() if centered_since is None else centered_since
+            centered_since = now if centered_since is None else centered_since
+            centered_frames += 1
             client.zero()
-            if time.monotonic() - centered_since >= patrol.landing_confirm_s:
-                client.log_event("standalone_home_centered", {
-                    "tag_id": 6, "error_px": last_error, "box_fraction": HOME_CENTER_BOX_FRACTION,
-                    "center_px": list(home.center_px)})
-                print(f"ID6 centered: error={last_error:.0f}px", flush=True)
-                return True
+            if confirmed(now):
+                break
             continue
-        centered_since = None
+        centered_since, centered_frames = None, 0
         _forward, right = _floor_alignment_velocity(last_error, 0., patrol)
+        if right:
+            travelled_sign = math.copysign(1., right)
         client.attitude(0., right*scale, 0., 0.)
+    else:
+        client.zero()
+        client.log_event("standalone_home_centering_gave_up", {
+            "tag_id": 6, "error_px": last_error, "timeout_s": HOME_CENTER_TIMEOUT_S,
+            "recovery_pulses": recoveries})
+        print("ID6 centering timed out; landing search starts from here", flush=True)
+        return False
     client.zero()
-    client.log_event("standalone_home_centering_gave_up", {
-        "tag_id": 6, "error_px": last_error, "timeout_s": HOME_CENTER_TIMEOUT_S})
-    print("ID6 centering timed out; landing search starts from here", flush=True)
-    return False
+    client.log_event("standalone_home_centered", {
+        "tag_id": 6, "error_px": last_error, "box_fraction": HOME_CENTER_BOX_FRACTION,
+        "center_px": last_center, "confirm_frames": centered_frames,
+        "recovery_pulses": recoveries})
+    print(f"ID6 centered: error={last_error:.0f}px", flush=True)
+    return True
 
 
 def _land_on_floor_home(client, limiter, stream, detector, logger, config, anchor_center):
@@ -1167,8 +1269,15 @@ def _land_on_floor_home(client, limiter, stream, detector, logger, config, ancho
     # alignment asks for 0.4 deg, well inside this.
     client.lateral_bounds = (-.6, .6)
     deadline = time.monotonic() + patrol.landing_timeout_s
-    centered_since, last_key, last_seen = None, None, None
+    centered_since, centered_frames, last_key, last_seen = None, 0, None, None
     missing_since, nudge_until, nudges_used = None, None, 0
+    nudge_vector = SEARCH_NUDGE_PATTERN[0]
+
+    def aligned(now):
+        """Distinct in-box decodes that have also held for the confirm time."""
+        return (centered_since is not None and centered_frames >= CENTER_CONFIRM_FRAMES
+                and now - centered_since >= patrol.landing_confirm_s)
+
     while time.monotonic() < deadline:
         limiter.wait()
         client.status("standalone_floor_home_alignment")
@@ -1178,56 +1287,82 @@ def _land_on_floor_home(client, limiter, stream, detector, logger, config, ancho
                     key=lambda tag: abs(tag.pose_error), default=None)
         box = _frame_center_box(detector, LANDING_CENTER_BOX_FRACTION)
         key = _snapshot_key(stream)
+        now = time.monotonic()
         if floor is None or box is None or key is None or not _number(age, 0., FRESH_S):
-            centered_since, last_key = None, None
-            now = time.monotonic()
             missing_since = now if missing_since is None else missing_since
+            if now - missing_since < CENTER_MISS_GRACE_S:
+                # The decoder is slower than FRESH_S, so a gap here is a missing
+                # decode, not a missing tag; hold the alignment rather than
+                # restarting it and searching for a tag already underneath.
+                client.zero()
+                if aligned(now):
+                    return _commit_landing(client, limiter, config, floor_center=last_seen,
+                                           anchor_center=anchor_center, frames=centered_frames)
+                continue
+            centered_since, centered_frames, last_key = None, 0, None
             if nudge_until is not None and now < nudge_until:
-                client.attitude(SEARCH_NUDGE_DEG, 0., 0., 0.)
+                client.attitude(nudge_vector[0]*SEARCH_NUDGE_DEG,
+                                nudge_vector[1]*SEARCH_NUDGE_DEG, 0., 0.)
             elif (now - missing_since >= SEARCH_NUDGE_AFTER_S and nudges_used < MAX_SEARCH_NUDGES
                   and (nudge_until is None or now - nudge_until >= SEARCH_NUDGE_GAP_S)):
+                nudge_vector = SEARCH_NUDGE_PATTERN[nudges_used % len(SEARCH_NUDGE_PATTERN)]
                 nudges_used += 1
                 nudge_until = now + SEARCH_NUDGE_PULSE_S
                 client.log_event("standalone_landing_search_nudge", {
-                    "nudge_index": nudges_used, "forward_tilt_deg": SEARCH_NUDGE_DEG,
-                    "missing_s": now - missing_since,
-                    "reason": "ID0_not_in_downward_view_assume_drifted_back"})
-                client.attitude(SEARCH_NUDGE_DEG, 0., 0., 0.)
+                    "nudge_index": nudges_used, "missing_s": now - missing_since,
+                    "forward_tilt_deg": nudge_vector[0]*SEARCH_NUDGE_DEG,
+                    "right_tilt_deg": nudge_vector[1]*SEARCH_NUDGE_DEG,
+                    "reason": "ID0_not_in_downward_view_walk_the_bounded_search_pattern"})
+                client.attitude(nudge_vector[0]*SEARCH_NUDGE_DEG,
+                                nudge_vector[1]*SEARCH_NUDGE_DEG, 0., 0.)
             else:
                 client.zero()
             continue
         missing_since, nudge_until = None, None
         if key == last_key:
             client.zero()
+            if aligned(now):
+                return _commit_landing(client, limiter, config, floor_center=last_seen,
+                                       anchor_center=anchor_center, frames=centered_frames)
             continue
         if last_key is not None and key[0] != last_key[0]:
-            centered_since = None
+            centered_since, centered_frames = None, 0
         last_key, last_seen = key, floor
         (center_x, center_y), (half_width, half_height) = box
         error_x = floor.center_px[0] - center_x
         error_y = floor.center_px[1] - center_y
         if abs(error_x) <= half_width and abs(error_y) <= half_height:
-            centered_since = time.monotonic() if centered_since is None else centered_since
+            centered_since = now if centered_since is None else centered_since
+            centered_frames += 1
             client.zero()
-            if time.monotonic() - centered_since >= patrol.landing_confirm_s:
-                client.log_event("standalone_landing_alignment_confirmed", {
-                    "tag_id": 0, "error_px": [error_x, error_y],
-                    "box_fraction": LANDING_CENTER_BOX_FRACTION,
-                    "box_half_px": [half_width, half_height],
-                    "takeoff_anchor_px": None if anchor_center is None else list(anchor_center),
-                    "center_px": list(floor.center_px)})
-                print(f"ID0 inside the centre box: error=({error_x:.0f},{error_y:.0f})px; "
-                      "commanding DJI landing", flush=True)
-                client.land(config.network.confirmation_token)
-                return _await_landed(client, limiter)
+            if aligned(now):
+                return _commit_landing(client, limiter, config, floor_center=floor,
+                                       anchor_center=anchor_center, frames=centered_frames,
+                                       error_px=[error_x, error_y],
+                                       box_half_px=[half_width, half_height])
             continue
-        centered_since = None
+        centered_since, centered_frames = None, 0
         forward, right = _floor_alignment_velocity(error_x, error_y, patrol)
         client.attitude(forward*scale, right*scale, 0., 0.)
     client.zero()
     raise TimeoutError("ID0 landing alignment timed out "
                        + ("(never detected)" if last_seen is None
                           else f"(last at {last_seen.center_px})"))
+
+
+def _commit_landing(client, limiter, config, *, floor_center, anchor_center, frames,
+                    error_px=None, box_half_px=None):
+    """Log the confirmed alignment, then hand the descent to the DJI landing."""
+    client.log_event("standalone_landing_alignment_confirmed", {
+        "tag_id": 0, "error_px": error_px, "box_fraction": LANDING_CENTER_BOX_FRACTION,
+        "box_half_px": box_half_px, "confirm_frames": frames,
+        "takeoff_anchor_px": None if anchor_center is None else list(anchor_center),
+        "center_px": None if floor_center is None else list(floor_center.center_px)})
+    print("ID0 inside the centre box"
+          + ("" if error_px is None else f": error=({error_px[0]:.0f},{error_px[1]:.0f})px")
+          + "; commanding DJI landing", flush=True)
+    client.land(config.network.confirmation_token)
+    return _await_landed(client, limiter)
 
 
 def _await_landed(client, limiter, timeout_s=30.):

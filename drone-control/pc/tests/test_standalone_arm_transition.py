@@ -210,5 +210,68 @@ class AuthorityReacquireTests(StandaloneTestCase):
         self.assertEqual(self.arms(wire), 1)
 
 
+class ArmSettleTests(StandaloneTestCase):
+    """The controller keeps the vertical axis for a moment after the handover.
+
+    Field logs split six flights on this with no overlap: every climb commanded
+    within 0.82s of the authority callback was discarded while the aircraft sat
+    at takeoff height, and both that waited longer moved on the first command.
+    """
+    timing = ArmTransitionTests.timing
+    setup_client = ArmTransitionTests.setup_client
+
+    def armed(self, clock):
+        client, wire, _ = self.setup_client(clock, [
+            {"vs_enabled": True, "vs_advanced_enabled": True, "vs_authority": "MSDK"}])
+        client.arm("offline-fixture-token")
+        return client, wire
+
+    def test_the_climb_waits_out_the_handover_while_commanding_a_hold(self):
+        clock = [100.]
+        with self.timing(clock):
+            client, wire = self.armed(clock)
+            armed_at = client._armed_at
+            self.assertIsNotNone(armed_at)
+            before = len(wire.writes)
+            shuttle._settle_after_arm(client)
+        self.assertGreaterEqual(clock[0] - armed_at, shuttle.ARM_SETTLE_S)
+        held = [request["type"] for request in wire.writes[before:]]
+        # Virtual Stick lapses at about a second of silence, so the wait is
+        # spent commanding a hold rather than spent quiet.
+        self.assertIn("zero", held)
+        self.assertNotIn("attitude", held)
+
+    def test_a_controller_that_already_settled_is_not_made_to_wait(self):
+        clock = [100.]
+        with self.timing(clock):
+            client, wire = self.armed(clock)
+            clock[0] = client._armed_at + shuttle.ARM_SETTLE_S
+            settled_at, before = clock[0], len(wire.writes)
+            shuttle._settle_after_arm(client)
+        self.assertEqual(clock[0], settled_at)
+        self.assertEqual(wire.writes[before:], [])
+
+    def test_re_arming_restarts_the_settle_clock(self):
+        clock = [100.]
+        with self.timing(clock):
+            client, _ = self.armed(clock)
+            first = client._armed_at
+            clock[0] += 60.
+            # The handover runs again, so the aircraft discards a vertical
+            # setpoint again; a resumed climb has to wait it out again.
+            client._armed = False
+            client.arm("offline-fixture-token")
+        self.assertGreater(client._armed_at, first)
+
+    def test_a_failed_arm_leaves_no_settle_clock(self):
+        clock = [100.]
+        with self.timing(clock):
+            client, _, _ = self.setup_client(clock, [
+                {"vs_enabled": True, "vs_advanced_enabled": True, "vs_authority": "RC"}])
+            with self.assertRaises((TimeoutError, RuntimeError)):
+                client.arm("offline-fixture-token")
+        self.assertIsNone(client._armed_at)
+
+
 if __name__ == "__main__":
     unittest.main()

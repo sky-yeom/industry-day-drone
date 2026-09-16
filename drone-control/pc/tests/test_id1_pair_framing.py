@@ -7,9 +7,10 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "trials"))
-from id1_pair_framing import (BRAKE_MAX_DEG, BRAKE_MIN_DEG, MAX_RECOVERY_PULSES,
+from id1_pair_framing import (BRAKE_MAX_DEG, BRAKE_MAX_S, BRAKE_MIN_DEG, MAX_RECOVERY_PULSES,
                               MISSING_RECOVERY_S, PairFramingError, PairFramingGate,
-                              SEEK_MAX_DEG, STILL_SPEED_MPS, project_pair_footprint)
+                              RECOVERY_SEEK_DEG, SEEK_MAX_DEG, STILL_SPEED_MPS,
+                              project_pair_footprint)
 
 
 REFERENCE = {"roi_tag_bounds": {"x_min": -5.090921, "x_max": 1.406036,
@@ -99,7 +100,7 @@ class GateTests(unittest.TestCase):
 
     def test_seek_only_expected_id1_with_left_cap(self):
         right, found = self.update(0., tags=[tag(tag_id=2), tag(tag_id=6)])
-        self.assertEqual(right, -.6)
+        self.assertEqual(right, -SEEK_MAX_DEG)
         self.assertIsNone(found)
         self.assertEqual(self.gate.diagnostic["state"], "SEEK_ID1")
 
@@ -452,7 +453,10 @@ class GateTests(unittest.TestCase):
         self.gate = PairFramingGate(REFERENCE, arrival_band=(.85, .95))
         self.assertLess(self.update(0., tag(600., 300., 150.), speed=.28)[0], 0.)
         arrived = tag(.90*1920.-75., 300., 150.)
-        commands = [self.update(i*.1, arrived, speed=.28)[0] for i in range(1, 25)]
+        # The drift has to outlast the brake's own window, so the sample count
+        # follows BRAKE_MAX_S instead of a literal that rots when it is retuned.
+        steps = int((BRAKE_MAX_S+.5)/.1)+1
+        commands = [self.update(i*.1, arrived, speed=.28)[0] for i in range(1, steps)]
         self.assertGreaterEqual(commands[0], BRAKE_MIN_DEG)
         self.assertEqual(commands[-1], 0.)
         self.assertEqual(self.gate.diagnostic["state"], "CAPTURE_SETTLE")
@@ -488,13 +492,13 @@ class GateTests(unittest.TestCase):
     def test_recorded145104_right_loss_recovers_with_bounded_reverse_seek_then_captures(self):
         self.start_recorded_right_loss()
         right, found = self.update(.981, tags=[], speed=0.)
-        self.assertEqual(right, .6)
+        self.assertEqual(right, RECOVERY_SEEK_DEG)
         self.assertIsNone(found)
         self.assertFalse(self.gate.diagnostic["arrival_ready"])
         self.assertEqual(self.gate.diagnostic["state"], "BOUNDED_REACQUIRE_SEEK")
         self.assertIsNone(self.gate.diagnostic["motion_valid_until_s"])
         # The reacquire seek is held until the tag is seen again.
-        self.assertEqual(self.update(1.231, tags=[])[0], .6)
+        self.assertEqual(self.update(1.231, tags=[])[0], RECOVERY_SEEK_DEG)
         observed = tag(.90*1920.-100., 300., 200.)
         for index in range(11):
             right, found = self.update(1.331+index*.1, observed)
@@ -545,16 +549,16 @@ class GateTests(unittest.TestCase):
     def test_missing_target_recovery_seeks_until_window_closes_then_waits_not_fatal(self):
         self.start_recorded_right_loss()
         for start in (.981, 1.831, 2.681, 3.531, 6.1):
-            self.assertEqual(self.update(start, tags=[])[0], .6)
+            self.assertEqual(self.update(start, tags=[])[0], RECOVERY_SEEK_DEG)
         # The window closing while the aircraft holds zero re-arms the seek
         # instead of parking: hovering cannot move the tag off the evidence.
         self.assertEqual(self.update(6.3, tags=[]), (0., None))
         self.assertEqual(self.gate.diagnostic["state"], "REACQUIRE_SETTLE")
         self.assertTrue(self.gate.diagnostic["recovery_rearmed_from_stationary_hold"])
-        self.assertEqual(self.update(6.7, tags=[])[0], .6)
+        self.assertEqual(self.update(6.7, tags=[])[0], RECOVERY_SEEK_DEG)
         self.assertEqual(self.gate.diagnostic["recovery_pulses_used"], 2)
         self.assertEqual(self.update(12.4, tags=[]), (0., None))
-        self.assertEqual(self.update(12.8, tags=[])[0], .6)
+        self.assertEqual(self.update(12.8, tags=[])[0], RECOVERY_SEEK_DEG)
         self.assertEqual(self.gate.diagnostic["recovery_pulses_used"], 3)
         # The budget still bounds the whole search, and running out is not fatal.
         self.assertEqual(self.update(18.5, tags=[]), (0., None))
@@ -592,7 +596,7 @@ class GateTests(unittest.TestCase):
         self.assertGreater(self.update(.6, overshot)[0], 0.)
         self.assertEqual(self.update(.7, tag(.10*1920.-50., 300., 100.)), (0., None))
         self.assertEqual(self.update(.8, tags=[]), (0., None))
-        self.assertEqual(self.update(1.4, tags=[])[0], -.6)
+        self.assertEqual(self.update(1.4, tags=[])[0], -RECOVERY_SEEK_DEG)
         self.assertIn("left_of_centre", self.gate.diagnostic["reason"])
 
     def test_capture_ready_can_reframe_when_photo_was_deferred_by_caller(self):

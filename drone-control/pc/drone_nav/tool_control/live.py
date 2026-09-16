@@ -53,6 +53,17 @@ def ground_verified(raw):
 # went current, so a healthy grounded aircraft never got to take off.
 GROUND_PROOF_TIMEOUT_S = 30.0
 
+# Single source of truth for the vertical setpoint envelope. The wire gate
+# below, the standalone climb's dispatch permit and the climb rate itself all
+# read this one value, so raising the envelope is a one-line change instead of
+# three that can drift apart. 0.18 was the original ceiling and sits on the
+# flight controller's actuation deadband: field flights held a valid 0.18
+# setpoint for 25-31s with velocity_down_mps pinned at 0.0 while other flights
+# with identical telemetry and command frames did climb. The Android bridge
+# still clamps independently at MAX_VERTICAL_SPEED_MPS 0.45.
+MAX_SETPOINT_UP_MPS = 0.30
+SETPOINT_EPSILON = 1e-5
+
 
 def await_ground_proof(client, label, timeout_s=GROUND_PROOF_TIMEOUT_S):
     """Poll STATUS until ground_verified passes; never accepts stale telemetry."""
@@ -297,7 +308,7 @@ class MissionClient(NDJSONClient):
         if self.stream is None or not 0 <= self.stream.read()[2] <= .5:
             raise InterruptedError("No fresh camera frame")
         values = (forward_tilt_deg, right_tilt_deg, up_mps, yaw_rate_rps)
-        if not all(math.isfinite(v) for v in values) or max(abs(values[0]), abs(values[1])) > 1.50001 or abs(up_mps) > .18001 or abs(yaw_rate_rps) > math.radians(15):
+        if not all(math.isfinite(v) for v in values) or max(abs(values[0]), abs(values[1])) > 1.50001 or abs(up_mps) > MAX_SETPOINT_UP_MPS + SETPOINT_EPSILON or abs(yaw_rate_rps) > math.radians(15):
             raise ValueError("Setpoint exceeds validated limits")
         # OA remains raw observation only; aircraft settings are never altered.
         super().attitude(*values)

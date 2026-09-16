@@ -11,14 +11,27 @@ import math
 
 
 FRESH_S = .5
-SEEK_MAX_DEG = .6
+# The seek sets the cruise speed, and the cruise speed is what the brake has to
+# undo. At 0.6 deg this aircraft settles at about 0.28 m/s, and 0.6 deg of
+# reverse tilt is only g*tan(0.6) = 0.103 m/s^2, so stopping takes 2.76 s
+# against a 1.5 s brake window. The 10:24 flight is the cost: every arrival
+# overshot, the tag left the frame during the brake, and the leg spent 3.2 m
+# reacquiring a tag it had already framed before hovering out its deadline.
+# The brake cannot answer this, because standalone_tag_shuttle pins the pair
+# phase to +-0.6 deg and rejects anything beyond it. So the seek gives way
+# instead: half the tilt is roughly half the cruise, which the same 0.6 deg
+# brake stops in about 1.4 s, inside its window, and it doubles the number of
+# detections per metre travelled on the long direct legs.
+SEEK_MAX_DEG = .3
 # Corrections are continuous, re-evaluated on every fresh frame, with the same
 # tilt authority as the seek. The 14:51 flight showed that 0.25 deg pulses of
 # 0.25 s barely move this aircraft (about 0.04 m/s^2 for a quarter second),
 # so a 20-40 cm overshoot was never recovered and the leg timed out hovering.
 CORRECTION_MAX_DEG = .6
 CORRECTION_MIN_DEG = .25
-RECOVERY_SEEK_DEG = .6
+# A reacquire seek that outruns the brake re-loses the tag it just found, so it
+# carries the same authority as the seek it is recovering from.
+RECOVERY_SEEK_DEG = .3
 # Zero tilt is level flight, not a brake. The 10:44 flight proves the cost: on
 # every arrival the gate commanded zero while the aircraft still carried about
 # 0.28 m/s, and it coasted for 0.9 s and roughly 0.25 m before it was still. At
@@ -36,7 +49,27 @@ BRAKE_MAX_DEG = .6
 # trying to stop.
 BRAKE_MIN_DEG = .6
 BRAKE_FULL_SPEED_MPS = .3
-BRAKE_MAX_S = 1.5
+# The window only bounds how long the brake may fight; it is not a coast timer.
+# _brake returns None the first tick the aircraft is still, so a window wider
+# than the stop it needs costs nothing and never reverses the aircraft. 1.5 s
+# was narrower than the 2.76 s that 0.6 deg needed against the old cruise, and
+# that gap is exactly what let every arrival overshoot. Sized now for a stop
+# that should take about 1.4 s, with margin for a cruise that settles faster
+# than the tilt ratio predicts.
+BRAKE_MAX_S = 2.5
+# A tag that reached the band and then slipped out of it while the aircraft was
+# still braking has arrived; it has not been missed. The 21:30 flight is the
+# proof: ID1 entered the band at 0.801, the gate opened CAPTURE_BRAKE, and 0.72 s
+# later the tag was at 0.850 and still travelling, because 0.6 deg cannot stop
+# 0.28 m/s inside BRAKE_MAX_S. The strict edge then read the coast as an
+# overshoot, the tag left the image entirely, and the leg spent 31 s flying past
+# ID2 to the far wall with no detection of its own target at all. So once the
+# band has been reached the far edge grows by the distance the aircraft is known
+# to carry after zero, about 0.25 m, which is near a tenth of the frame at this
+# range. This never opens an early arrival: it applies only after a strictly
+# in-band sighting, only on the side travel overshoots toward, and the whole-tag
+# check still refuses any photo whose target is clipped by the frame.
+ARRIVAL_TOLERANCE_FRACTION = .08
 CORRECTION_ZERO_S = .6
 RECOVERY_SETTLE_S = .3
 CAPTURE_ZERO_S = 1.
@@ -218,6 +251,7 @@ class PairFramingGate:
         self._last_tag_observation = None
         self._missing_active = False
         self._recovery_pulses = 0
+        self._band_reached = False
         self._diagnostic = {"state": "WAIT_FRAME", "capture_ready": False}
 
     @property
@@ -495,8 +529,18 @@ class PairFramingGate:
         self._diagnostic["footprint"] = footprint
         if self.arrival_band is not None:
             width, height = frame_shape[1], frame_shape[0]
-            overflow = {"left": max(0., self.arrival_band[0]*width-center[0]),
-                        "right": max(0., center[0]-self.arrival_band[1]*width)}
+            if not (self.arrival_band[0]*width > center[0] or center[0] > self.arrival_band[1]*width):
+                self._band_reached = True
+            near, far = self.arrival_band
+            if self._band_reached:
+                # Only the side travel overshoots toward is relaxed, so a target
+                # still short of the band is never mistaken for an arrival.
+                if self.direction == "left":
+                    far = min(far+ARRIVAL_TOLERANCE_FRACTION, 1.)
+                else:
+                    near = max(near-ARRIVAL_TOLERANCE_FRACTION, 0.)
+            overflow = {"left": max(0., near*width-center[0]),
+                        "right": max(0., center[0]-far*width)}
             horizontal_inside = not any(overflow.values())
             tag_inside = all(.02*width <= x <= .98*width and .02*height <= y <= .98*height
                              for x, y in actual_corners)
@@ -512,7 +556,9 @@ class PairFramingGate:
                 self._stable_since, self._stable_frames = None, 0
             self._diagnostic.update(photo_quality="tag_edge_arrival_pending_visual_review",
                 actual_tag_inside_frame=tag_inside, actual_tag_margin_fraction=.02,
-                actual_tag_center_px=list(center), actual_tag_overflow_px=tag_overflow)
+                actual_tag_center_px=list(center), actual_tag_overflow_px=tag_overflow,
+                arrival_band_reached=self._band_reached, arrival_band_effective=[near, far],
+                arrival_tolerance_fraction=ARRIVAL_TOLERANCE_FRACTION)
             if horizontal_inside and not tag_inside:
                 if tag_overflow["right"] > 0. or tag_overflow["left"] > 0.:
                     # Arrival is not complete until the actual black tag fits.

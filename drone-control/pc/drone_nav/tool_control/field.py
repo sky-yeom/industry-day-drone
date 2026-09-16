@@ -34,6 +34,18 @@ MAX_CAPTURE_BYTES = 4 * 1024 * 1024
 # cannot be re-aged into freshness, so each proof may re-ask the aircraft this
 # many times before it gives up. Every threshold stays where it was.
 CAPTURE_PROOF_REFRESHES = 3
+# Height/is_flying/motors/flight_mode share one ~2.5 Hz bridge poll, so
+# height_age_s is a sawtooth that peaks at ~0.40 s (measured: median 170 ms,
+# max 405 ms over 7438 samples on 2026-09-16/17). `elapsed` is a second,
+# independent sawtooth peaking at ~0.10 s because the status poll runs at
+# 10 Hz. Their sum therefore reaches ~0.50 s whenever both crest together,
+# which tripped the old 0.5 s bound mid-flight and aborted a capture that was
+# in fact stationary at a legal height with 33 % battery. is_flying comes off
+# the very same poll and has always been allowed shuttle.FLIGHT_STATE_FRESH_S
+# (1.5 s), so the 0.5 s applied to height was the outlier. 0.8 s clears the
+# worst observed pairing by 1.6x, stays stricter than the flight-state budget,
+# and still rejects genuinely frozen telemetry (two missed bridge polls).
+MAX_HEIGHT_AGE_S = .8
 SITE_FIELDS = {
     "schema_version", "profile_id", "site_revision", "wall_ids_left_to_right",
     "floor_tag_id", "home_tag_id", "expected_bridge_build_id",
@@ -170,7 +182,7 @@ class FieldAdapter(LiveAdapter):
             raise InterruptedError("Fresh finite stationary velocity required for capture")
         if (not shuttle._number(telemetry.height_m, .5, 1.8)
                 or telemetry.height_age_s is None
-                or not shuttle._number(telemetry.height_age_s + elapsed, 0., .5)
+                or not shuttle._number(telemetry.height_age_s + elapsed, 0., MAX_HEIGHT_AGE_S)
                 or not shuttle._number(telemetry.battery_percent, 30., 100.)):
             raise InterruptedError("Capture is outside the fresh height/battery safety envelope")
         if telemetry.rc_override_age_s is not None and 0 <= telemetry.rc_override_age_s < 5:

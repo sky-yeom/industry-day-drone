@@ -16,6 +16,7 @@ from azure.core.exceptions import AzureError
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
+from starlette.websockets import WebSocketState
 from websockets.exceptions import WebSocketException
 
 try:
@@ -261,6 +262,7 @@ class Bridge:
         self._pending_tools = 0
         self._tool_tasks = set()
         self._browser_lock = asyncio.Lock()
+        self._browser_gone = False
         self._command_lock = asyncio.Lock()
         self._tool_lock = asyncio.Lock()
         self._response_lock = asyncio.Lock()
@@ -324,8 +326,23 @@ class Bridge:
         if self.voice_trace:
             self.voice_trace.browser_event(payload)
         async with self._browser_lock:
-            with contextlib.suppress(Exception):
+            try:
                 await self.browser.send_text(json.dumps(payload, ensure_ascii=False))
+            except Exception as exc:
+                # Starlette marks the socket DISCONNECTED before it raises on OSError,
+                # so swallowing the exception still leaves it permanently unusable and
+                # every later receive_text() reports RuntimeError instead of
+                # WebSocketDisconnect. Record the departure here: this is the only
+                # evidence of why the operator's view went dark mid-mission, and the
+                # flag is what lets the handler treat that RuntimeError as a normal
+                # close rather than a relay failure.
+                kind = payload.get("type", "?") if isinstance(payload, dict) else "?"
+                if self.browser.application_state is not WebSocketState.CONNECTED:
+                    if not self._browser_gone:
+                        self._browser_gone = True
+                        log.warning("browser socket lost while sending %s: %r", kind, exc)
+                else:
+                    log.warning("browser send failed (%s): %r", kind, exc)
 
     async def push_state(self):
         await self.send_browser({"type": "route.state", "state": self.session.snapshot()})
@@ -1354,7 +1371,19 @@ async def ws_endpoint(browser: WebSocket):
                 # Voice intentionally ends at departure; the browser still owns a live mission.
                 if not bridge._departure_voice_finished:
                     await bridge.stop_departure_voice(failed=True)
-                await pumps[1]
+                try:
+                    await pumps[1]
+                except RuntimeError:
+                    # A browser that leaves while a send is in flight is noticed by
+                    # send_browser first, so the socket is already DISCONNECTED when
+                    # receive_text() runs and starlette reports RuntimeError instead
+                    # of WebSocketDisconnect. Which of the two fires is a pure race,
+                    # yet only this one used to escape as "relay failure" and then
+                    # push an error frame into a socket that is already gone.
+                    if not bridge._browser_gone:
+                        raise
+                    log.info("browser left during flight (phase=%s); mission records stand",
+                             bridge.session.phase)
                 return
             for task in pending:
                 task.cancel()

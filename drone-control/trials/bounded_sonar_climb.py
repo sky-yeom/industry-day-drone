@@ -3,8 +3,14 @@ import json
 import math
 import time
 from drone_nav.patrol import _visual_floor_height_m
+from drone_nav.tool_control.live import MAX_SETPOINT_UP_MPS
 
-CLIMB_TIMEOUT_S = 8.0
+# The aircraft finishes its auto-takeoff hover before it acts on any vertical
+# setpoint, and how long that takes is not ours to decide: the 21:19 flight sat
+# at 1.10 m for seconds and then climbed to 1.50 m without complaint. A budget
+# tight enough to expire during that handover turns a normal ascent into a dead
+# mission, so the ceiling is generous and only bounds a genuine hang.
+CLIMB_TIMEOUT_S = 25.0
 
 def climb_command(height, age, target=1.5):
     """Sonar-display target, not a claim of centimetre physical accuracy."""
@@ -17,14 +23,16 @@ def climb_command(height, age, target=1.5):
         raise RuntimeError("already above ascent target; no automatic descent")
     if abs(error) <= .051:
         return 0.0
-    return min(.18, max(.10, error*.8))
+    # The rate, the climb dispatch permit and the wire gate all read the one
+    # envelope in tool_control/live.py, so they cannot drift apart.
+    return min(MAX_SETPOINT_UP_MPS, max(MAX_SETPOINT_UP_MPS/2, error*.8))
 
 def climb_to_sonar_target(client, limiter, stream, detector, recorder, config, target):
     deadline = time.monotonic()+CLIMB_TIMEOUT_S
     reached_since = None
     last_frame_key = None
     last_print = 0
-    print(f"CLIMB: sonar-display target={target:.2f}m, up<=0.18m/s, <={CLIMB_TIMEOUT_S:g}s", flush=True)
+    print(f"CLIMB: sonar-display target={target:.2f}m, up<={MAX_SETPOINT_UP_MPS:g}m/s, <={CLIMB_TIMEOUT_S:g}s", flush=True)
     while time.monotonic() < deadline:
         limiter.wait()
         client.status("bounded_target_height")

@@ -955,5 +955,102 @@ class DispatchBoundaryTests(StandaloneTestCase):
             self.assertNotIsInstance(caught.exception, shuttle.FramingCorrectionDeferred)
 
 
+class HomeCentringDecodeGapTests(StandaloneTestCase):
+    """The 21:54 flight: ID6 centred, was never confirmed, and was flown past."""
+
+    BOX = ((960., 540.), (240., 135.))
+
+    def drive(self, *, decode_gap_s, error_px, vanish_after_s=None, tick_s=.1):
+        clock = [1000.]
+        state = {"decoded_at": None, "index": 0}
+        client = FakeClient()
+        client.raw.update(is_flying=True, are_motors_on=True, armed=True,
+                          vs_enabled=True, vs_advanced_enabled=True, vs_authority="MSDK")
+
+        def observe(_client, _stream, _detector, _logger, _phase, _expected, direction=None):
+            now = clock[0]
+            if state["decoded_at"] is None or now - state["decoded_at"] >= decode_gap_s:
+                state["decoded_at"], state["index"] = now, state["index"] + 1
+            age = now - state["decoded_at"]
+            if vanish_after_s is not None and now - 1000. >= vanish_after_s:
+                return [], age
+            return [tag(6, x=960. + error_px, y=540.)], age
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(shuttle.time, "monotonic", lambda: clock[0]))
+            stack.enter_context(patch.object(shuttle, "_observe", observe))
+            stack.enter_context(patch.object(shuttle, "_require_flight", lambda _c: None))
+            stack.enter_context(patch.object(shuttle, "_frame_center_box",
+                                             lambda _d, _f: self.BOX))
+            stack.enter_context(patch.object(shuttle, "_snapshot_key",
+                                             lambda _s: (1, state["index"])))
+            stack.enter_context(redirect_stdout(io.StringIO()))
+            limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + tick_s))
+            centred = shuttle._center_home_tag(client, limiter, SimpleNamespace(),
+                                               SimpleNamespace(), None, config())
+        return centred, client, clock[0] - 1000.
+
+    def test_decode_gap_longer_than_freshness_cannot_clear_the_centring_hold(self):
+        # The decoder ran at 0.625 s against FRESH_S = 0.5 s, so every interval
+        # contained a tick with no fresh decode. Clearing the hold there made a
+        # 0.5 s confirmation unreachable no matter how well centred the tag was:
+        # ID6 sat 32 px inside a 240 px half-box for three consecutive decodes
+        # and the loop still timed out and flew on. The gap must outlast the
+        # decoder before it counts as a loss.
+        self.assertGreater(shuttle.CENTER_MISS_GRACE_S, shuttle.FRESH_S)
+        centred, client, elapsed = self.drive(decode_gap_s=.625, error_px=32.)
+        self.assertTrue(centred)
+        self.assertLess(elapsed, shuttle.HOME_CENTER_TIMEOUT_S)
+        confirmations = [data for event, data in client.events
+                         if event == "standalone_home_centered"]
+        self.assertEqual(len(confirmations), 1)
+        # Wall-clock alone must not confirm: distinct decodes carry the verdict.
+        self.assertGreaterEqual(confirmations[0]["confirm_frames"],
+                                shuttle.CENTER_CONFIRM_FRAMES)
+        self.assertEqual(confirmations[0]["recovery_pulses"], 0)
+
+    def test_a_tag_outside_the_box_still_cannot_confirm_across_a_decode_gap(self):
+        # The grace must not turn into a blind pass: an off-centre tag decoded
+        # at the same cadence has to keep steering and then time out.
+        centred, client, _elapsed = self.drive(decode_gap_s=.625, error_px=600.)
+        self.assertFalse(centred)
+        self.assertFalse([e for e, _d in client.events if e == "standalone_home_centered"])
+        tilts = [entry[1][1] for entry in client.calls
+                 if isinstance(entry, tuple) and entry[0] == "attitude" and entry[1][1]]
+        self.assertTrue(tilts)
+        self.assertTrue(all(tilt > 0. for tilt in tilts))
+
+    def test_losing_the_tag_reverses_the_travel_that_lost_it(self):
+        # ID6 ran from 484 px right of centre to 423 px left of it and then out
+        # of frame, and the old loop held station for the whole timeout because
+        # it had no way back. A lost tag now reverses the last travel, under a
+        # bounded pulse budget.
+        _centred, client, _elapsed = self.drive(decode_gap_s=.625, error_px=600.,
+                                                vanish_after_s=3.)
+        pulses = [data for event, data in client.events
+                  if event == "standalone_home_recovery_pulse"]
+        self.assertTrue(pulses)
+        self.assertLessEqual(len(pulses), shuttle.MAX_CENTER_RECOVERIES)
+        approach = [entry[1][1] for entry in client.calls
+                    if isinstance(entry, tuple) and entry[0] == "attitude" and entry[1][1]][0]
+        self.assertLess(pulses[0]["right_tilt_deg"]*approach, 0.)
+        self.assertLessEqual(abs(pulses[0]["right_tilt_deg"]), .6)
+
+    def test_blind_floor_search_covers_both_lateral_axes_not_only_forward(self):
+        # Eight forward pulses cannot undo a sideways offset, which is why the
+        # 21:54 flight abandoned its landing while ID0 sat off to one side.
+        pattern = shuttle.SEARCH_NUDGE_PATTERN
+        self.assertTrue(any(right < 0. for _forward, right in pattern))
+        self.assertTrue(any(right > 0. for _forward, right in pattern))
+        self.assertTrue(any(forward > 0. for forward, _right in pattern))
+        for forward, right in pattern:
+            with self.subTest(vector=(forward, right)):
+                self.assertLessEqual(abs(forward*shuttle.SEARCH_NUDGE_DEG), .6)
+                self.assertLessEqual(abs(right*shuttle.SEARCH_NUDGE_DEG), .6)
+                # One axis at a time keeps each pulse readable in the log.
+                self.assertFalse(forward and right)
+        self.assertGreaterEqual(shuttle.MAX_SEARCH_NUDGES, len(pattern))
+
+
 if __name__ == "__main__":
     unittest.main()

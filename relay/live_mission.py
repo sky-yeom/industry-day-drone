@@ -437,8 +437,9 @@ class LiveMissionRunner(MissionRunner):
                         # own landing pad at the end of the route. Keep the photo
                         # unjudged, tell the operator, and fly on. The rescue deadline
                         # is untouched, so an unjudged person still times out honestly.
-                        log.warning("analysis reached no verdict for %s (%s); continuing the route",
-                                    monitor, type(exc).__name__)
+                        log.warning("analysis reached no verdict for %s (%s: %s); continuing the route",
+                                    monitor, type(exc).__name__,
+                                    getattr(exc, "model_reason", None) or exc)
                         self.session.unjudged_capture(run_id, frame.id, str(exc))
                         await self._notify(f"모니터 {monitor[-1]} 사진은 판정하지 못했습니다. "
                                            f"경로를 끝내고 결과를 보고합니다. {exc}")

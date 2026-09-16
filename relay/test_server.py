@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from fastapi import WebSocketDisconnect
+from starlette.websockets import WebSocketState
 from relay import server
 from relay import tools
 from relay.survey import SCENARIO, SurveySession
@@ -22,6 +23,10 @@ class Browser:
             self.incoming.put_nowait(json.dumps(message))
         self.query_params = {"voice": voice, "turnTaking": "after-playback-v1"}
         self.closed = False
+        # Starlette exposes this on every real WebSocket and flips it to
+        # DISCONNECTED before it raises, so send failures are only detectable
+        # by reading it back. Keep the fake faithful to that contract.
+        self.application_state = WebSocketState.CONNECTED
 
     async def accept(self):
         pass

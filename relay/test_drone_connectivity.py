@@ -22,6 +22,31 @@ def phone_status(product_connected, *, sdk_registered=True, ground_verified=Fals
     }
 
 
+def fc_key(source="GET", error=None, failures=0):
+    return {"source": source, "last_error_code": error, "consecutive_failures": failures}
+
+
+def faulted_status(keys):
+    observation = phone_status(True, ground_verified=True)
+    observation["raw_telemetry"]["fc_health"] = {"state": "HANDLER_FAULT", "keys": keys}
+    return observation
+
+
+def asleep_keys(failures=3, witness_failures=None, witness_source="GET"):
+    """Every polled key dead with the handler-missing error the idle aircraft produces."""
+    keys = {
+        name: fc_key(error="REQUEST_HANDLER_NOT_FOUND", failures=failures)
+        for name in ("IsFlying", "AreMotorsOn", "FlightMode", "AircraftAttitude")
+    }
+    keys["Connection"] = fc_key(source="LISTEN", error="REQUEST_HANDLER_NOT_FOUND", failures=1)
+    keys["BatteryPowerPercent"] = fc_key(
+        source=witness_source,
+        error="REQUEST_HANDLER_NOT_FOUND",
+        failures=failures if witness_failures is None else witness_failures,
+    )
+    return keys
+
+
 class DroneConnectivityTests(unittest.IsolatedAsyncioTestCase):
     async def observed_status(self, observation):
         capabilities = {
@@ -91,6 +116,39 @@ class DroneConnectivityTests(unittest.IsolatedAsyncioTestCase):
                 issue = live_readiness_issue(observation)
                 self.assertEqual(issue[0], code)
                 self.assertNotIn("not-for-browser", issue[1])
+
+    def test_a_silent_aircraft_asks_for_a_stick_nudge_not_an_app_repair(self):
+        issue = live_readiness_issue(faulted_status(asleep_keys()))
+        self.assertEqual(issue[0], "AIRCRAFT_LINK_ASLEEP")
+        self.assertIn("스틱", issue[1])
+        self.assertNotIn("not-for-browser", issue[1])
+
+    def test_a_readable_battery_keeps_the_fault_on_the_flight_controller(self):
+        keys = asleep_keys()
+        keys["BatteryPowerPercent"] = fc_key(failures=0)
+        self.assertEqual(live_readiness_issue(faulted_status(keys))[0],
+                         "FLIGHT_CONTROLLER_UNAVAILABLE")
+
+    def test_one_blink_is_not_an_outage(self):
+        for failures in (1, 2):
+            with self.subTest(consecutive_failures=failures):
+                self.assertEqual(live_readiness_issue(faulted_status(asleep_keys(failures)))[0],
+                                 "FLIGHT_CONTROLLER_UNAVAILABLE")
+
+    def test_the_witness_must_be_polled_and_failing_like_the_rest(self):
+        for keys in (asleep_keys(witness_source="LISTEN"),
+                     asleep_keys(witness_failures=0),
+                     {"IsFlying": fc_key(error="REQUEST_HANDLER_NOT_FOUND", failures=9)},
+                     {}):
+            with self.subTest(keys=sorted(keys)):
+                self.assertEqual(live_readiness_issue(faulted_status(keys))[0],
+                                 "FLIGHT_CONTROLLER_UNAVAILABLE")
+
+    def test_a_different_error_on_one_key_is_not_a_silent_aircraft(self):
+        keys = asleep_keys()
+        keys["FlightMode"] = fc_key(error="TIMEOUT", failures=7)
+        self.assertEqual(live_readiness_issue(faulted_status(keys))[0],
+                         "FLIGHT_CONTROLLER_UNAVAILABLE")
 
 
 if __name__ == "__main__":

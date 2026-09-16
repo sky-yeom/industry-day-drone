@@ -191,7 +191,7 @@ class MissionClient(NDJSONClient):
         if self.failed or self._socket is None:
             raise ConnectionError("Control transport failed; no reconnect/replay")
         if kind not in {"status", "zero", "attitude", "gimbal", "takeoff", "arm", "disarm",
-                        "stick_mode", "ground_ack"}:
+                        "stick_mode", "ground_ack", "land"}:
             raise PermissionError("Command not exposed by the physical mission profile")
         if not self.cleaning and (self.cancel.is_set() or (self.deadline and time.perf_counter() >= self.deadline)):
             raise InterruptedError("Mission cancelled/deadline reached; no resume")
@@ -202,8 +202,11 @@ class MissionClient(NDJSONClient):
             raise ConnectionError("Unsolicited ACK; new action refused")
         # The bridge re-reads two flight-controller keys twice before answering a
         # ground acknowledgement, so it needs far more than a motion command's budget.
+        # Landing is two chained SDK calls on the bridge - it disarms the stick
+        # manager and only then submits KeyStartAutoLanding - so it needs at
+        # least takeoff's budget rather than a motion command's.
         budget = {"takeoff": 3., "arm": 3., "gimbal": 2., "stick_mode": 3., "disarm": 1.,
-                  "ground_ack": 6.}.get(kind, .4)
+                  "land": 3., "ground_ack": 6.}.get(kind, .4)
         self._socket.deadline = time.perf_counter() + budget
         prior_raw, prior_received = copy.deepcopy(self.raw), self.received
         self.last_telemetry = None
@@ -257,7 +260,10 @@ class MissionClient(NDJSONClient):
         self.on_snapshot(self._scrub({"connected": True, "ground_verified": ground_verified(raw),
                           "raw_telemetry": self.raw, **{k: raw.get(k) for k in
                           ("is_flying", "are_motors_on", "vs_enabled", "vs_authority", "bridge_build_id")}}))
-        if self._armed and not self.cleaning and kind != "disarm":
+        # A landing hands control back to the aircraft exactly as disarming does
+        # - the bridge disarms the stick manager before it submits the landing -
+        # so its own acknowledgement must not be read as authority being lost.
+        if self._armed and not self.cleaning and kind not in {"disarm", "land"}:
             authority_ok = (raw.get("armed") is True and raw.get("vs_authority") == "MSDK"
                             and raw.get("vs_enabled") is True)
             within_handoff_grace = (self._armed_since is not None

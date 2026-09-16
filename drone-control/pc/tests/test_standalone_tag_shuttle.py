@@ -791,6 +791,97 @@ class DispatchBoundaryTests(StandaloneTestCase):
                 with self.subTest(phase=phase, axes=axes), self.assertRaises(PermissionError):
                     client.send("attitude", payload)
 
+    def test_landing_phase_steers_both_horizontal_axes_and_never_the_vertical(self):
+        # Floor alignment is the only phase that reads an x and a y error from
+        # one camera, so it is also the only one allowed to answer on both
+        # horizontal axes. Descent stays with the aircraft's own landing.
+        clock = [100.]
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]):
+            client = self.client(clock)
+            client.phase, client.lateral_bounds = "landing", (-.6, .6)
+            for forward, right in ((0., 0.), (.4, .4), (-.4, -.4), (.6, -.6), (0., .35)):
+                payload = {"forward_tilt_deg": forward, "right_tilt_deg": right,
+                           "up_mps": 0., "yaw_rate_rps": 0.}
+                with self.subTest(admitted=(forward, right)):
+                    client._guard_dispatch("attitude", dict(payload))
+            for axes in ((0., 0., .04, 0.), (0., 0., -.04, 0.), (0., 0., 0., .1),
+                         (.61, 0., 0., 0.), (0., -.61, 0., 0.), (None, 0., 0., 0.)):
+                payload = dict(zip(("forward_tilt_deg", "right_tilt_deg",
+                                    "up_mps", "yaw_rate_rps"), axes))
+                with self.subTest(rejected=axes), self.assertRaises(PermissionError):
+                    client._guard_dispatch("attitude", dict(payload))
+
+    def test_landing_gate_is_a_centre_box_not_a_takeoff_pixel_radius(self):
+        # The 16:04 flight closed to 64 px of its takeoff anchor and timed out
+        # against a 45 px radius while already over the pad. The gate is now a
+        # box around the frame centre, which that offset sits well inside.
+        frame = SimpleNamespace(shape=(1080, 1920, 3))
+        detector = SimpleNamespace(last_detection_frame=frame)
+        (center_x, center_y), (half_w, half_h) = shuttle._frame_center_box(
+            detector, shuttle.LANDING_CENTER_BOX_FRACTION)
+        self.assertEqual((center_x, center_y), (960., 540.))
+        self.assertEqual((half_w, half_h), (288., 162.))
+        for inside in ((960., 540.), (978., 528.), (1247., 701.), (673., 379.)):
+            with self.subTest(inside=inside):
+                self.assertLessEqual(abs(inside[0]-center_x), half_w)
+                self.assertLessEqual(abs(inside[1]-center_y), half_h)
+        for outside in ((1249., 540.), (960., 703.), (600., 300.)):
+            with self.subTest(outside=outside):
+                self.assertTrue(abs(outside[0]-center_x) > half_w
+                                or abs(outside[1]-center_y) > half_h)
+        # A frame the detector has not produced yet must not be guessed at.
+        self.assertIsNone(shuttle._frame_center_box(SimpleNamespace(), .3))
+        self.assertIsNone(shuttle._frame_center_box(
+            SimpleNamespace(last_detection_frame=SimpleNamespace(shape=(0, 0))), .3))
+        # The home gate is the tighter of the two: it has to put the aircraft
+        # back over its pad, and a half-frame box did not (16:18 flight).
+        self.assertLess(shuttle.HOME_CENTER_BOX_FRACTION,
+                        shuttle.LANDING_CENTER_BOX_FRACTION)
+
+    def test_blind_floor_search_nudges_forward_within_the_landing_phase(self):
+        # Indoor drift slides ID0 off the top of the downward view, which the
+        # helper answers with body-forward. The blind pulse must use the same
+        # axis and stay inside the phase bound, and it must be countable so a
+        # genuinely absent tag cannot walk the aircraft across the room.
+        clock = [100.]
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]):
+            client = self.client(clock)
+            client.phase, client.lateral_bounds = "landing", (-.6, .6)
+            client._guard_dispatch("attitude", {
+                "forward_tilt_deg": shuttle.SEARCH_NUDGE_DEG, "right_tilt_deg": 0.,
+                "up_mps": 0., "yaw_rate_rps": 0.})
+        self.assertGreater(shuttle.SEARCH_NUDGE_DEG, 0.)
+        self.assertLessEqual(shuttle.SEARCH_NUDGE_DEG, .6)
+        self.assertGreaterEqual(shuttle.MAX_SEARCH_NUDGES, 1)
+        # A tag above the frame centre asks for forward travel, so a blind
+        # search that assumes "drifted back" must push the same way.
+        patrol = config().patrol
+        forward, _right = shuttle._floor_alignment_velocity(0., -300., patrol)
+        self.assertGreater(forward, 0.)
+        # Pulsing must not be able to outlast the alignment budget itself.
+        pulses = shuttle.MAX_SEARCH_NUDGES * (shuttle.SEARCH_NUDGE_PULSE_S + shuttle.SEARCH_NUDGE_GAP_S)
+        self.assertLess(pulses + shuttle.SEARCH_NUDGE_AFTER_S, patrol.landing_timeout_s)
+
+    def test_floor_alignment_tilt_stays_inside_the_phase_ceiling(self):
+        # The alignment helper answers in m/s; the shuttle flies body angles.
+        # An error large enough to saturate the helper must still land inside
+        # the 0.6 deg bound the landing phase admits, or the mission thread
+        # dies mid-descent exactly as the arrival brake once did.
+        patrol = config().patrol
+        scale = patrol.angle_deg / patrol.speed_mps
+        clock = [100.]
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]):
+            client = self.client(clock)
+            client.phase, client.lateral_bounds = "landing", (-.6, .6)
+            for error in ((0., 0.), (900., 500.), (-900., -500.), (45., -45.), (1e6, 1e6)):
+                forward, right = shuttle._floor_alignment_velocity(*error, patrol)
+                self.assertLessEqual(max(abs(forward), abs(right)),
+                                     patrol.landing_max_speed_mps + 1e-9)
+                payload = {"forward_tilt_deg": forward*scale, "right_tilt_deg": right*scale,
+                           "up_mps": 0., "yaw_rate_rps": 0.}
+                with self.subTest(error=error):
+                    client._guard_dispatch("attitude", dict(payload))
+
     def test_cruise_hold_admits_bounded_lift_and_never_ends_a_lateral_leg(self):
         # The 15:30 flight reached ID6 and then died on the first framing tick
         # that asked for +0.04 m/s: the lateral axis was fine, the assist was

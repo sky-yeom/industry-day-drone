@@ -36,7 +36,7 @@ READ_RETRY_BUDGET_S = 6.0
 # this one code is re-read for a bounded window. Every other readiness failure
 # names something a person has to fix - power, USB, SDK registration - and is
 # still refused immediately.
-TRANSIENT_READINESS_CODES = {"FLIGHT_CONTROLLER_UNAVAILABLE"}
+TRANSIENT_READINESS_CODES = {"FLIGHT_CONTROLLER_UNAVAILABLE", "AIRCRAFT_LINK_ASLEEP"}
 READINESS_RECOVERY_BUDGET_S = 30.0
 READINESS_RECOVERY_INTERVAL_S = 2.0
 log = logging.getLogger("relay.tool_mission")
@@ -203,14 +203,16 @@ class LiveMissionRunner(MissionRunner):
                 return result(False, self.session.data["error"])
 
     async def _settled_status(self, status):
-        """Re-read status while the only complaint is one the phone heals itself.
+        """Re-read status while the only complaint is one that heals on its own or with a stick nudge.
 
         The DJI key handler blinks out and returns without anyone touching the
-        aircraft, so the first sample is not evidence that the launch should be
-        refused. Anything else - or a blink that outlasts the budget - is
-        returned as-is and refused by the caller exactly as before. The budget is
-        counted in re-reads rather than wall time so the wait is the same length
-        whichever clock the caller injected.
+        aircraft, and an idle aircraft stops answering every key until the
+        operator moves a stick, so the first sample is not evidence that the
+        launch should be refused. The operator is told the issue's own wording so
+        a nudge-me case reads as a nudge-me case. Anything else - or a blink that
+        outlasts the budget - is returned as-is and refused by the caller exactly
+        as before. The budget is counted in re-reads rather than wall time so the
+        wait is the same length whichever clock the caller injected.
         """
         attempts = max(0, round(self.readiness_recovery_budget_seconds / READINESS_RECOVERY_INTERVAL_S))
         announced = False
@@ -221,7 +223,7 @@ class LiveMissionRunner(MissionRunner):
             if not announced:
                 announced = True
                 log.info("waiting out transient readiness issue %s", issue[0])
-                await self._notify("폰의 비행제어 조회가 잠시 끊겨 회복을 기다립니다.")
+                await self._notify(issue[1])
             await self.sleep(READINESS_RECOVERY_INTERVAL_S)
             status = self._live_response(await self.drone.call("drone_get_status", {}))
         return status
@@ -344,11 +346,18 @@ class LiveMissionRunner(MissionRunner):
                 expired_terminal = changed
                 break
             await self._notify()
-        if expired_terminal or self.session.phase == "aborted":
+        if self.session.phase == "aborted":
             await self._stop_hardware()
             if self._work and not self._work.done():
                 self._work.cancel()
                 await asyncio.gather(self._work, return_exceptions=True)
+        elif expired_terminal and self._work and not self._work.done():
+            # Running out of rescue time ends the scoring, not the flight. The
+            # aircraft still owns a route that finishes on its own landing pad,
+            # and cutting its authority here would strand it hovering indoors.
+            # _run_live is already waiting for that landing, so wait with it and
+            # let the debrief below be the thing that reports a finished flight.
+            await asyncio.gather(self._work, return_exceptions=True)
         if run_id == self.session.run_id and self.session.phase in TERMINAL:
             await self._notify_terminal()
 
@@ -414,12 +423,26 @@ class LiveMissionRunner(MissionRunner):
                         raise DroneError("CAPTURE_REJECTED")
                     self.session.analyzing(frame.id, run_id)
                     await self._notify()
-                    evidence = await self.vision.analyze(frame,
-                        search_prompt=self.session.data["userPromptText"],
-                        appearance_constraints=self.session.data["appearanceConstraints"],
-                        unsupported_appearance=self.session.data["unsupportedAppearance"],
-                        scene_context={"monitor_id": monitor, "label": person["label"],
-                                       "report": person["clue"]})
+                    try:
+                        evidence = await self.vision.analyze(frame,
+                            search_prompt=self.session.data["userPromptText"],
+                            appearance_constraints=self.session.data["appearanceConstraints"],
+                            unsupported_appearance=self.session.data["unsupportedAppearance"],
+                            scene_context={"monitor_id": monitor, "label": person["label"],
+                                           "report": person["clue"]})
+                    except VisionError as exc:
+                        # An analysis that reaches no verdict says nothing about the
+                        # aircraft. Stopping here would leave it hovering wherever a
+                        # cloud call happened to fail; the safest place for it is its
+                        # own landing pad at the end of the route. Keep the photo
+                        # unjudged, tell the operator, and fly on. The rescue deadline
+                        # is untouched, so an unjudged person still times out honestly.
+                        log.warning("analysis reached no verdict for %s (%s); continuing the route",
+                                    monitor, type(exc).__name__)
+                        self.session.unjudged_capture(run_id, frame.id, str(exc))
+                        await self._notify(f"모니터 {monitor[-1]} 사진은 판정하지 못했습니다. "
+                                           f"경로를 끝내고 결과를 보고합니다. {exc}")
+                        break
                     if not self.session.apply_detection(run_id, frame.id, evidence):
                         break
                     await self._notify()

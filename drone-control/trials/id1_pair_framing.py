@@ -19,6 +19,24 @@ SEEK_MAX_DEG = .6
 CORRECTION_MAX_DEG = .6
 CORRECTION_MIN_DEG = .25
 RECOVERY_SEEK_DEG = .6
+# Zero tilt is level flight, not a brake. The 10:44 flight proves the cost: on
+# every arrival the gate commanded zero while the aircraft still carried about
+# 0.28 m/s, and it coasted for 0.9 s and roughly 0.25 m before it was still. At
+# 1.5 m from the wall the arrival band sits about 0.28 m from the edge of the
+# field of view, so the tag left the image on all three approaches and the leg
+# spent 27 s and its whole reverse-pulse budget reacquiring a tag it had already
+# framed. Braking is a reverse tilt, but the pair phase admits no more lateral
+# authority than the seek: standalone_tag_shuttle pins the phase to +-0.6 deg
+# and rejects anything beyond it outright, which ended the 15:22 flight on
+# PermissionError the first tick the brake asked for 1.5 deg. The brake is
+# therefore a full-scale reversal at that ceiling, not a larger tilt.
+BRAKE_MAX_DEG = .6
+# The brake runs at the ceiling for its whole window: a proportional term that
+# decayed as the aircraft slowed would be overruled by the very motion it is
+# trying to stop.
+BRAKE_MIN_DEG = .6
+BRAKE_FULL_SPEED_MPS = .3
+BRAKE_MAX_S = 1.5
 CORRECTION_ZERO_S = .6
 RECOVERY_SETTLE_S = .3
 CAPTURE_ZERO_S = 1.
@@ -194,6 +212,9 @@ class PairFramingGate:
         self._done = False
         self._stopped = False
         self._last_nonzero_motion = None
+        self._brake_sign = None
+        self._brake_since = None
+        self._brake_stopped = False
         self._last_tag_observation = None
         self._missing_active = False
         self._recovery_pulses = 0
@@ -220,15 +241,53 @@ class PairFramingGate:
             zero_hold_s=max(0., now-self._zero_since), capture_ready=False)
         return 0., None
 
-    def _motion(self, tilt, now, state):
+    def _motion(self, tilt, now, state, travel=True):
         self._last_command, self._zero_since = tilt, None
-        self._last_nonzero_motion = (tilt, now)
+        # A brake opposes travel, so recording it as travel would invert the
+        # direction the reacquire seek reads back and send the search the wrong
+        # way after every stop.
+        if travel:
+            self._last_nonzero_motion = (tilt, now)
+            self._brake_stopped = False
         self._stable_since, self._stable_frames = None, 0
         self._diagnostic.update(state=state, reason=("tag_not_yet_in_arrival_band" if self.arrival_band
             else "pair_footprint_not_yet_inside"), requested_right_tilt_deg=tilt,
             motion_valid_until_s=None, next_update_due_s=now+.1,
             zero_hold_s=0., capture_ready=False, reverse_pulses_used=self._reverse_pulses)
         return tilt, None
+
+    def _brake(self, now, speed, state):
+        """Stop with reverse tilt instead of coasting, or return None to settle.
+
+        Returns None whenever the aircraft is already still, the travelled
+        direction is unknown, or the bounded brake window has closed, so every
+        caller falls back to the zero-and-wait it used before.
+        """
+        if speed <= STILL_SPEED_MPS:
+            if self._brake_sign is not None:
+                # A brake that reached stillness is the evidence the settle hold
+                # was waiting for, so the reversal need not also wait out a coast.
+                self._brake_stopped = True
+            self._brake_sign = self._brake_since = None
+            return None
+        if self._brake_sign is None:
+            travelled = self._last_nonzero_motion
+            if (travelled is None or travelled[0] == 0.
+                    or not 0. <= now-travelled[1] <= RECOVERY_MOTION_EVIDENCE_S):
+                return None
+            self._brake_sign = -math.copysign(1., travelled[0])
+            self._brake_since = now
+        elif now-self._brake_since >= BRAKE_MAX_S:
+            # Never fight the aircraft indefinitely: an unstoppable drift is a
+            # fact for the caller's stillness checks to act on, not something
+            # to answer with more tilt.
+            return None
+        tilt = min(BRAKE_MAX_DEG, max(BRAKE_MIN_DEG, BRAKE_MAX_DEG*speed/BRAKE_FULL_SPEED_MPS))
+        result = self._motion(self._brake_sign*tilt, now, state, travel=False)
+        self._diagnostic.update(reason="reverse_tilt_brake_until_still",
+            brake_tilt_deg=self._brake_sign*tilt, brake_hold_s=now-self._brake_since,
+            brake_speed_mps=speed)
+        return result
 
     def _cancel_pulse(self):
         """End any continuous correction/recovery; the next motion settles first."""
@@ -300,6 +359,19 @@ class PairFramingGate:
             self._cancel_pulse()
             carried = None if observation is None else observation["recovery_sign"]
             sign = carried if layout_sign is None else layout_sign
+            # A neighbour in frame fixes which side of *that neighbour* the
+            # target sits on; it never proves the aircraft reached the target,
+            # because at this range the camera holds more than one wall panel
+            # at once. When the target's own last sighting was still short of
+            # the arrival band it is ahead in the route direction, so a layout
+            # sign pointing back would abandon an approach that never finished.
+            still_ahead = (layout_sign is not None and layout_sign*self._planned < 0.
+                           and observation is not None
+                           and observation["center_fraction"] is not None
+                           and observation["center_fraction"] < (
+                               .5 if self.arrival_band is None else self.arrival_band[0]))
+            if still_ahead:
+                sign = self._planned
             if sign is None or self._recovery_pulses >= MAX_RECOVERY_PULSES:
                 return self._zero(now, "WAIT_TARGET", "no_recent_direction_evidence_for_missing_target")
             # An aircraft holding zero cannot invalidate the direction it last
@@ -310,7 +382,8 @@ class PairFramingGate:
             observation = self._last_tag_observation = {"now_s": now,
                 "center_fraction": None if observation is None else observation["center_fraction"],
                 "recovery_sign": sign,
-                "evidence": ("fixed_wall_order_places_target_beyond_visible_neighbour"
+                "evidence": ("target_last_seen_short_of_arrival_band_is_still_ahead" if still_ahead
+                             else "fixed_wall_order_places_target_beyond_visible_neighbour"
                              if layout_sign is not None else observation["evidence"])}
             self._diagnostic.update(recovery_rearmed_from_stationary_hold=True,
                                     last_tag_observation=copy.deepcopy(observation))
@@ -339,6 +412,7 @@ class PairFramingGate:
             "physical_distance_available": False,
             "correction_mode": "continuous_proportional_until_inside_or_side_change",
             "seek_tilt_cap_deg": SEEK_MAX_DEG, "correction_tilt_cap_deg": CORRECTION_MAX_DEG,
+            "brake_tilt_cap_deg": BRAKE_MAX_DEG, "brake_window_s": BRAKE_MAX_S,
             "correction_tilt_min_deg": CORRECTION_MIN_DEG, "reverse_pulses_used": self._reverse_pulses,
             "frame_age_s": frame_age, "frame_key": frame_key, "velocity_age_s": velocity_age_s,
             "horizontal_speed_mps": horizontal_speed_mps, "capture_ready": False}
@@ -348,7 +422,13 @@ class PairFramingGate:
             self._stop("invalid_or_regressed_clock")
         self._last_now = now_s
         if not _finite(frame_age) or not 0. <= frame_age <= FRESH_S:
-            self._stop("stale_or_invalid_detection_frame")
+            # A frame that aged out carries no motion authority, but it also
+            # heals itself on the next decode, exactly like the duplicate frame
+            # handled below. Hold still and wait for a fresh one; the leg
+            # deadline still ends a leg whose camera never recovers.
+            self._cancel_pulse()
+            self._stable_since, self._stable_frames = None, 0
+            return self._zero(now_s, "WAIT_FRESH_FRAME", "stale_or_invalid_detection_frame")
         if (not _finite(velocity_age_s) or not 0. <= velocity_age_s <= FRESH_S
                 or not _finite(horizontal_speed_mps) or horizontal_speed_mps < 0.):
             self._stop("fresh_finite_horizontal_velocity_required")
@@ -467,6 +547,9 @@ class PairFramingGate:
             return 0., observed if ready else None
         if capture_candidate:
             self._cancel_pulse()
+            braking = self._brake(now_s, horizontal_speed_mps, "CAPTURE_BRAKE")
+            if braking is not None:
+                return braking
             self._zero(now_s, "CAPTURE_SETTLE", "whole_tag_inside_arrival_band" if self.arrival_band
                        else "whole_predicted_pair_inside_margin")
             if horizontal_speed_mps <= STILL_SPEED_MPS:
@@ -496,9 +579,14 @@ class PairFramingGate:
             tilt = self._proportional(amount, width, SEEK_MAX_DEG, .12)
             return self._motion(self._planned*tilt, now_s, "APPROACH_PAIR_IN_ROUTE_DIRECTION")
         if self._correction_sign is None:
+            braking = self._brake(now_s, horizontal_speed_mps, "CORRECTION_BRAKE")
+            if braking is not None:
+                return braking
             self._zero(now_s, "CORRECTION_SETTLE", "zero_and_low_speed_required_before_correction")
-            if now_s-self._zero_since < CORRECTION_ZERO_S-1e-9 or horizontal_speed_mps > STILL_SPEED_MPS:
+            settled = self._brake_stopped or now_s-self._zero_since >= CORRECTION_ZERO_S-1e-9
+            if not settled or horizontal_speed_mps > STILL_SPEED_MPS:
                 return 0., None
+            self._brake_stopped = False
             if wanted_sign != self._planned:
                 if self._reverse_pulses >= MAX_REVERSE_PULSES and self.arrival_band is None:
                     self._stop("reverse_pulse_limit_reached_without_framing")

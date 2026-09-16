@@ -29,7 +29,13 @@ public final class FcRecoveryCoordinator {
         long now=clock.getAsLong();String current=health.state(now);
         if("HEALTHY".equals(current)) {
             if(healthySince<0)healthySince=now;
-            if(now-healthySince>=10000 && !state.equals("VERIFYING"))attempted=false;
+            if(now-healthySince>=10000 && !state.equals("VERIFYING")) {
+                attempted=false;
+                // An outage that ended must stop naming why the last attempt stopped.
+                // Leaving WAIT_OPERATOR on a healthy link sends the operator hunting a
+                // fault that already cleared. A finished SUCCEEDED is left as the record.
+                if(state.equals("WAIT_OPERATOR")){state="IDLE";reason="NONE";}
+            }
         } else healthySince=-1;
         if(!"HANDLER_FAULT".equals(current)||attempted||now-lastAttempt<30000
                 ||state.equals("PROVING")||state.equals("VERIFYING"))return;

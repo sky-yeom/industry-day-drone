@@ -217,19 +217,24 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("정지 상태를 확인한 뒤", self.session.data["error"])
         self.assertEqual(self.commands("drone_execute_route"), [])
 
-    async def test_unassessable_active_analysis_requests_stop_without_claiming_landing(self):
+    async def test_unassessable_analysis_keeps_the_aircraft_on_its_route_home(self):
         from relay.appearance import REVISION_REQUEST
         from relay.vision import PromptRevisionRequired
         self.backend.arrived = True
-        self.vision.results = [PromptRevisionRequired(REVISION_REQUEST)]
+        self.vision.results = [PromptRevisionRequired(REVISION_REQUEST) for _ in range(3)]
         self.assertTrue((await self.runner.launch())["ok"])
-        await settle(lambda: self.runner._work.done())
-        self.assertEqual(self.session.phase, "aborted")
+        await settle(lambda: len(self.vision.calls) == 3)
+        # A cloud verdict says nothing about the aircraft, so the route that ends
+        # on its own landing pad is never taken away from it mid-air.
+        self.assertEqual(self.commands("drone_stop_mission"), [])
         self.assertEqual(len(self.commands("drone_execute_route")), 1)
-        self.assertEqual(len(self.commands("drone_stop_mission")), 1)
-        self.assertEqual(self.session.data["droneStopState"], "stop_requested")
-        self.assertIn(REVISION_REQUEST, self.session.data["error"])
-        self.assertIn("정지 상태를 확인한 뒤", self.session.data["error"])
+        self.assertNotEqual(self.session.phase, "aborted")
+        self.assertIsNone(self.session.data["droneErrorCode"])
+        captures = self.session.data["captures"]
+        self.assertEqual([capture["status"] for capture in captures], ["captured"] * 3)
+        self.assertTrue(all(capture["evidence"] is None for capture in captures))
+        self.assertTrue(all(REVISION_REQUEST in capture["analysisNote"] for capture in captures))
+        # No verdict means no outcome: nobody is claimed found and nobody written off.
         self.assertTrue(all(person["outcome"] is None for person in self.session.data["people"]))
 
     async def test_whole_route_once_waits_for_actual_arrival_and_matching_frames(self):
@@ -300,12 +305,22 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.data["droneStopState"], "stop_requested")
         self.assertEqual(self.session.phase, "aborted")
 
-    async def test_deadline_stops_actual_mission(self):
+    async def test_deadline_ends_scoring_but_lets_the_aircraft_land_itself_first(self):
         await self.runner.launch()
         self.clock.advance(60000)
+        await settle(lambda: self.session.phase == "complete")
+        # The rescue clock ran out on the people, not on the aircraft. Cutting its
+        # authority here would strand it hovering indoors, so it keeps the route
+        # that ends on its landing pad and the debrief waits for that landing.
+        self.assertEqual(self.commands("drone_stop_mission"), [])
+        self.assertFalse(self.runner._deadlines.done())
+        self.assertEqual([event for event in self.events if event["type"] == "mission.debrief"], [])
+        self.backend.arrived = True
+        self.backend.mission.update(state="completed")
         await settle(lambda: self.runner._deadlines.done())
-        self.assertEqual(len(self.commands("drone_stop_mission")), 1)
+        self.assertEqual(self.commands("drone_stop_mission"), [])
         self.assertEqual(self.session.phase, "complete")
+        self.assertEqual(len([event for event in self.events if event["type"] == "mission.debrief"]), 1)
 
     async def test_unknown_stop_never_claims_physical_confirmation(self):
         await self.runner.launch()

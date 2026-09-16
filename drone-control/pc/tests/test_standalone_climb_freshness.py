@@ -17,9 +17,11 @@ class ClimbFreshnessTests(StandaloneTestCase):
         limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .1))
         zero_times, confirmation = [], []
         original_status, original_zero, original_log = client.status, client.zero, client.log_event
+        passes = [0]
         def status(state):
             if state == "standalone_climb_after_video":
-                clock[0] += refresh_rtt
+                passes[0] += 1
+                clock[0] += refresh_rtt(passes[0]) if callable(refresh_rtt) else refresh_rtt
             original_status(state)
             client.last_telemetry.height_m = 1.6
             client.last_telemetry.height_age_s = refreshed_age if state == "standalone_climb_after_video" else .318
@@ -69,10 +71,19 @@ class ClimbFreshnessTests(StandaloneTestCase):
         self.assertEqual(self.confirmation, [])
 
     def test_exact_frame_aged_by_refresh_rtt_is_rejected_before_actuation(self):
-        with self.assertRaisesRegex(InterruptedError, "floor frame expired"):
+        with self.assertRaisesRegex(RuntimeError, "not confirmed within"):
             self.exercise(refresh_rtt=.3)
-        self.assertEqual(self.zero_times, [])
         self.assertEqual(self.confirmation, [])
+        self.assertFalse(any(isinstance(call, tuple) and call[0] == "attitude" for call in self.client.calls))
+        self.assertTrue(self.zero_times, "the setpoint must keep arriving while a new frame decodes")
+        self.assertTrue(any(event == "standalone_climb_frame_deferred" for event, _ in self.client.events))
+
+    def test_one_slow_round_trip_re_observes_instead_of_ending_the_climb(self):
+        self.exercise(refresh_rtt=lambda n: .3 if n == 1 else .04)
+        self.assertTrue(self.confirmation)
+        self.assertEqual(self.confirmation[0][1]["target_height_m"], 1.6)
+        self.assertEqual(sum(event == "standalone_climb_frame_deferred"
+                             for event, _ in self.client.events), 1)
 
     def test_post_zero_height_and_velocity_must_stay_at_target_for_hold(self):
         def zero_sample(telemetry, count):

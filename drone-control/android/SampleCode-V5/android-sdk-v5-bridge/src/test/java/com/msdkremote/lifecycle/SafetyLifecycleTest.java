@@ -158,6 +158,32 @@ public class SafetyLifecycleTest {
         assertTrue(gate.acknowledgeGround(1,true));assertEquals("NONE",gate.maintenanceBlockReason(1));
         recovery.tick();scheduler.until(20000);assertEquals(1,binds[0]);
     }
+    @Test public void aHealedLinkStopsBlamingTheReasonTheLastAttemptStopped() {
+        int[] binds={0};MaintenanceGate gate=new MaintenanceGate();gate.sourceChanged(1);gate.controlState(false,false,false);
+        FcHealthTracker health=handlerFault();
+        // The field failure: every core key answers REQUEST_HANDLER_NOT_FOUND, so no ground
+        // evidence exists and the attempt parks in WAIT_OPERATOR naming that read failure.
+        GroundProof p=proof((key,cb)->cb.done(null,"REQUEST_HANDLER_NOT_FOUND"));
+        FcRecoveryCoordinator recovery=new FcRecoveryCoordinator(true,gate,p,health,scheduler,()->scheduler.now,()->generation,()->binds[0]++);
+        recovery.tick();scheduler.until(200);
+        assertEquals("WAIT_OPERATOR",recovery.state());assertEquals("REQUEST_HANDLER_NOT_FOUND",recovery.reason());
+        assertEquals(0,binds[0]);
+        // The aircraft answers again without the bridge touching it - an idle aircraft
+        // goes silent and comes back the moment the operator nudges a stick.
+        long healed=scheduler.now;
+        while(scheduler.now<healed+9500) {
+            for(String key:FcHealthTracker.CORE)health.success(key,scheduler.now,true,200);
+            recovery.tick();
+            assertEquals("WAIT_OPERATOR",recovery.state());
+            scheduler.until(scheduler.now+500);
+        }
+        // Ten seconds of answers means the outage is over. Keep naming it and the operator
+        // goes hunting a fault that already cleared.
+        scheduler.until(healed+10500);
+        for(String key:FcHealthTracker.CORE)health.success(key,scheduler.now,true,200);
+        recovery.tick();
+        assertEquals("IDLE",recovery.state());assertEquals("NONE",recovery.reason());assertEquals(0,binds[0]);
+    }
     @Test public void enabledRecoveryRefusesWhileArmedOrWithUnknownVirtualSticks() {
         int[] reads={0},binds={0};MaintenanceGate gate=new MaintenanceGate();gate.sourceChanged(1);
         GroundProof p=proof((key,cb)->{reads[0]++;cb.done(false,null);});

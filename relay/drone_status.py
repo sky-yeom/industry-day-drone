@@ -15,6 +15,38 @@ def _bridge_health(status):
     return health if isinstance(health, dict) else None
 
 
+# The flight controller keys and the battery percentage are served by different
+# SDK modules, so a real flight-controller fault still leaves the battery
+# readable. When even the battery answers with the same handler-missing error the
+# aircraft stopped talking altogether - observed in the room when the aircraft is
+# left idle: every key dies at once and a single stick nudge on the RC brings all
+# of them back within seconds. Naming that case is the difference between an
+# operator moving a stick and an operator hunting a phantom app bug.
+LINK_WITNESS_KEY = "BatteryPowerPercent"
+HANDLER_MISSING = "REQUEST_HANDLER_NOT_FOUND"
+# Two samples could straddle one blink; three consecutive failures on every
+# polled key is an outage, not a flicker.
+LINK_OUTAGE_SAMPLES = 3
+
+
+def _aircraft_link_asleep(health):
+    """True when every polled key, including one outside the flight controller, is dead."""
+    keys = health.get("keys")
+    if not isinstance(keys, dict):
+        return False
+    witness = keys.get(LINK_WITNESS_KEY)
+    if not isinstance(witness, dict) or witness.get("source") != "GET":
+        return False
+    polled = [entry for entry in keys.values()
+              if isinstance(entry, dict) and entry.get("source") == "GET"]
+    if len(polled) < 2:
+        return False
+    return all(entry.get("last_error_code") == HANDLER_MISSING
+               and type(entry.get("consecutive_failures")) is int
+               and entry["consecutive_failures"] >= LINK_OUTAGE_SAMPLES
+               for entry in polled)
+
+
 def _aircraft_connected(status):
     if status.get("connected") is not True:
         return False
@@ -45,6 +77,10 @@ def live_readiness_issue(status):
     raw = status.get("raw_telemetry")
     health = raw.get("fc_health") if isinstance(raw, dict) else None
     if isinstance(health, dict) and health.get("state") == "HANDLER_FAULT":
+        if _aircraft_link_asleep(health):
+            return ("AIRCRAFT_LINK_ASLEEP",
+                    "기체가 배터리를 포함한 모든 조회에 응답하지 않습니다. 폰 앱과 SDK는 정상입니다. "
+                    "조종기 스틱을 살짝 움직여 기체를 깨운 뒤 다시 지시하세요.")
         return ("FLIGHT_CONTROLLER_UNAVAILABLE",
                 "폰 앱의 DJI 비행제어 조회가 실패하고 있습니다. 앱·RC·기체 연결을 복구한 뒤 상태를 다시 확인하세요.")
     if status.get("ground_verified") is not True:

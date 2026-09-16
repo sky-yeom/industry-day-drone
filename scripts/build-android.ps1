@@ -45,8 +45,16 @@ try {
     $env:ANDROID_HOME = $AndroidSdk
     $env:ANDROID_SDK_ROOT = $AndroidSdk
     $env:DRONE_ANDROID_PROPERTIES = (Resolve-Path -LiteralPath $PrivateProperties).Path
-    & .\gradlew.bat --no-daemon --console=plain -I (Join-Path $PSScriptRoot 'android-private.init.gradle') `
-        :bridge:testDebugUnitTest :uxsdk:testDebugUnitTest :sample:assembleDebug
+    # javac writes deprecation notes to stderr and a stop preference turns any such
+    # note into a failure, so a source change alone could fail a build that compiled
+    # fine. The build's own exit code stays the verdict.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & .\gradlew.bat --no-daemon --console=plain -I (Join-Path $PSScriptRoot 'android-private.init.gradle') `
+            :bridge:testDebugUnitTest :uxsdk:testDebugUnitTest :sample:assembleDebug 2>&1 |
+            ForEach-Object { "$_" }
+    } finally { $ErrorActionPreference = $previous }
     if ($LASTEXITCODE -ne 0) { throw 'Android build failed. The existing phone app was not changed.' }
     $apk = Join-Path $sample 'android-sdk-v5-sample\build\outputs\apk\debug\sample-debug.apk'
     if (-not (Test-Path -LiteralPath $apk -PathType Leaf)) { throw 'Expected APK output is missing.' }

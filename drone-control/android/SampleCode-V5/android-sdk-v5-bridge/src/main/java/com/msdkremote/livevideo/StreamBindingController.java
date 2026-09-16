@@ -54,6 +54,7 @@ final class StreamBindingController<C, F> {
     private long activeEpoch = -1, bindingAttempts, nextBindAt;
     private long bindingRetryMs = 3000;
     private long nextReceiverAt, receiverRetryMs = 3000;
+    private long nextRebindAt, rebindRetryMs = 5000, stalledRebinds;
     private String lastError;
 
     StreamBindingController(Executor executor, LongSupplier clock, Supplier<Manager<C, F>> provider,
@@ -171,6 +172,8 @@ final class StreamBindingController<C, F> {
             camera = null;
             nextReceiverAt = 0;
             receiverRetryMs = 3000;
+            nextRebindAt = 0;
+            rebindRetryMs = 5000;
             invalidateCamera();
             if (selected == null) policy.reset(true, true, false);
             else bindCamera(selected);
@@ -196,6 +199,8 @@ final class StreamBindingController<C, F> {
             worker.execute(() -> {
                 if (!current(ticket, owner) || generation != cameraEpoch.get()) return;
                 policy.raw(at);
+                nextRebindAt = 0;
+                rebindRetryMs = 5000;
                 lastError = null;
                 publish();
             });
@@ -216,8 +221,24 @@ final class StreamBindingController<C, F> {
     private void reconcile() {
         if (desired.get() && manager != null && camera != null && receiver != null &&
                 policy.reconcile() == StreamActivationPolicy.Effect.ENABLE) {
-            try { manager.enable(camera); }
-            catch (RuntimeException error) { error("enable stream", error); }
+            // The SDK ignores an enable for a stream it still believes is on, so a camera
+            // that stopped producing frames never restarts on enable alone - the receiver
+            // has to be registered again. Its own backoff is separate from the policy's
+            // because a fresh bind restarts the policy's ramp, which would otherwise
+            // rebind every few seconds for as long as the camera stays silent.
+            long now = clock.getAsLong();
+            if (policy.state() == StreamActivationPolicy.State.STALLED && now >= nextRebindAt) {
+                stalledRebinds++;
+                nextRebindAt = now + rebindRetryMs;
+                rebindRetryMs = Math.min(60000, rebindRetryMs * 2);
+                C selected = camera;
+                removeReceiver();
+                bindCamera(selected);
+            }
+            if (camera != null && receiver != null) {
+                try { manager.enable(camera); }
+                catch (RuntimeException error) { error("enable stream", error); }
+            }
         }
         publish();
     }
@@ -265,6 +286,7 @@ final class StreamBindingController<C, F> {
         value.put("binding_generation", requestedEpoch.get());
         value.put("camera_generation", cameraEpoch.get());
         value.put("binding_attempts", bindingAttempts);
+        value.put("stalled_rebinds", stalledRebinds);
         value.put("manager_identity", manager == null ? null : System.identityHashCode(manager.identity()));
         value.put("camera_selected", camera == null ? null : camera.toString());
         value.put("receiver_registered", receiver != null);

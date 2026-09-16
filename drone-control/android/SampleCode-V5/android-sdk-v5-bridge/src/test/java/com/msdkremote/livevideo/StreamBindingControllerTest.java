@@ -56,6 +56,38 @@ public class StreamBindingControllerTest {
                 list -> list.contains("MAIN") ? "MAIN" : list.get(0), sink);
     }
 
+    @Test public void aStalledCameraGetsItsReceiverRegisteredAgainNotJustAnotherEnable() {
+        StreamBindingController<String, String> c = controller(Runnable::run);
+        c.start(); manager.events.available(Arrays.asList("MAIN"));
+        manager.events.enabled(Collections.singletonMap("MAIN", true));
+        assertEquals(1, manager.addReceiver); assertEquals(0, manager.removeReceiver);
+        // The SDK keeps reporting the stream as on and never delivers a frame, so another
+        // enable means nothing; only registering the receiver again restarts delivery.
+        now = 3000; c.ensure(); manager.events.enabled(Collections.singletonMap("MAIN", true));
+        assertEquals(2, manager.addReceiver); assertEquals(1, manager.removeReceiver);
+        // A camera that is simply silent must not be rebound on every pass. A rebind rides
+        // an activation tick, so the next one waits for the slower of the two backoffs.
+        for (now = 3250; now < 8000; now += 250) {
+            c.ensure(); manager.events.enabled(Collections.singletonMap("MAIN", true));
+        }
+        assertEquals(2, manager.addReceiver);
+        for (now = 8000; now <= 20000 && manager.addReceiver < 3; now += 250) {
+            c.ensure(); manager.events.enabled(Collections.singletonMap("MAIN", true));
+        }
+        assertEquals(3, manager.addReceiver); assertEquals(2, manager.removeReceiver);
+        assertTrue("a stalled camera waited too long to be rebound: " + now, now <= 15000);
+    }
+    @Test public void aCameraThatIsActuallyDeliveringIsNeverRebound() {
+        StreamBindingController<String, String> c = controller(Runnable::run);
+        c.start(); manager.events.available(Arrays.asList("MAIN"));
+        manager.events.enabled(Collections.singletonMap("MAIN", true));
+        for (now = 500; now < 20000; now += 500) {
+            manager.receiver.accept("frame");
+            c.ensure();
+            manager.events.enabled(Collections.singletonMap("MAIN", true));
+        }
+        assertEquals(1, manager.addReceiver); assertEquals(0, manager.removeReceiver);
+    }
     @Test public void delayedFalseReportEnablesWithoutDetachingAvailableListener() {
         StreamBindingController<String, String> c = controller(Runnable::run);
         c.start(); manager.events.available(Arrays.asList("MAIN"));

@@ -298,6 +298,27 @@ class SurveySession:
         self._finish_if_resolved()
         return True
 
+    def unjudged_capture(self, run_id, capture_id, note):
+        """Release an analysis that reached no verdict, inventing neither outcome.
+
+        A capture nobody could judge is still a real photograph. Recording it as
+        "not found" would claim the person is absent and recording it as found
+        would claim the opposite; both are fabrications. The image stays captured
+        with the reason attached, the person keeps no outcome, and their rescue
+        deadline keeps running exactly as it would have.
+        """
+        if (run_id != self.run_id or self.phase != "analyzing"
+                or capture_id != self._active_capture):
+            return False
+        capture = self.data["captures"][-1]
+        if capture["status"] != "analyzing" or capture["evidence"] is not None:
+            return False
+        capture["analysisNote"] = note
+        self._release_pending_capture()
+        self.touch()
+        self.expire()
+        return True
+
     def expire(self):
         if self.phase not in ACTIVE:
             return False

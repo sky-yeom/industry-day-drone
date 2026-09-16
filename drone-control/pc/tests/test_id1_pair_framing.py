@@ -7,8 +7,9 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "trials"))
-from id1_pair_framing import (MAX_RECOVERY_PULSES, MISSING_RECOVERY_S, PairFramingError,
-                              PairFramingGate, project_pair_footprint)
+from id1_pair_framing import (BRAKE_MAX_DEG, BRAKE_MIN_DEG, MAX_RECOVERY_PULSES,
+                              MISSING_RECOVERY_S, PairFramingError, PairFramingGate,
+                              SEEK_MAX_DEG, STILL_SPEED_MPS, project_pair_footprint)
 
 
 REFERENCE = {"roi_tag_bounds": {"x_min": -5.090921, "x_max": 1.406036,
@@ -146,12 +147,14 @@ class GateTests(unittest.TestCase):
         self.assertEqual(right, 0.)
         self.assertIs(found, observed)
 
-    def test_overshoot_zeroes_until_settled_then_corrects_continuously(self):
+    def test_overshoot_brakes_until_still_then_corrects_continuously(self):
         self.update(0., tag(900., 300., 200.), speed=.2)
         right, found = self.update(.1, tag(1730., 250., 150.), speed=.2)
-        self.assertEqual(right, 0.)
+        self.assertGreaterEqual(right, BRAKE_MIN_DEG)
+        self.assertLessEqual(right, BRAKE_MAX_DEG)
         self.assertIsNone(found)
-        self.assertEqual(self.update(.7, tag(1730., 250., 150.), speed=.2)[0], 0.)
+        self.assertEqual(self.gate.diagnostic["state"], "CORRECTION_BRAKE")
+        self.assertGreaterEqual(self.update(.7, tag(1730., 250., 150.), speed=.2)[0], BRAKE_MIN_DEG)
         right, _ = self.update(.8, tag(1730., 250., 150.), speed=.02)
         self.assertGreater(right, 0.)
         self.assertLessEqual(right, .6)
@@ -175,7 +178,7 @@ class GateTests(unittest.TestCase):
         self.assertTrue(self.gate.diagnostic["footprint"]["fits"])
         self.assertTrue(self.gate.diagnostic["capture_ready"])
         self.assertIs(found, fitted)
-        self.assertEqual(commands[1], 0.)
+        self.assertGreaterEqual(commands[1], BRAKE_MIN_DEG)
         self.assertTrue(all(right == 0. for right in commands[3:]))
 
     def test_three_reversals_are_not_renewed_into_an_unbounded_correction(self):
@@ -236,8 +239,7 @@ class GateTests(unittest.TestCase):
                 self.assertEqual(self.gate.diagnostic["requested_right_tilt_deg"], 0.)
 
     def test_stale_frame_velocity_bad_geometry_or_generation_change_stops(self):
-        cases = ({"frame_age": .501}, {"frame_age": float("nan")},
-                 {"velocity_age": .501}, {"speed": float("nan")}, {"speed": -.01},
+        cases = ({"velocity_age": .501}, {"speed": float("nan")}, {"speed": -.01},
                  {"shape": (0, 1920)}, {"key": (2, 2)})
         for change in cases:
             with self.subTest(change=change):
@@ -247,6 +249,16 @@ class GateTests(unittest.TestCase):
                     self.update(.1, tag(), **change)
                 with self.assertRaisesRegex(PairFramingError, "already_stopped"):
                     self.update(.2, tag())
+
+    def test_a_stale_frame_holds_still_and_waits_for_the_next_decode(self):
+        for change in ({"frame_age": .501}, {"frame_age": float("nan")}):
+            with self.subTest(change=change):
+                self.gate = PairFramingGate(REFERENCE)
+                self.update(0., tag(), key=(1, 1))
+                self.assertEqual(self.update(.1, tag(), **change), (0., None))
+                self.assertEqual(self.gate.diagnostic["state"], "WAIT_FRESH_FRAME")
+                self.assertEqual(self.gate.diagnostic["reason"], "stale_or_invalid_detection_frame")
+                self.assertEqual(self.update(.2, tag(), key=(1, 3)), (0., None))
 
     def test_completed_capture_never_restarts_motion_if_pair_later_drifts(self):
         for i in range(11):
@@ -372,24 +384,92 @@ class GateTests(unittest.TestCase):
             self.assertEqual(right, 0.)
         self.assertIs(found, observed)
 
-    def test_edge_band_overshoot_zeroes_before_gentle_right_pulse(self):
+    def test_edge_band_overshoot_brakes_before_gentle_right_pulse(self):
         self.gate = PairFramingGate(REFERENCE, arrival_band=(.85, .95))
         self.assertLess(self.update(0., tag(600., 300., 150.))[0], 0.)
         overshot = tag(.97*1920.-75., 300., 150.)
-        self.assertEqual(self.update(.1, overshot, speed=.2), (0., None))
-        self.assertEqual(self.update(.7, overshot, speed=.2), (0., None))
+        braking, found = self.update(.1, overshot, speed=.2)
+        self.assertGreaterEqual(braking, BRAKE_MIN_DEG)
+        self.assertLessEqual(braking, BRAKE_MAX_DEG)
+        self.assertIsNone(found)
+        self.assertEqual(self.gate.diagnostic["state"], "CORRECTION_BRAKE")
+        self.assertGreaterEqual(self.update(.7, overshot, speed=.2)[0], BRAKE_MIN_DEG)
         right, found = self.update(.8, overshot, speed=.01)
         self.assertGreater(right, 0.)
         self.assertLessEqual(right, .6)
         self.assertIsNone(found)
         self.assertFalse(self.gate.diagnostic["arrival_ready"])
 
+    def test_arrival_at_speed_brakes_instead_of_coasting_the_tag_out_of_frame(self):
+        """10:44 flight: arrival zeroed at 0.28 m/s, coasted 0.9 s and lost the tag.
+
+        Three approaches were framed and three were coasted away, costing 27 s
+        and the whole reverse-pulse budget for one photo. Zero tilt cannot brake,
+        so a reverse tilt has to, and it must outrank the gentle seek cap.
+        """
+        self.gate = PairFramingGate(REFERENCE, arrival_band=(.85, .95))
+        self.assertLess(self.update(0., tag(600., 300., 150.), speed=.28)[0], 0.)
+        arrived = tag(.90*1920.-75., 300., 150.)
+        speed, braked = .28, []
+        for i in range(1, 9):
+            right, found = self.update(i*.1, arrived, speed=speed)
+            self.assertIsNone(found)
+            if speed > STILL_SPEED_MPS:
+                self.assertEqual(self.gate.diagnostic["state"], "CAPTURE_BRAKE")
+                self.assertGreaterEqual(right, BRAKE_MIN_DEG)
+                self.assertLessEqual(right, BRAKE_MAX_DEG)
+                braked.append(right)
+                # 0.6 deg is about 0.10 m/s^2, so 0.1 s of it is worth 0.010 m/s.
+                speed = max(0., speed - .043)
+            else:
+                self.assertEqual(right, 0.)
+                self.assertEqual(self.gate.diagnostic["state"], "CAPTURE_SETTLE")
+        # Coasting took 0.9 s to reach stillness; braking has to beat that badly
+        # enough that the tag is still in frame when the photo is taken.
+        self.assertLessEqual(len(braked), 6)
+        self.assertLess(self.gate.diagnostic["horizontal_speed_mps"], STILL_SPEED_MPS)
+        for i in range(9, 20):
+            right, found = self.update(i*.1, arrived, speed=.01)
+            self.assertEqual(right, 0.)
+            if found is not None:
+                break
+        self.assertIs(found, arrived)
+        self.assertTrue(self.gate.diagnostic["capture_ready"])
+        self.assertEqual(self.gate.diagnostic["reverse_pulses_used"], 0)
+
+    def test_a_brake_never_becomes_the_direction_the_reacquire_seek_searches(self):
+        """A brake opposes travel; reading it back would search away from the tag."""
+        self.gate = PairFramingGate(REFERENCE, arrival_band=(.85, .95))
+        self.assertLess(self.update(0., tag(600., 300., 150.), speed=.28)[0], 0.)
+        self.assertGreater(self.update(.1, tag(.90*1920.-75., 300., 150.), speed=.28)[0], 0.)
+        self.assertEqual(self.update(.2, tags=[], speed=.28), (0., None))
+        self.update(.6, tags=[], speed=.0)
+        # The tag left the right edge while travelling left, so the seek is right.
+        self.assertEqual(self.gate.diagnostic["state"], "BOUNDED_REACQUIRE_SEEK")
+        self.assertEqual(self.gate.diagnostic["last_tag_observation"]["recovery_sign"], 1.)
+
+    def test_an_unstoppable_drift_stops_braking_instead_of_fighting_forever(self):
+        self.gate = PairFramingGate(REFERENCE, arrival_band=(.85, .95))
+        self.assertLess(self.update(0., tag(600., 300., 150.), speed=.28)[0], 0.)
+        arrived = tag(.90*1920.-75., 300., 150.)
+        commands = [self.update(i*.1, arrived, speed=.28)[0] for i in range(1, 25)]
+        self.assertGreaterEqual(commands[0], BRAKE_MIN_DEG)
+        self.assertEqual(commands[-1], 0.)
+        self.assertEqual(self.gate.diagnostic["state"], "CAPTURE_SETTLE")
+        self.assertFalse(self.gate.diagnostic["capture_ready"])
+
     def test_edge_band_keeps_fresh_velocity_frame_and_generation_guards(self):
-        for changed in ({"frame_age": .501}, {"velocity_age": .501}, {"key": (2, 2)}):
+        for changed in ({"velocity_age": .501}, {"key": (2, 2)}):
             self.gate = PairFramingGate(REFERENCE, arrival_band=(.85, .95))
             self.update(0., tag(), key=(1, 1))
             with self.subTest(changed=changed), self.assertRaises(PairFramingError):
                 self.update(.1, tag(), **changed)
+
+    def test_edge_band_waits_out_a_stale_frame_without_commanding_motion(self):
+        self.gate = PairFramingGate(REFERENCE, arrival_band=(.85, .95))
+        self.update(0., tag(), key=(1, 1))
+        self.assertEqual(self.update(.1, tag(), frame_age=.501), (0., None))
+        self.assertEqual(self.gate.diagnostic["state"], "WAIT_FRESH_FRAME")
 
     def start_recorded_right_loss(self):
         self.gate = PairFramingGate(REFERENCE, arrival_band=(.85, .95))
@@ -397,7 +477,12 @@ class GateTests(unittest.TestCase):
         # Actual last-seen center from145104:1682.259/1920=87.62%.
         # Lost154ms later; horizontal speed first zero781ms afterlastseen.
         seen = tag(1682.259-100., 300., 200.)
-        self.assertEqual(self.update(.2, seen, speed=.282843), (0., None))
+        # Arrival brakes against the travel now instead of coasting through it.
+        braking, found = self.update(.2, seen, speed=.282843)
+        self.assertGreaterEqual(braking, BRAKE_MIN_DEG)
+        self.assertLessEqual(braking, BRAKE_MAX_DEG)
+        self.assertIsNone(found)
+        self.assertEqual(self.gate.diagnostic["state"], "CAPTURE_BRAKE")
         self.assertEqual(self.update(.354, tags=[], speed=.282843), (0., None))
 
     def test_recorded145104_right_loss_recovers_with_bounded_reverse_seek_then_captures(self):
@@ -430,6 +515,21 @@ class GateTests(unittest.TestCase):
         self.assertIn("fixed_wall_order", self.gate.diagnostic["last_tag_observation"]["evidence"])
         self.assertLess(longest_zero_hold, MISSING_RECOVERY_S)
         self.assertGreater(commanded_right, 60)
+
+    def test_a_neighbour_never_reverses_an_approach_that_never_reached_the_band(self):
+        """18:41 flight: ID1 dropped out at 30% of frame while ID2 was also in view."""
+        self.gate = PairFramingGate(REFERENCE, arrival_band=(.75, .90), layout=(3, 2, 1, 6))
+        self.update(0., tag(400., 300., 130.))  # centre 24% of frame: far short of .75.
+        commanded_right, commanded_left = 0, 0
+        for step in range(1, 121):
+            right, _ = self.update(step*.1, tags=[tag(tag_id=2)])
+            commanded_right += right > 0.
+            commanded_left += right < 0.
+        self.assertEqual(self.gate.diagnostic["layout_direction_sign"], 1.)
+        self.assertEqual(self.gate.diagnostic["last_tag_observation"]["recovery_sign"], -1.)
+        self.assertIn("still_ahead", self.gate.diagnostic["last_tag_observation"]["evidence"])
+        self.assertEqual(commanded_right, 0)
+        self.assertGreater(commanded_left, 60)
 
     def test_wall_order_stays_ambiguous_when_neighbours_sit_on_both_sides(self):
         gate = PairFramingGate(REFERENCE, arrival_band=(.85, .95), layout=(3, 2, 1, 6))

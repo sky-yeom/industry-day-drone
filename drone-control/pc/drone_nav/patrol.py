@@ -448,10 +448,21 @@ class _DetectionLogger:
         """
         try:
             snapshot = capture.last_detection_snapshot
-            frame = None if snapshot is None else snapshot.frame
             frame_age_s = float("inf") if snapshot is None else time.monotonic() - snapshot.received_s
-            ok = snapshot is not None
-            if not ok or frame is None or frame_age_s > FRESH_FRAME_S:
+            frame_source = "detection"
+            if snapshot is None or snapshot.frame is None or frame_age_s > FRESH_FRAME_S:
+                # The detection snapshot keeps ageing while the arrival is
+                # confirmed and proved stationary, so by the time the photo is
+                # written it can be older than the stream itself.  The aircraft
+                # is holding position here, so the newest decoded frame shows
+                # the same scene and is the only one that can still be fresh.
+                newest = capture.snapshot() if hasattr(capture, "snapshot") else None
+                if newest is not None and newest.frame is not None:
+                    snapshot = newest
+                    frame_age_s = time.monotonic() - newest.received_s
+                    frame_source = "latest_decoded"
+            frame = None if snapshot is None else snapshot.frame
+            if frame is None or frame_age_s > FRESH_FRAME_S:
                 raise RuntimeError(f"camera frame is stale ({frame_age_s:.3f}s)")
             self._photo_index += 1
             captured_at = datetime.now().strftime("%Y%m%dT%H%M%S_%f")[:-3]
@@ -465,6 +476,7 @@ class _DetectionLogger:
                 "phase": phase.value,
                 "path": str(path),
                 "frame_age_s": frame_age_s,
+                "frame_source": frame_source,
                 "frame_key": snapshot.key,
                 "center_px": (
                     list(detection.center_px) if detection.center_px else None

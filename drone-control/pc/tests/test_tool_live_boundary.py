@@ -149,6 +149,40 @@ class LiveTransportBoundaryTest(unittest.TestCase):
                     client.send(command, payload)
                 self.assertEqual(raw.writes, [])
 
+    def test_landing_gets_a_bridge_sized_budget_and_survives_the_disarm_it_asks_for(self):
+        # The phone answers "land" by disarming the stick manager and only then
+        # submitting the auto-landing key, so the acknowledgement legitimately
+        # reports an unarmed aircraft doing exactly what it was told to do.
+        handback = {**AIRBORNE, "armed": False, "vs_enabled": False, "vs_authority": "RC"}
+        with patch("drone_nav.tool_control.live.time.perf_counter", lambda: 100.):
+            client, raw = self.client(FakeSocket(handback))
+            client._armed, client._armed_since = True, 0.
+            client.land("offline-fixture")
+            # Two chained asynchronous SDK calls cannot answer inside a motion budget.
+            self.assertEqual(client._socket.deadline, 103.)
+        self.assertEqual([r["type"] for r in raw.writes], ["land"])
+        self.assertEqual(raw.writes[0]["payload"], {"confirmation_token": "offline-fixture"})
+        self.assertFalse(client.failed)
+        # Landing ends the armed session, so cleanup afterwards is never re-checked
+        # for an authority the aircraft was deliberately given back.
+        self.assertFalse(client._armed)
+        client.cleaning = True
+        client.zero()
+        client.disarm()
+        self.assertEqual([r["type"] for r in raw.writes], ["land", "zero", "disarm"])
+
+    def test_only_landing_and_disarm_may_acknowledge_with_authority_handed_back(self):
+        handback = {**AIRBORNE, "armed": False, "vs_enabled": False, "vs_authority": "RC"}
+        for command, payload in [("gimbal", {"pitch_deg": -90}), ("status", {"state": "offline"}),
+                                 ("zero", {})]:
+            with self.subTest(command=command):
+                with patch("drone_nav.tool_control.live.time.perf_counter", lambda: 100.):
+                    client, raw = self.client(FakeSocket(handback))
+                    client._armed, client._armed_since = True, 0.
+                    with self.assertRaises(InterruptedError):
+                        client.send(command, payload)
+                self.assertEqual([r["type"] for r in raw.writes], [command])
+
     def test_unknown_write_outcome_cannot_be_replayed_or_followed_by_another_command(self):
         client, raw = self.client(FakeSocket(acknowledge=False))
         self.ground_proof(client)

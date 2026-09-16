@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from drone_nav.config import load_config
 from drone_nav.patrol import (
-    PatrolPhase, _DetectionLogger, _acquire_tag,
+    PatrolPhase, _DetectionLogger, _acquire_tag, _floor_alignment_velocity,
     _visual_floor_height_m,
 )
 from drone_nav.protocol import RateLimiter
@@ -53,6 +53,29 @@ FLIGHT_STATE_FRESH_S = 1.5
 # clipped by the FOV as attitude shifts) recovers within one or two 100 ms
 # ticks. Only a sustained miss is a real loss, mirroring FLIGHT_STATE_FRESH_S.
 CLIMB_TAG_MISS_GRACE_S = 1.0
+# The 16:04 flight closed to 64 px of the saved anchor and then ran out of
+# clock against a 45 px radius: the aircraft was already over its pad and the
+# gate was the only thing still refusing. Landing is accepted on a box around
+# the frame centre instead - the downward camera puts whatever is directly
+# below the aircraft there - so "close enough to put it down" is the test.
+LANDING_CENTER_BOX_FRACTION = .30
+# The return leg only proves ID6 is somewhere in frame, which leaves the
+# aircraft standing anywhere along the wall. Pulling the home tag into the
+# middle of the frame first is what puts the floor tag back under the camera.
+# The 16:18 flight accepted 431 px of offset against a half-frame box and the
+# floor tag was still clipped, so the home gate is a quarter of the frame.
+HOME_CENTER_BOX_FRACTION = .25
+HOME_CENTER_TIMEOUT_S = 20.
+# Indoor drift pushes the aircraft backwards between the last wall capture and
+# the gimbal drop, which slides ID0 off the top of the downward view. A blind
+# search that only hovers can never recover that; short forward pulses walk the
+# tag back down into frame. Bounded so a tag that is simply absent - wrong pad,
+# covered marker - cannot creep the aircraft across the room.
+SEARCH_NUDGE_DEG = .3
+SEARCH_NUDGE_AFTER_S = 1.
+SEARCH_NUDGE_PULSE_S = .6
+SEARCH_NUDGE_GAP_S = .6
+MAX_SEARCH_NUDGES = 8
 # DJI disables Virtual Stick when no setpoint arrives for about a second and
 # reports the handback as vs_change_reason=MSDK_REQUEST. Measured on the 18:12
 # flight: command_sequence froze at 99, command_age_s ran 0.61 -> 1.045, then
@@ -522,6 +545,14 @@ class ShuttleClient(MissionClient):
             # zero and admits exactly the same commands as before.
             permitted = (forward == yaw == 0. and _number(right, *self.lateral_bounds)
                          and _number(up, 0., self.hold_up_bound))
+        elif self.phase == "landing":
+            # Floor alignment is the one phase that steers both horizontal axes:
+            # the downward camera reports the home tag's offset in x and y, and
+            # correcting only one of them would circle the pad instead of
+            # closing on it. Vertical stays with the aircraft's own descent.
+            permitted = (yaw == 0. and up == 0.
+                         and _number(forward, *self.lateral_bounds)
+                         and _number(right, *self.lateral_bounds))
         else:
             permitted = False
         if not permitted:
@@ -727,6 +758,32 @@ def _clear_latched_unsafe_intent(client, confirmation_token):
     return True
 
 
+def _note_aircraft_link_generation(client):
+    """Record whether this flight runs on a reconnected aircraft link.
+
+    Across 35 recorded field flights the climb reached its commanded height
+    nine times and every one of them ran at bridge connection_generation 1;
+    all eight flights at generation 3, 5 or 7 held their automatic-takeoff
+    height with a valid setpoint acked and measured_body_up_mps at 0. The
+    bridge now hands Virtual Stick back to the SDK whenever the aircraft link
+    changes, which is meant to remove that difference, so this records the
+    generation instead of refusing to fly: a later generation that climbs is
+    the evidence the bridge fix works, and one that does not names the cause
+    in the log without a second flight to find it.
+    """
+    health = (client.raw or {}).get("bridge_health")
+    if not isinstance(health, dict):
+        health = {}
+    generation = health.get("connection_generation")
+    client.log_event("standalone_aircraft_link_generation", {
+        "connection_generation": generation,
+        "first_connection": generation == 1,
+        "vs_source_releases": (client.raw or {}).get("vs_source_releases"),
+        "vs_binding_attempts": (health.get("vs_binding") or {}).get("attempts"),
+    })
+
+
+
 class GroundVideoUnavailable(RuntimeError):
     pass
 
@@ -886,7 +943,11 @@ def _climb(client, limiter, stream, detector, logger, config, target, profile=No
         nonlocal generation
         if (snapshot is None or stream.last_detection_snapshot is not snapshot
                 or not _number(time.monotonic() - snapshot.received_s, 0., FRESH_S)):
-            raise InterruptedError("Exact floor frame expired or changed during climb")
+            # Each proof point costs a status round trip, so one decoded image
+            # is re-aged several times before the height command lands and a
+            # single slow trip can outlive it. Nothing has reached the wire, so
+            # this asks for a new observation the way the dispatch gate does.
+            raise FramingCorrectionDeferred("Exact floor frame expired or changed during climb")
         if generation is None:
             generation = snapshot.key[0]
         elif snapshot.key[0] != generation:
@@ -931,65 +992,255 @@ def _climb(client, limiter, stream, detector, logger, config, target, profile=No
         # Detection/pose computation can consume the prior height's 500 ms
         # budget. Refresh telemetry, then re-age this exact processed image.
         client.status("standalone_climb_after_video")
-        require_frame(snapshot)
-        t, elapsed, up = fresh_height_command()
-        now = time.monotonic()
-        if now >= deadline:
-            break
-        row = {"target_height_m": target, "height_m": t.height_m,
-               "floor_visual_height_m": visual_height, "up_mps": up,
-               "source": "downward_ultrasonic_display"}
-        client.log_event("standalone_climb_sample", row)
-        require_frame(snapshot)
-        t, elapsed, up = fresh_height_command()
-        if up == 0.:
-            client.zero()
+        try:
             require_frame(snapshot)
-            t, elapsed, post_zero_up = fresh_height_command()
+            t, elapsed, up = fresh_height_command()
             now = time.monotonic()
             if now >= deadline:
                 break
-            stable = (post_zero_up == 0. and _number(t.velocity_down_mps, -.05, .05)
-                      and t.velocity_age_s is not None
-                      and _number(t.velocity_age_s + elapsed, 0., FRESH_S))
-            key = snapshot.key
-            if not stable or key is None:
-                held, previous_key = None, None
-                continue
-            if previous_key is not None and key[0] != previous_key[0]:
-                raise InterruptedError("Video generation changed during climb")
-            if previous_key is None or key[1] > previous_key[1]:
-                held = now if held is None else held
-                if now - held >= .5:
-                    row.update(height_m=t.height_m, velocity_down_mps=t.velocity_down_mps,
-                               height_age_s=t.height_age_s + elapsed,
-                               velocity_age_s=t.velocity_age_s + elapsed,
-                               confirmation_source="fresh_zero_ack", frame_key=key)
-                    client.log_event("standalone_target_height_confirmed", row)
-                    require_frame(snapshot)
-                    final_t, final_elapsed, final_up = fresh_height_command()
-                    if (final_up != 0. or not _number(final_t.velocity_down_mps, -.05, .05)
-                            or final_t.velocity_age_s is None
-                            or not _number(final_t.velocity_age_s + final_elapsed, 0., FRESH_S)):
-                        raise InterruptedError("Climb confirmation changed or expired during logging")
-                    return
-                previous_key = key
-        else:
-            held, previous_key = None, None
-            try:
-                client.attitude(0., 0., up, 0.)
-            except FramingCorrectionDeferred as exc:
-                # Refused before the wire write: hold still and re-observe, the
-                # same way the wall traversal does. The setpoint must still
-                # reach the aircraft. Virtual Stick is disabled by the aircraft
-                # when no stick command arrives for about a second, and status
-                # polling does not count: a deferred climb correction once left
-                # the setpoint untouched for 1.045 s and the flight controller
-                # handed authority back to the RC mid-climb. The climb deadline
-                # still bounds a camera that never recovers.
+            row = {"target_height_m": target, "height_m": t.height_m,
+                   "floor_visual_height_m": visual_height, "up_mps": up,
+                   "source": "downward_ultrasonic_display"}
+            client.log_event("standalone_climb_sample", row)
+            require_frame(snapshot)
+            t, elapsed, up = fresh_height_command()
+            if up == 0.:
                 client.zero()
-                client.log_event("standalone_climb_deferred", {"reason": str(exc)})
+                require_frame(snapshot)
+                t, elapsed, post_zero_up = fresh_height_command()
+                now = time.monotonic()
+                if now >= deadline:
+                    break
+                stable = (post_zero_up == 0. and _number(t.velocity_down_mps, -.05, .05)
+                          and t.velocity_age_s is not None
+                          and _number(t.velocity_age_s + elapsed, 0., FRESH_S))
+                key = snapshot.key
+                if not stable or key is None:
+                    held, previous_key = None, None
+                    continue
+                if previous_key is not None and key[0] != previous_key[0]:
+                    raise InterruptedError("Video generation changed during climb")
+                if previous_key is None or key[1] > previous_key[1]:
+                    held = now if held is None else held
+                    if now - held >= .5:
+                        row.update(height_m=t.height_m, velocity_down_mps=t.velocity_down_mps,
+                                   height_age_s=t.height_age_s + elapsed,
+                                   velocity_age_s=t.velocity_age_s + elapsed,
+                                   confirmation_source="fresh_zero_ack", frame_key=key)
+                        client.log_event("standalone_target_height_confirmed", row)
+                        require_frame(snapshot)
+                        final_t, final_elapsed, final_up = fresh_height_command()
+                        if (final_up != 0. or not _number(final_t.velocity_down_mps, -.05, .05)
+                                or final_t.velocity_age_s is None
+                                or not _number(final_t.velocity_age_s + final_elapsed, 0., FRESH_S)):
+                            raise InterruptedError("Climb confirmation changed or expired during logging")
+                        return
+                    previous_key = key
+            else:
+                held, previous_key = None, None
+                try:
+                    client.attitude(0., 0., up, 0.)
+                except FramingCorrectionDeferred as exc:
+                    # Refused before the wire write: hold still and re-observe, the
+                    # same way the wall traversal does. The setpoint must still
+                    # reach the aircraft. Virtual Stick is disabled by the aircraft
+                    # when no stick command arrives for about a second, and status
+                    # polling does not count: a deferred climb correction once left
+                    # the setpoint untouched for 1.045 s and the flight controller
+                    # handed authority back to the RC mid-climb. The climb deadline
+                    # still bounds a camera that never recovers.
+                    client.zero()
+                    client.log_event("standalone_climb_deferred", {"reason": str(exc)})
+        except FramingCorrectionDeferred as exc:
+            # The image behind this pass aged out between two proof points. Hold
+            # the setpoint alive so the flight controller keeps Virtual Stick,
+            # drop the confirmation streak that image was carrying, and let the
+            # next decode supply a fresh one. The climb deadline still bounds a
+            # camera that never recovers.
+            client.zero()
+            client.log_event("standalone_climb_frame_deferred", {
+                "reason": str(exc),
+                "frame_key": None if snapshot is None else list(snapshot.key),
+                "frame_age_s": None if snapshot is None else time.monotonic() - snapshot.received_s})
+            held, previous_key = None, None
     raise RuntimeError(f"{target:g}m downward height target not confirmed within {budget:g}s; no lateral command")
+
+
+def _frame_center_box(detector, fraction):
+    """Frame centre and the half-extents of a centred box of that fraction."""
+    frame = getattr(detector, "last_detection_frame", None)
+    shape = getattr(frame, "shape", None)
+    if shape is None or len(shape) < 2:
+        return None
+    height, width = float(shape[0]), float(shape[1])
+    if not (width > 0. and height > 0.):
+        return None
+    return (width/2., height/2.), (width*fraction/2., height*fraction/2.)
+
+
+def _center_home_tag(client, limiter, stream, detector, logger, config):
+    """Slide along the wall until ID6 sits in the middle of the frame.
+
+    The route's last leg only requires the home tag to be in view, so the
+    aircraft can finish a metre off its launch point and the downward camera
+    then opens on bare floor. This closes that one axis while the gimbal is
+    still forward, and gives up quietly: an uncentred approach is exactly the
+    situation the landing search already has to cope with.
+    """
+    patrol = config.patrol
+    scale = patrol.angle_deg / patrol.speed_mps
+    client.pair_mode = False
+    client.motion_valid_until_s = None
+    client.phase = "lateral"
+    client.lateral_bounds = (-.6, .6)
+    deadline = time.monotonic() + HOME_CENTER_TIMEOUT_S
+    centered_since, last_key, last_error = None, None, None
+    while time.monotonic() < deadline:
+        limiter.wait()
+        client.status("standalone_home_centering")
+        _require_flight(client)
+        tags, age = _observe(client, stream, detector, logger, PatrolPhase.RETURN, 6)
+        box = _frame_center_box(detector, HOME_CENTER_BOX_FRACTION)
+        home = next((tag for tag in tags if tag.tag_id == 6 and tag.center_px), None)
+        key = _snapshot_key(stream)
+        if home is None or box is None or key is None or not _number(age, 0., FRESH_S):
+            centered_since, last_key = None, None
+            client.zero()
+            continue
+        if key == last_key:
+            client.zero()
+            continue
+        last_key = key
+        (center_x, _center_y), (half_width, _half_height) = box
+        last_error = home.center_px[0] - center_x
+        if abs(last_error) <= half_width:
+            centered_since = time.monotonic() if centered_since is None else centered_since
+            client.zero()
+            if time.monotonic() - centered_since >= patrol.landing_confirm_s:
+                client.log_event("standalone_home_centered", {
+                    "tag_id": 6, "error_px": last_error, "box_fraction": HOME_CENTER_BOX_FRACTION,
+                    "center_px": list(home.center_px)})
+                print(f"ID6 centered: error={last_error:.0f}px", flush=True)
+                return True
+            continue
+        centered_since = None
+        _forward, right = _floor_alignment_velocity(last_error, 0., patrol)
+        client.attitude(0., right*scale, 0., 0.)
+    client.zero()
+    client.log_event("standalone_home_centering_gave_up", {
+        "tag_id": 6, "error_px": last_error, "timeout_s": HOME_CENTER_TIMEOUT_S})
+    print("ID6 centering timed out; landing search starts from here", flush=True)
+    return False
+
+
+def _land_on_floor_home(client, limiter, stream, detector, logger, config, anchor_center):
+    """Centre ID6, drop the gimbal, find ID0 under the aircraft, then land.
+
+    The wall tag only says the aircraft is home in one axis, so the downward
+    camera re-acquires the floor tag it launched from before any descent is
+    commanded. Landing on a wall-tag fix alone would put the aircraft down
+    wherever the last lateral leg happened to stop.
+
+    The floor gate is a box around the frame centre rather than a radius around
+    the pixel ID0 occupied at takeoff: the downward camera images whatever is
+    directly beneath the aircraft at the centre, and the 16:04 flight showed a
+    tight radius can refuse a descent the aircraft is already lined up for.
+
+    A failure here is deliberately not fatal. The route and its photos are
+    already complete by the time this runs, so the caller keeps that result and
+    the aircraft is left hovering for the RC pilot exactly as it was before
+    automatic landing existed.
+    """
+    patrol = config.patrol
+    if patrol is None:
+        client.log_event("standalone_landing_skipped", {"reason": "no_patrol_config"})
+        return False
+    _center_home_tag(client, limiter, stream, detector, logger, config)
+    client.gimbal_down()
+    _pause(client, limiter, stream, detector, logger, 1., PatrolPhase.FLOOR_HOME, 0)
+    # The route ramp is a fraction of full speed, so the alignment velocity
+    # converts to the body tilt this site flies with rather than a raw m/s.
+    scale = patrol.angle_deg / patrol.speed_mps
+    client.phase = "landing"
+    # Pin the same tilt authority the patrol legs fly with, so the descent does
+    # not inherit whatever a framing pulse happened to leave behind. Saturated
+    # alignment asks for 0.4 deg, well inside this.
+    client.lateral_bounds = (-.6, .6)
+    deadline = time.monotonic() + patrol.landing_timeout_s
+    centered_since, last_key, last_seen = None, None, None
+    missing_since, nudge_until, nudges_used = None, None, 0
+    while time.monotonic() < deadline:
+        limiter.wait()
+        client.status("standalone_floor_home_alignment")
+        _require_flight(client)
+        tags, age = _observe(client, stream, detector, logger, PatrolPhase.FLOOR_HOME, 0)
+        floor = min((tag for tag in tags if tag.tag_id == 0 and tag.center_px),
+                    key=lambda tag: abs(tag.pose_error), default=None)
+        box = _frame_center_box(detector, LANDING_CENTER_BOX_FRACTION)
+        key = _snapshot_key(stream)
+        if floor is None or box is None or key is None or not _number(age, 0., FRESH_S):
+            centered_since, last_key = None, None
+            now = time.monotonic()
+            missing_since = now if missing_since is None else missing_since
+            if nudge_until is not None and now < nudge_until:
+                client.attitude(SEARCH_NUDGE_DEG, 0., 0., 0.)
+            elif (now - missing_since >= SEARCH_NUDGE_AFTER_S and nudges_used < MAX_SEARCH_NUDGES
+                  and (nudge_until is None or now - nudge_until >= SEARCH_NUDGE_GAP_S)):
+                nudges_used += 1
+                nudge_until = now + SEARCH_NUDGE_PULSE_S
+                client.log_event("standalone_landing_search_nudge", {
+                    "nudge_index": nudges_used, "forward_tilt_deg": SEARCH_NUDGE_DEG,
+                    "missing_s": now - missing_since,
+                    "reason": "ID0_not_in_downward_view_assume_drifted_back"})
+                client.attitude(SEARCH_NUDGE_DEG, 0., 0., 0.)
+            else:
+                client.zero()
+            continue
+        missing_since, nudge_until = None, None
+        if key == last_key:
+            client.zero()
+            continue
+        if last_key is not None and key[0] != last_key[0]:
+            centered_since = None
+        last_key, last_seen = key, floor
+        (center_x, center_y), (half_width, half_height) = box
+        error_x = floor.center_px[0] - center_x
+        error_y = floor.center_px[1] - center_y
+        if abs(error_x) <= half_width and abs(error_y) <= half_height:
+            centered_since = time.monotonic() if centered_since is None else centered_since
+            client.zero()
+            if time.monotonic() - centered_since >= patrol.landing_confirm_s:
+                client.log_event("standalone_landing_alignment_confirmed", {
+                    "tag_id": 0, "error_px": [error_x, error_y],
+                    "box_fraction": LANDING_CENTER_BOX_FRACTION,
+                    "box_half_px": [half_width, half_height],
+                    "takeoff_anchor_px": None if anchor_center is None else list(anchor_center),
+                    "center_px": list(floor.center_px)})
+                print(f"ID0 inside the centre box: error=({error_x:.0f},{error_y:.0f})px; "
+                      "commanding DJI landing", flush=True)
+                client.land(config.network.confirmation_token)
+                return _await_landed(client, limiter)
+            continue
+        centered_since = None
+        forward, right = _floor_alignment_velocity(error_x, error_y, patrol)
+        client.attitude(forward*scale, right*scale, 0., 0.)
+    client.zero()
+    raise TimeoutError("ID0 landing alignment timed out "
+                       + ("(never detected)" if last_seen is None
+                          else f"(last at {last_seen.center_px})"))
+
+
+def _await_landed(client, limiter, timeout_s=30.):
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        limiter.wait()
+        client.status("standalone_landing")
+        telemetry = client.last_telemetry
+        if telemetry is not None and telemetry.is_flying is False:
+            client.log_event("standalone_landed", {"height_m": telemetry.height_m})
+            print("Landing complete", flush=True)
+            return True
+    raise TimeoutError("DJI landing did not report is_flying=false in time")
 
 
 def _pause(client, limiter, stream, detector, logger, seconds, phase, expected):
@@ -1358,6 +1609,7 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
             raise RuntimeError(f"Fresh motors-off grounded RC state and bridge {BUILD_ID} required")
         if not process_identity(client.raw) or client.raw.get("telemetry_generation") is None:
             raise RuntimeError("App process/generation identity required")
+        _note_aircraft_link_generation(client)
         if not _number(client.last_telemetry.battery_percent, 30., 100.):
             raise RuntimeError("At least 30% battery required")
         execution_plan = plan(profile, pair_reference, continue_patrol)
@@ -1396,7 +1648,10 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
         _wait_takeoff_settled(client, limiter, profile)
         client.arm(config.network.confirmation_token)
         floor = VisitGate(0, PatrolPhase.FLOOR_HOME)
-        _acquire_tag(client, limiter, stream, detector, logger, floor, config.patrol)
+        floor_anchor = _acquire_tag(client, limiter, stream, detector, logger, floor, config.patrol)
+        anchor_center = getattr(floor_anchor, "center_px", None)
+        client.log_event("standalone_floor_home_anchor", {
+            "tag_id": 0, "anchor_center_px": None if anchor_center is None else list(anchor_center)})
         _climb(client, limiter, stream, detector, logger, config, profile["target_height_m"], profile)
         client.gimbal(0.)
         _pause(client, limiter, stream, detector, logger, 1., PatrolPhase.WALL_HOME, 6)
@@ -1438,6 +1693,24 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
             _pause(client, limiter, stream, detector, logger, profile["visit_pause_s"], phase, expected)
         client.zero()
         completed = True
+        # The route and its photos are already the mission's result, so a
+        # landing that cannot align must not retract them: the aircraft is then
+        # left hovering for the RC pilot exactly as it was before this existed.
+        try:
+            _land_on_floor_home(client, limiter, stream, detector, logger, config, anchor_center)
+        except (Exception, KeyboardInterrupt) as landing_error:
+            # Log before touching the aircraft: the 16:18 flight lost authority
+            # to an RC stick during the floor search, the zero() below raised in
+            # turn, and the reason the landing stopped never reached the log.
+            client.log_event("standalone_landing_abandoned", {
+                "error": f"{type(landing_error).__name__}: {landing_error}",
+                "action": "hover_release_to_RC_manual_landing"})
+            print("Automatic landing abandoned; hover held. RC pilot: land manually.", flush=True)
+            try:
+                client.zero()
+            except (Exception, KeyboardInterrupt) as zero_error:
+                client.log_event("standalone_landing_abandon_zero_failed", {
+                    "error": f"{type(zero_error).__name__}: {zero_error}"})
     except (Exception, KeyboardInterrupt) as exc:
         message = str(exc)
         if config.network.confirmation_token:

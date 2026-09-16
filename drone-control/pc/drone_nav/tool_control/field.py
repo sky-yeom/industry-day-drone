@@ -27,6 +27,13 @@ import standalone_tag_shuttle as shuttle
 from id1_pair_framing import PairFramingGate
 
 MAX_CAPTURE_BYTES = 4 * 1024 * 1024
+# A capture is proved three times: before encoding the frame, after encoding it,
+# and again after the arrival has been persisted. Encoding a full frame and
+# writing to disk take long enough that a velocity sample which was fresh when
+# the framing gate chose the frame is stale by the last proof. A fixed sample
+# cannot be re-aged into freshness, so each proof may re-ask the aircraft this
+# many times before it gives up. Every threshold stays where it was.
+CAPTURE_PROOF_REFRESHES = 3
 SITE_FIELDS = {
     "schema_version", "profile_id", "site_revision", "wall_ids_left_to_right",
     "floor_tag_id", "home_tag_id", "expected_bridge_build_id",
@@ -137,14 +144,29 @@ class FieldAdapter(LiveAdapter):
         client.observe_frame(snapshot)
         if stream.last_detection_snapshot is not snapshot:
             raise InterruptedError("Framing snapshot changed before capture publication")
-        telemetry = client.last_telemetry
-        elapsed = time.perf_counter() - client.received
-        velocity = (() if telemetry is None else
-                    (telemetry.velocity_north_mps, telemetry.velocity_east_mps, telemetry.velocity_down_mps))
-        age = None if telemetry is None or telemetry.velocity_age_s is None else telemetry.velocity_age_s + elapsed
-        if (not shuttle._number(age, 0., .5) or len(velocity) != 3
-                or not all(shuttle._number(v, -.08, .08) for v in velocity)
-                or not shuttle._number((velocity[0] ** 2 + velocity[1] ** 2) ** .5, 0., .08)):
+        def sample():
+            telemetry = client.last_telemetry
+            elapsed = time.perf_counter() - client.received
+            velocity = (() if telemetry is None else
+                        (telemetry.velocity_north_mps, telemetry.velocity_east_mps, telemetry.velocity_down_mps))
+            age = (None if telemetry is None or telemetry.velocity_age_s is None
+                   else telemetry.velocity_age_s + elapsed)
+            stationary = (shuttle._number(age, 0., .5) and len(velocity) == 3
+                          and all(shuttle._number(v, -.08, .08) for v in velocity)
+                          and shuttle._number((velocity[0] ** 2 + velocity[1] ** 2) ** .5, 0., .08))
+            return telemetry, elapsed, velocity, age, stationary
+
+        telemetry, elapsed, velocity, age, stationary = sample()
+        for _ in range(CAPTURE_PROOF_REFRESHES):
+            if stationary:
+                break
+            if client.cancel.is_set():
+                raise InterruptedError("Cancelled before capture publication; no resume")
+            if client.deadline is not None and time.perf_counter() >= client.deadline:
+                raise InterruptedError("Mission deadline expired before capture publication")
+            client.status("tool_capture_stationary_proof")
+            telemetry, elapsed, velocity, age, stationary = sample()
+        if not stationary:
             raise InterruptedError("Fresh finite stationary velocity required for capture")
         if (not shuttle._number(telemetry.height_m, .5, 1.8)
                 or telemetry.height_age_s is None

@@ -175,6 +175,7 @@ public final class StickControlManager {
     private volatile Boolean vsAdvancedEnabled = null;
     private volatile String vsAuthorityOwner = null;
     private volatile String vsChangeReason = null;
+    private volatile int vsSourceReleases = 0;
     private boolean stateListenerStarted = false;
 
     private StickControlManager() {
@@ -227,6 +228,48 @@ public final class StickControlManager {
             vsAdvancedEnabled = null;
             vsAuthorityOwner = null;
             vsChangeReason = null;
+        }
+        releaseVirtualStickForSourceChange();
+    }
+
+    /** Hand Virtual Stick back to the SDK when the aircraft link changes.
+     *
+     * Clearing the cached flags above only forgets what this app believed.
+     * VirtualStickManager keeps its own enabled state across a reconnect, so
+     * the next enableVirtualStick() reports success without re-establishing the
+     * aircraft-side channel: the bridge then submits advanced frames that are
+     * acknowledged and ignored. Nine of nine recorded flights that reached
+     * their commanded height ran on the first connection of an app process,
+     * and all eight later-generation flights held their automatic-takeoff
+     * height with an identical setpoint, identical speed_level and frames
+     * flowing. Explicitly disabling here is what makes the following arm a
+     * real enable. Failures are expected and harmless - the aircraft this
+     * would have talked to is already gone.
+     */
+    private void releaseVirtualStickForSourceChange() {
+        synchronized (lock) {
+            if (armed || enabling) {
+                return;
+            }
+        }
+        try {
+            VirtualStickManager.getInstance().disableVirtualStick(
+                    new CommonCallbacks.CompletionCallback() {
+                        @Override
+                        public void onSuccess() {
+                            vsSourceReleases++;
+                            Log.i(TAG, "Virtual Stick released for source change");
+                        }
+
+                        @Override
+                        public void onFailure(@NonNull IDJIError error) {
+                            vsSourceReleases++;
+                            Log.i(TAG, "Virtual Stick source-change release reported "
+                                    + error + "; the previous link is already gone");
+                        }
+                    });
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Virtual Stick source-change release threw", error);
         }
     }
 
@@ -729,6 +772,7 @@ public final class StickControlManager {
             }
             try {
                 json.put("speed_level", VirtualStickManager.getInstance().getSpeedLevel());
+                json.put("vs_source_releases", vsSourceReleases);
             } catch (RuntimeException ignored) {
                 // Reported only when the SDK can answer.
             }

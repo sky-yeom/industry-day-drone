@@ -34,9 +34,9 @@ REAL_CLIENT = shuttle.ShuttleClient
 REAL_LOGGER = shuttle.ShuttleDetectionLogger
 REFERENCE = json.loads(shuttle.DEFAULT_PAIR_REFERENCE.read_text(encoding="utf-8"))
 SITE = {
-    "schema_version": 1, "profile_id": "field-ordered-v1", "site_revision": "offline-20260910",
+    "schema_version": 2, "profile_id": "field-ordered-v1", "site_revision": "offline-20260910",
     "wall_ids_left_to_right": [3, 2, 1, 6], "floor_tag_id": 0, "home_tag_id": 6,
-    "target_height_m": 1.5, "expected_bridge_build_id": shuttle.BUILD_ID,
+    "expected_bridge_build_id": shuttle.BUILD_ID,
     "layout_confirmed": True, "field_setup_confirmed": True,
 }
 
@@ -253,9 +253,29 @@ class FieldTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 adapter_from_environment({**env, **changes})
 
+    def test_ascent_target_comes_from_the_profile_alone_and_stays_inside_the_band(self):
+        # The height is written down once. The site names the plan, the plan names
+        # the height, and the band the climb controller was validated for is still
+        # enforced wherever that single number came from.
+        self.assertNotIn("target_height_m", SITE)
+        for meters in (1.4, 1.5, 1.6):
+            self.profile_path.write_text(json.dumps(profile(target_height_m=meters, visit_pause_s=0.)),
+                                         encoding="utf-8")
+            with self.subTest(meters=meters):
+                self.assertEqual(self.adapter().target_height_m, meters)
+        for meters in (1.39, 1.61, 1.8):
+            self.profile_path.write_text(json.dumps(profile(target_height_m=meters, visit_pause_s=0.)),
+                                         encoding="utf-8")
+            with self.subTest(meters=meters), self.assertRaises(ValueError):
+                self.adapter()
+        self.profile_path.write_text(json.dumps(
+            profile(profile_id="a-different-plan", visit_pause_s=0.)), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            self.adapter()
+
     def test_private_confirmation_and_current_reference_are_mandatory(self):
         for key, value in (("field_setup_confirmed", False), ("layout_confirmed", False),
-                           ("target_height_m", 1.4), ("wall_ids_left_to_right", [3, 1, 2, 6]),
+                           ("profile_id", "some-other-plan"), ("wall_ids_left_to_right", [3, 1, 2, 6]),
                            ("expected_bridge_build_id", "older-build")):
             self.site_path.write_text(json.dumps({**SITE, key: value}), encoding="utf-8")
             with self.subTest(key=key), self.assertRaises(ValueError):

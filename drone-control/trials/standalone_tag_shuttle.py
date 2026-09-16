@@ -13,6 +13,7 @@ import ipaddress
 import json
 import math
 from pathlib import Path
+import re
 import sys
 import threading
 import time
@@ -82,7 +83,7 @@ ARM_AUTHORITY_TIMEOUT_S = 5.0
 TAKEOFF_SETTLE_TIMEOUT_S = 20.
 TAKEOFF_STABLE_HOLD_S = 2.
 PROFILE_FIELDS = {
-    "schema_version", "wall_ids_left_to_right", "floor_tag_id", "home_tag_id",
+    "schema_version", "profile_id", "wall_ids_left_to_right", "floor_tag_id", "home_tag_id",
     "route_ids", "target_height_m", "max_tilt_deg", "visit_pause_s",
     "leg_timeout_s", "total_timeout_s", "layout_confirmed", "wall_measurement",
     "floor_size_source",
@@ -101,6 +102,7 @@ HEIGHT_HOLD_BOUNDS = (("deadband_m", .02, .5), ("gain_mps_per_m", .05, 1.5),
                       # live.py rejects anything past .18 on the wire, so reject
                       # it here instead of mid-leg.
                       ("max_up_mps", .05, .18))
+PROFILE_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 
 def _number(value, low, high):
@@ -111,10 +113,14 @@ def _number(value, low, high):
 def validate_profile(profile):
     if (not isinstance(profile, dict) or not PROFILE_FIELDS <= set(profile)
             or not set(profile) <= PROFILE_FIELDS | OPTIONAL_PROFILE_FIELDS):
-        raise ValueError("Standalone shuttle profile fields do not match schema 2")
-    for key, expected in (("schema_version", 2), ("floor_tag_id", 0), ("home_tag_id", 6)):
+        raise ValueError("Standalone shuttle profile fields do not match schema 3")
+    for key, expected in (("schema_version", 3), ("floor_tag_id", 0), ("home_tag_id", 6)):
         if type(profile[key]) is not int or profile[key] != expected:
             raise ValueError(f"{key} must be {expected}")
+    # The profile names itself so a site can state which flight plan it expects
+    # without restating the plan's tunables and drifting out of step with them.
+    if not isinstance(profile["profile_id"], str) or not PROFILE_ID.fullmatch(profile["profile_id"]):
+        raise ValueError("profile_id must be a short identifier such as field-ordered-v1")
     for key, expected in (("wall_ids_left_to_right", WALL_IDS), ("route_ids", ROUTE_IDS)):
         if (profile[key] != expected or not isinstance(profile[key], list)
                 or any(type(item) is not int for item in profile[key])):

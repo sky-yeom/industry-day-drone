@@ -29,7 +29,7 @@ from id1_pair_framing import PairFramingGate
 MAX_CAPTURE_BYTES = 4 * 1024 * 1024
 SITE_FIELDS = {
     "schema_version", "profile_id", "site_revision", "wall_ids_left_to_right",
-    "floor_tag_id", "home_tag_id", "target_height_m", "expected_bridge_build_id",
+    "floor_tag_id", "home_tag_id", "expected_bridge_build_id",
     "layout_confirmed", "field_setup_confirmed",
 }
 
@@ -63,16 +63,19 @@ class FieldAdapter(LiveAdapter):
     mode = "live"
     destination_ids = ["tag-1", "tag-2", "tag-3"]
     home_tag_id, floor_tag_id = 6, 0
-    # The ascent target is configuration, not code: it lives in the site file and
-    # the profile. Both must still agree, and the value must stay inside the band
-    # the bounded climb law was validated for, so editing one file cannot quietly
-    # fly a height the climb controller will refuse.
+    # The ascent target is a control tunable, so it lives in the flight profile
+    # beside the tilt, hold and timeout values it has to agree with, and nowhere
+    # else. The site states which profile it expects, not how high that profile
+    # flies, because a number written down twice is a number that drifts. The
+    # value must still land inside the band the bounded climb law was validated
+    # for, so editing the profile cannot quietly fly a height the climb
+    # controller will refuse mid-ascent.
     target_height_band_m = (1.4, 1.6)
 
     def __init__(self, site_path, config_path, profile_path, reference_path):
         site = json.loads(Path(site_path).read_text(encoding="utf-8-sig"))
         if (not isinstance(site, dict) or set(site) != SITE_FIELDS
-                or type(site["schema_version"]) is not int or site["schema_version"] != 1
+                or type(site["schema_version"]) is not int or site["schema_version"] != 2
                 or site["layout_confirmed"] is not True or site["field_setup_confirmed"] is not True):
             raise ValueError("Private field site requires explicit layout and this-PC setup confirmation")
         low, high = self.target_height_band_m
@@ -80,18 +83,19 @@ class FieldAdapter(LiveAdapter):
                 or any(type(tag) is not int for tag in site["wall_ids_left_to_right"])
                 or type(site["floor_tag_id"]) is not int or site["floor_tag_id"] != 0
                 or type(site["home_tag_id"]) is not int or site["home_tag_id"] != 6
-                or type(site["target_height_m"]) is not float
-                or not low <= site["target_height_m"] <= high
                 or site["expected_bridge_build_id"] != BUILD_ID):
-            raise ValueError(f"Field site requires {BUILD_ID}, floor0, Home6, "
-                             f"{low:g}-{high:g}m ascent target and left-to-right [3,2,1,6]")
-        self.target_height_m = site["target_height_m"]
+            raise ValueError(f"Field site requires {BUILD_ID}, floor0, Home6 "
+                             f"and left-to-right [3,2,1,6]")
         self.profile_id = identifier(site["profile_id"])
         self.site_revision = identifier(site["site_revision"])
         self.profile = shuttle.load_profile(profile_path)
-        if self.profile["target_height_m"] != self.target_height_m:
-            raise ValueError(f"Site asks for {self.target_height_m:g}m but the profile "
-                             f"climbs to {self.profile['target_height_m']:g}m")
+        if self.profile["profile_id"] != self.profile_id:
+            raise ValueError(f"Site expects profile {self.profile_id} but {profile_path} "
+                             f"is {self.profile['profile_id']}")
+        self.target_height_m = self.profile["target_height_m"]
+        if not low <= self.target_height_m <= high:
+            raise ValueError(f"Profile climbs to {self.target_height_m:g}m, outside the "
+                             f"{low:g}-{high:g}m band the climb controller was validated for")
         self.reference = json.loads(Path(reference_path).read_text(encoding="utf-8-sig"))
         band = (self.reference.get("arrival_center_x_fraction")
                 if isinstance(self.reference, dict) else None)

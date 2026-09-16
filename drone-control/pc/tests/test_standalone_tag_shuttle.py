@@ -23,7 +23,8 @@ from drone_nav.tool_control.live import DeadlineTransport
 
 
 def profile(**changes):
-    return {"schema_version": 2, "wall_ids_left_to_right": [3, 2, 1, 6],
+    return {"schema_version": 3, "profile_id": "field-ordered-v1",
+            "wall_ids_left_to_right": [3, 2, 1, 6],
             "floor_tag_id": 0, "home_tag_id": 6, "route_ids": [6, 1, 2, 3, 2, 1, 6],
             "target_height_m": 1.4, "max_tilt_deg": 1.5,
             "visit_pause_s": 3., "leg_timeout_s": 45., "total_timeout_s": 240.,
@@ -155,6 +156,7 @@ class PlanAndConfigurationTests(StandaloneTestCase):
                         {"floor_tag_id": False}, {"tag_size_m": float("nan")},
                         {"wall_measurement": "metric"}, {"floor_size_source": "guess"},
                         {"max_tilt_deg": 3}, {"target_height_m": 1.8},
+                        {"profile_id": "Field Ordered V1"}, {"profile_id": ""},
                         {"total_timeout_s": 1000}, {"unknown": True}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 shuttle.validate_profile(profile(**changes))

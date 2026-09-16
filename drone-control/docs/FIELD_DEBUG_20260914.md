@@ -167,6 +167,24 @@ if self.profile["target_height_m"] != self.target_height_m:
 이제 고도 변경은 **설정 파일 2개만** 고치면 된다. 안전 성질(불일치 탐지)은 그대로다.
 기존 테스트는 더 나은 것을 검증하게 됐다 — 리터럴이 아니라 불일치를 잡는다.
 
+**후속(20260916)** 두 파일을 손으로 고치는 것이 바로 둘이 어긋나는 경로였다. 실제로
+site 1.6 m / profile 1.5 m로 벌어져 스택이 뜨지 않는 상태가 발견됐다. 고친 방향은
+"양쪽을 잘 맞추기"가 아니라 **한쪽을 없애기**였다.
+
+고도는 기울기·유지게인·타임아웃과 함께 지켜져야 하는 **제어 튜너블**이므로 profile에만 둔다.
+site에서 `target_height_m`을 삭제하고(schema 1→2), profile에 `profile_id`를 넣었다(schema 2→3).
+site는 이제 *어느 계획을 기대하는지*만 말하고 *그 계획이 얼마나 높이 나는지*는 말하지 않는다.
+
+| 이전 | 이후 |
+|---|---|
+| site·profile 양쪽에 높이 → 어긋날 수 있음 | profile에만 → 어긋날 대상이 없음 |
+| 높이 일치로 잘못된 profile을 간접 탐지 | `profile_id` 일치로 직접 탐지 (우연히 높이가 같아도 잡힘) |
+| 밴드 검사 = site 값 | 밴드 검사 = 실제 사용되는 profile 값 |
+
+`scripts/set-target-height.ps1`이 `DRONE_CONTROL_FIELD_PROFILE`이 가리키는 실제 파일을 읽어
+숫자 하나로 쓰고, 밴드(1.4–1.6 m) 밖을 거부하고, 백업을 남긴다 — 다른 클론을 고쳐놓고
+효과가 없어 헤매는 사고까지 막는다.
+
 > ⚠️ `live.py`의 `LiveAdapter`에 같은 패턴(`site["target_height_m"] != 1.4`)이 잔존.
 > 이번엔 실제 사용 중인 `FieldAdapter`만 고쳤다.
 

@@ -28,8 +28,8 @@ export default function GibbyRouteDock({ agentText }: { agentText: string }) {
         />
       </div>
       {typed && (
-        <div className="absolute bottom-[calc(16%+(196px*var(--ui-scale)))] z-20 right-[calc(6%+(161px*var(--ui-scale)))]">
-          <div className="pixel-bubble pixel-bubble--right relative max-w-[16.25rem] px-4 py-3 text-sm leading-6 text-[#091f2c] sm:max-w-xs">
+        <div className="absolute bottom-[calc(16%+(130px*var(--ui-scale))-10px)] z-20 right-[calc(6%+(161px*var(--ui-scale))-5px)]">
+          <div className="pixel-bubble pixel-bubble--right relative max-w-[13rem] px-4 py-3 text-sm leading-6 text-[#091f2c] sm:max-w-[17rem]">
             {typed}
           </div>
         </div>

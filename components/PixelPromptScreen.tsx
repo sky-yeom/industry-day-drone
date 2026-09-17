@@ -41,8 +41,9 @@ export default function PixelPromptScreen({
     // to sm:max-w-xs=320px wide, both scaled by --ui-scale), so the
     // briefing panel's right column never grows underneath/behind it on
     // mid-range viewport widths where the panel is close to its max-width
-    // but hasn't hit the bubble's own reserved zone yet.
-    <div className="relative z-10 flex h-full min-h-0 w-full flex-col justify-center gap-3 pl-4 pr-[calc(6%+600px*var(--ui-scale))] pb-[8dvh] pt-4 sm:pl-6 sm:pt-6">
+    // but hasn't hit the bubble's own reserved zone yet. 481px = the
+    // bubble's own 161px offset plus its 320px max width.
+    <div className="relative z-10 flex h-full min-h-0 w-full flex-col justify-center gap-3 pl-4 pr-[calc(6%+481px*var(--ui-scale))] pb-[8dvh] pt-4 sm:pl-6 sm:pt-6">
       <div className="flex shrink-0 flex-wrap items-baseline gap-x-3 gap-y-1">
         <p className="text-sm font-bold tracking-[0.14em] text-[#091f2c] sm:text-base">임무 브리핑</p>
         <h2 className="text-lg font-bold text-[#091f2c] sm:text-xl">프롬프트</h2>
@@ -62,7 +63,7 @@ export default function PixelPromptScreen({
           </div>
         </div>
 
-        <div className="pixel-panel flex h-64 shrink-0 flex-col justify-center overflow-y-auto p-5 sm:h-72">
+        <div className="pixel-panel flex h-64 shrink-0 flex-col justify-center overflow-y-auto p-5 sm:h-72" style={{ transform: "translateX(-20px)" }}>
           <ol aria-label="임무 브리핑" className="space-y-4 text-sm leading-relaxed text-[#091f2c]">
             {briefing.map((bullet, index) => (
               <li key={bullet.id} className="flex gap-3">

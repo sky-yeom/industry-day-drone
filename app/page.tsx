@@ -10,7 +10,8 @@ import GibbyResultsTransition from "@/components/GibbyResultsTransition";
 import PixelShell from "@/components/PixelShell";
 import ResultsPanel from "@/components/ResultsPanel";
 import { INITIAL_ROUTE_STATE } from "@/data/monitors";
-import { INITIAL_MISSION_STATE, SCENARIO_BRIEFING, TARGET_APPEARANCE } from "@/data/scenario";
+import { INITIAL_MISSION_STATE } from "@/data/scenario";
+import { SCENARIOS, type ScenarioId } from "@/data/scenarios";
 import { fetchRelayConfig, VoiceSession, type RelayConfig, type VoiceStatus } from "@/lib/voiceClient";
 import type { ChatMessage, DashboardState } from "@/lib/types";
 import type { MarkerRect } from "@/lib/gibbyResultsSprite";
@@ -41,6 +42,7 @@ export default function Home() {
   const [resultsVisible, setResultsVisible] = useState(false);
   const [sceneError, setSceneError] = useState<string | null>(null);
   const [halted, setHalted] = useState<string | null>(null);
+  const [scenarioId, setScenarioId] = useState<ScenarioId>("saving-people");
   const sessionRef = useRef<VoiceSession | null>(null);
   const markerRef = useRef<HTMLDivElement>(null);
   const boardedRef = useRef(false);
@@ -144,6 +146,7 @@ export default function Home() {
     setResultsVisible(false);
     setSceneError(null);
     setHalted(null);
+    setScenarioId("saving-people");
   }, []);
 
   const start = useCallback(() => {
@@ -243,9 +246,7 @@ export default function Home() {
   if (step === "opening") {
     return <GibbyIntroSequence
       onReady={start}
-      targetImage={TARGET_APPEARANCE.referenceImage}
-      targetAlt={TARGET_APPEARANCE.referenceAlt}
-      briefing={SCENARIO_BRIEFING}
+      onScenarioChosen={setScenarioId}
       agentText={agentText}
       voiceStatus={status}
       error={error}
@@ -254,10 +255,11 @@ export default function Home() {
   }
 
   if (step === "map-intro") {
+    const scenario = SCENARIOS[scenarioId];
     return <GibbyMapTransition
-      targetImage={TARGET_APPEARANCE.referenceImage}
-      targetAlt={TARGET_APPEARANCE.referenceAlt}
-      briefing={SCENARIO_BRIEFING}
+      targetImage={scenario.targetImage}
+      targetAlt={scenario.targetAlt}
+      briefing={scenario.briefing}
       onDone={() => {
         if (!returnSceneRef.current && latestStateRef.current.runId === state.runId) setStep("route");
       }}

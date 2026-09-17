@@ -24,6 +24,7 @@ export default function PixelPromptScreen({
   targetImage,
   targetAlt,
   briefing,
+  badgeLabel = "구조 필요",
   voiceStatus,
   error,
   onRetry,
@@ -31,6 +32,7 @@ export default function PixelPromptScreen({
   targetImage: string;
   targetAlt: string;
   briefing: BriefingBullet[];
+  badgeLabel?: string;
   voiceStatus?: VoiceStatus;
   error?: string | null;
   onRetry?: () => void;
@@ -58,7 +60,7 @@ export default function PixelPromptScreen({
       <div className="grid min-h-0 max-w-[53.75rem] flex-1 grid-cols-1 gap-3 sm:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] sm:items-center">
         <div className="flex min-h-0 flex-col items-center justify-center gap-4 py-2">
           <div className="pixel-panel pixel-rendering relative mt-6 w-full max-w-48">
-            <span className={`${pixelFont.className} pixel-frame-header--danger text-[0.625rem]`}>구조 필요</span>
+            <span className={`${pixelFont.className} pixel-frame-header--danger text-[0.625rem]`}>{badgeLabel}</span>
             <Image src={targetImage} alt={targetAlt} width={1536} height={1536} sizes="184px" className="block h-auto w-full" />
           </div>
         </div>

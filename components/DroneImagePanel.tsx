@@ -2,15 +2,16 @@
 
 import Image from "next/image";
 import { useState } from "react";
-import { MONITOR_MAP } from "@/data/monitors";
-import type { CapturedImage } from "@/lib/types";
+import { MONITOR_MAP_BY_KIND } from "@/data/monitors";
+import type { CapturedImage, ScenarioKind } from "@/lib/types";
 
 const CAPTURE_LABELS: Record<CapturedImage["status"], string> = {
   captured: "촬영 완료", analyzing: "분석 중", detected: "대상자 확인",
   "not-found": "대상자 미확인", error: "분석 오류",
 };
 
-export default function DroneImagePanel({ captures }: { captures: CapturedImage[] }) {
+export default function DroneImagePanel({ captures, kind = "triage" }: { captures: CapturedImage[]; kind?: ScenarioKind }) {
+  const monitorMap = MONITOR_MAP_BY_KIND[kind];
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dimensions, setDimensions] = useState({ id: "", ratio: 1.6 });
   const current = captures.find((capture) => capture.id === selectedId) ?? captures.at(-1);
@@ -31,7 +32,7 @@ export default function DroneImagePanel({ captures }: { captures: CapturedImage[
     </div>
       <div className="pixel-frame flex min-h-0 flex-1 flex-col overflow-hidden !p-0">
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-1 bg-[#091f2c] px-3 py-2 text-[0.625rem] text-white/80">
-          <span>{current ? `${MONITOR_MAP[current.monitorId].label} · ${index + 1}차 촬영` : "촬영 이미지 수신 대기"}</span>
+          <span>{current ? `${monitorMap[current.monitorId].label} · ${index + 1}차 촬영` : "촬영 이미지 수신 대기"}</span>
           <span className="tabular-nums">{current ? `촬영 ${(current.capturedAtMs / 1000).toFixed(1)}초` : "출발 전"}</span>
         </div>
         {!current ? <div className="flex min-h-0 flex-1 items-center justify-center p-4 text-center text-sm leading-6 text-[#091f2c]">
@@ -39,7 +40,7 @@ export default function DroneImagePanel({ captures }: { captures: CapturedImage[
         </div> : <div className="relative min-h-0 flex-1" style={{ containerType: "size" }}>
           <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
             style={{ width: `min(100cqw, ${ratio * 100}cqh)`, aspectRatio: ratio }}>
-            <Image src={current.imageUrl} alt={`${MONITOR_MAP[current.monitorId].label}에서 실제 분석에 사용한 촬영 이미지`}
+            <Image src={current.imageUrl} alt={`${monitorMap[current.monitorId].label}에서 실제 분석에 사용한 촬영 이미지`}
               fill unoptimized className="object-contain"
               onLoad={(event) => {
                 const image = event.currentTarget;

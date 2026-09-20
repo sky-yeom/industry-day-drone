@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from relay import server
-from relay.survey import SurveySession
+from relay.survey import MONITOR_IDS, SurveySession
 from relay.test_mission_runner import FakeCamera, FakeVision
 from relay.test_server import Browser, Upstream, participant_turn, spoken_reply
 from relay.test_survey import PROMPT_ARGS, SEARCH_PROMPT, ready
@@ -43,6 +43,8 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.session.data["clockRunning"])
 
     async def test_description_requires_readback_then_separate_consent(self):
+        for _ in range(len(MONITOR_IDS) - 1):
+            self.session.confirm_prompt(**PROMPT_ARGS)
         turn = participant_turn(self.bridge, SEARCH_PROMPT)
         self.assertFalse((await self.call("confirm_prompt", {}, turn))["ok"])
         self.assertTrue((await self.call("prepare_prompt", PROMPT_ARGS, turn))["ok"])
@@ -122,6 +124,10 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
     async def test_empty_and_hesitant_replies_preserve_draft_and_recover_after_new_readback(self):
         for text in ("", "음", "아", "뭐라고"):
             with self.subTest(text=text):
+                self.session.data["promptPhase"] = "briefing"
+                self.session.data["activePromptMonitorId"] = MONITOR_IDS[0]
+                for person in self.session.data["people"]:
+                    person["promptConfirmed"] = False
                 self.session.prepare_prompt(**PROMPT_ARGS)
                 self.bridge.voice_turns.prepare_prompt()
                 spoken_reply(self.bridge)
@@ -174,6 +180,10 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
     async def test_short_and_natural_confirmations_during_readback(self):
         for text in ("응", "어", "엉", "네", "예", "맞아", "오케이", "응 맞아!", "네 그렇게 해줘"):
             with self.subTest(text=text):
+                self.session.data["promptPhase"] = "briefing"
+                self.session.data["activePromptMonitorId"] = MONITOR_IDS[0]
+                for person in self.session.data["people"]:
+                    person["promptConfirmed"] = False
                 self.session.prepare_prompt(**PROMPT_ARGS)
                 self.bridge.voice_turns.prepare_prompt()
                 revision = self.session.pending_prompt_revision
@@ -187,6 +197,12 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
     async def test_native_reply_without_tool_still_confirms_once_with_early_or_late_transcript(self):
         for late in (False, True):
             with self.subTest(late=late):
+                self.session.data["promptPhase"] = "briefing"
+                self.session.data["activePromptMonitorId"] = MONITOR_IDS[0]
+                for person in self.session.data["people"]:
+                    person["promptConfirmed"] = False
+                for _ in range(len(MONITOR_IDS) - 1):
+                    self.session.confirm_prompt(**PROMPT_ARGS)
                 self.session.prepare_prompt(**PROMPT_ARGS)
                 self.bridge.voice_turns.prepare_prompt()
                 spoken_reply(self.bridge)
@@ -205,6 +221,17 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.gather(*self.bridge._tool_tasks)
                 self.assertEqual(self.session.data["userPromptText"], SEARCH_PROMPT)
                 self.assertIsNone(self.session.pending_prompt)
+                # Confidence narration is requested (and must complete) before
+                # the route intro continuation is fired.
+                confidence_request = next(event["response"] for event in reversed(self.bridge.upstream.sent)
+                                          if event["type"] == "response.create")
+                confidence_id = confidence_request["metadata"]["confidenceNarration"]
+                self.bridge.upstream.incoming = [
+                    {"type": "response.created", "response": {
+                        "id": f"confidence-{late}", "metadata": confidence_request["metadata"]}},
+                    {"type": "response.done", "response": {"id": f"confidence-{late}", "status": "completed"}},
+                ]
+                await self.bridge.pump_upstream()
                 self.bridge.browser.incoming.put_nowait(json.dumps({
                     "type": "route_intro.ready", "runId": self.session.run_id,
                     "introId": self.bridge._route_intro_id}))
@@ -213,6 +240,7 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
                     await self.bridge.pump_browser()
                 continuation = next(event["response"] for event in reversed(self.bridge.upstream.sent)
                                     if event["type"] == "response.create")
+                self.assertNotEqual(continuation["metadata"].get("confidenceNarration"), confidence_id)
                 for person in self.session.scenario["people"]:
                     self.assertIn(person["clue"], continuation["instructions"])
                 self.assertEqual(continuation["tool_choice"], "none")
@@ -268,7 +296,8 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(turn.consumed)
 
     async def test_only_one_stop_per_reply_and_only_third_stop_is_automatic(self):
-        self.session.confirm_prompt(**PROMPT_ARGS)
+        for _ in range(len(MONITOR_IDS)):
+            self.session.confirm_prompt(**PROMPT_ARGS)
         first = participant_turn(self.bridge, "먼저 바다부터 가자")
         self.assertTrue((await self.call("select_stop", {"monitor": "monitor-1"}, first))["ok"])
         self.assertFalse((await self.call("select_stop", {"monitor": "monitor-2"}, first))["ok"])
@@ -306,7 +335,8 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
             launch.assert_awaited_once()
 
     async def test_selection_reply_is_not_route_readback_and_cancelled_readback_does_not_count(self):
-        self.session.confirm_prompt(**PROMPT_ARGS)
+        for _ in range(len(MONITOR_IDS)):
+            self.session.confirm_prompt(**PROMPT_ARGS)
         first = participant_turn(self.bridge, "바다")
         await self.call("select_stop", {"monitor": "monitor-1"}, first)
         self.bridge._response_active = False
@@ -353,7 +383,8 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await turns.authorize("launch_mission", {}, current, self.session))
 
     async def test_mutation_waits_for_late_transcript_without_gating_native_response(self):
-        self.session.confirm_prompt(**PROMPT_ARGS)
+        for _ in range(len(MONITOR_IDS)):
+            self.session.confirm_prompt(**PROMPT_ARGS)
         upstream = self.bridge.upstream
         upstream.incoming = [
             {"type": "input_audio_buffer.speech_started", "item_id": "audio-1"},
@@ -404,7 +435,8 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["response"]["tool_choice"], "none")
 
     async def test_typed_input_uses_the_same_turn_guard(self):
-        self.session.confirm_prompt(**PROMPT_ARGS)
+        for _ in range(len(MONITOR_IDS)):
+            self.session.confirm_prompt(**PROMPT_ARGS)
         browser = self.bridge.browser
         browser.incoming.put_nowait(json.dumps({"type": "text", "text": "불난 집"}))
         browser.incoming.put_nowait(None)
@@ -452,6 +484,12 @@ class DepartureInterpretationTests(unittest.TestCase):
             self.assertTrue(is_affirmative(text), text)
         for text in ("출발하지 마세요", "아직 출발하지 말아 주세요",
                      "불난 집부터 가면 출발해 주세요", "출발해도 될까"):
+            self.assertFalse(is_affirmative(text), text)
+
+    def test_affirmative_survives_harmless_filler_words(self):
+        for text in ("음 맞아", "어 진짜 맞아요", "그러니까 맞아", "저기 좋아요"):
+            self.assertTrue(is_affirmative(text), text)
+        for text in ("음", "음 흠", "저기 그러니까", "음 아니야", "그러니까 아니야"):
             self.assertFalse(is_affirmative(text), text)
 
 

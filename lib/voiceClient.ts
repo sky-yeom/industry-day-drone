@@ -10,7 +10,7 @@
  * forwards `route.state` pushes to the caller.
  */
 
-import type { DashboardState, DetectionMode } from "@/lib/types";
+import type { DashboardState, DetectionMode, ScenarioKind } from "@/lib/types";
 
 const SAMPLE_RATE = 24000;
 const RESULTS_START_TIMEOUT_MS = 15000;
@@ -128,6 +128,7 @@ export class VoiceSession {
   private usedInputWindows = new Set<string>();
   private generation = 0;
   private withVoice = true;
+  private scenarioKind: ScenarioKind = "triage";
   private debriefRunId: string | null = null;
   private finalResponseId: string | null = null;
   private finalDrainRequested = false;
@@ -164,10 +165,11 @@ export class VoiceSession {
     return this.running;
   }
 
-  async start({ withVoice = true }: { withVoice?: boolean } = {}): Promise<void> {
+  async start({ withVoice = true, scenarioKind = "triage" }: { withVoice?: boolean; scenarioKind?: ScenarioKind } = {}): Promise<void> {
     if (this.running) return;
     const generation = ++this.generation;
     this.withVoice = withVoice;
+    this.scenarioKind = scenarioKind;
     this.debriefRunId = null;
     this.finalResponseId = null;
     this.finalDrainRequested = false;
@@ -282,7 +284,7 @@ export class VoiceSession {
           } else if (this.finalDrainRequested && msg.id === this.finalResponseId) {
             const missingAudio = !this.resultsRevealed;
             if (missingAudio) {
-              const message = "결과 음성이 재생되지 않았습니다. 화면의 최종 구조 결과를 확인해 주세요.";
+              const message = "결과 음성이 재생되지 않았습니다. 화면의 최종 신고 결과를 확인해 주세요.";
               this.handlers.onStatus("error", message);
               this.handlers.onError(message);
             }
@@ -439,7 +441,7 @@ export class VoiceSession {
     // A timeout is a reported failure, never permission to overlap narration.
     this.resultsStartTimer = setTimeout(() => {
       if (generation !== this.generation || runId !== this.currentRunId || this.resultsRevealed) return;
-      const message = "결과 음성 재생을 시작하지 못했습니다. 화면의 최종 구조 결과를 확인해 주세요.";
+      const message = "결과 음성 재생을 시작하지 못했습니다. 화면의 최종 신고 결과를 확인해 주세요.";
       this.handlers.onStatus("error", message);
       this.handlers.onError(message);
       this.fallbackResults();
@@ -611,6 +613,7 @@ export class VoiceSession {
       this.rejectConnect = reject;
       const url = new URL(RELAY_WS);
       url.searchParams.set("voice", this.withVoice ? "1" : "0");
+      url.searchParams.set("scenario", this.scenarioKind);
       if (this.withVoice) url.searchParams.set("turnTaking", TURN_TAKING);
       const ws = new WebSocket(url);
       this.ws = ws;
@@ -936,7 +939,7 @@ export class VoiceSession {
           if (response.status === "completed") {
             this.drainFinalResponse();
           } else if (response.status) {
-            this.handlers.onError("최종 음성 안내가 중단되어 다시 시도하고 있습니다. 화면의 구조 결과와 최종 설명도 확인할 수 있습니다.");
+            this.handlers.onError("최종 음성 안내가 중단되어 다시 시도하고 있습니다. 화면의 신고 결과와 최종 설명도 확인할 수 있습니다.");
           }
         }
         if (this.responseId && response?.id !== this.responseId) return;

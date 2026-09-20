@@ -1,14 +1,14 @@
 "use client";
 
-import Image from "next/image";
-import { Press_Start_2P } from "next/font/google";
 import { useEffect, useRef, useState } from "react";
 import { preload } from "react-dom";
 import PixelGround from "@/components/PixelGround";
+import TriageSiteCards from "@/components/TriageSiteCards";
 import { ANCHOR_W, LAST_FRAME, gibbyFrameStyle } from "@/lib/gibbyMapSprite";
-import type { BriefingBullet } from "@/lib/types";
-
-const pixelFont = Press_Start_2P({ weight: "400", subsets: ["latin"] });
+import type { TriageSite } from "@/data/scenario";
+import type { SecurityZone } from "@/data/security-scenario";
+import type { ConstructionZone } from "@/data/construction-scenario";
+import type { BriefingBullet, MissionState } from "@/lib/types";
 
 const FRAME_MS = 400;
 // Linger a bit longer while he's unrolling (frames 4-5) so it doesn't flash by.
@@ -31,13 +31,13 @@ const READY_DELAY_MS = 150;
  * map preview shown here first.
  */
 export default function GibbyMapTransition({
-  targetImage,
-  targetAlt,
+  sites,
+  state,
   briefing,
   onDone,
 }: {
-  targetImage: string;
-  targetAlt: string;
+  sites: (TriageSite | SecurityZone | ConstructionZone)[];
+  state: MissionState;
   briefing: BriefingBullet[];
   onDone: () => void;
 }) {
@@ -78,14 +78,9 @@ export default function GibbyMapTransition({
         </div>
 
         {/* Old prompt content fades away as soon as the transition starts. */}
-        <div className={`grid min-h-0 max-w-[53.75rem] flex-1 grid-cols-1 gap-3 transition-opacity duration-700 sm:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] sm:items-center ${fadingOut ? "pointer-events-none opacity-0" : "opacity-100"}`}>
-          <div className="flex min-h-0 flex-col items-center justify-center gap-4 py-2">
-            <div className="pixel-panel pixel-rendering relative mt-6 w-full max-w-48">
-              <span className={`${pixelFont.className} pixel-frame-header--danger text-[0.625rem]`}>구조 필요</span>
-              <Image src={targetImage} alt={targetAlt} width={1536} height={1536} sizes="184px" className="block h-auto w-full" />
-            </div>
-          </div>
-          <div className="pixel-panel flex h-64 shrink-0 flex-col justify-center overflow-y-auto p-5 sm:h-72">
+        <div className={`min-h-0 max-w-[53.75rem] flex-1 space-y-3 overflow-y-auto transition-opacity duration-700 ${fadingOut ? "pointer-events-none opacity-0" : "opacity-100"}`}>
+          <TriageSiteCards sites={sites} people={state.people} compact />
+          <div className="pixel-panel shrink-0 p-5">
             <ol aria-label="임무 브리핑" className="space-y-4 text-sm leading-relaxed text-[#091f2c]">
               {briefing.map((bullet, index) => (
                 <li key={bullet.id} className="flex gap-3">

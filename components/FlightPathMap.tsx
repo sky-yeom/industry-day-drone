@@ -5,22 +5,22 @@ import { useEffect, useRef, useState, type Ref } from "react";
 import DroneImagePanel from "@/components/DroneImagePanel";
 import VoiceTurnIndicator from "@/components/VoiceTurnIndicator";
 import type { VoiceStatus } from "@/lib/voiceClient";
-import { MONITOR_MAP, MONITORS } from "@/data/monitors";
+import { MONITOR_MAP_BY_KIND, MONITORS_BY_KIND } from "@/data/monitors";
 import { BOARDING_MIRRORED, MAP_MARKER_ENTRY, MAP_MARKER_HEIGHT, MAP_MARKER_SRC, MAP_MARKER_WIDTH } from "@/lib/gibbyDroneSprite";
-import { OUTCOME_LABELS, type DashboardState } from "@/lib/types";
+import { OUTCOME_LABELS, SECURITY_OUTCOME_LABELS, CONSTRUCTION_OUTCOME_LABELS, type DashboardState } from "@/lib/types";
 
 export const MISSION_LABELS: Record<DashboardState["missionPhase"], string> = {
   briefing: "방문 순서 선택", ready: "출발 준비 완료", flying: "자동 비행 중",
   capturing: "현장 이미지 촬영 중", analyzing: "대상자 탐지 중",
-  paused: "기술 오류 · 시계 일시 정지", complete: "구조 작전 종료", aborted: "작전 중단",
+  paused: "기술 오류 · 시계 일시 정지", complete: "작전 종료", aborted: "작전 중단",
 };
 
 export function MissionCountdownSummary({ state, elapsedMs, connected }: {
   state: DashboardState; elapsedMs: number; connected: boolean;
 }) {
-  return <section aria-label="세 사람의 구조 시한과 현재 작전 상태" className="space-y-1">
+  return <section aria-label="세 사람의 119 신고 시한과 현재 작전 상태" className="space-y-1">
     <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-      <strong>{MISSION_LABELS[state.missionPhase]}{state.activeMonitorId ? ` · ${MONITOR_MAP[state.activeMonitorId].label}` : ""}</strong>
+      <strong>{MISSION_LABELS[state.missionPhase]}{state.activeMonitorId ? ` · ${MONITOR_MAP_BY_KIND[state.kind][state.activeMonitorId].label}` : ""}</strong>
       <span className="tabular-nums">
         경과 {(elapsedMs / 1000).toFixed(1)}초 · {state.clockRunning ? connected ? "진행 중" : "연결 끊김 · 마지막 수신 상태" : "정지"}
       </span>
@@ -29,9 +29,16 @@ export function MissionCountdownSummary({ state, elapsedMs, connected }: {
       {state.people.map((person) => {
         const remaining = Math.max(0, person.deadlineMs - (person.resolvedAtMs ?? elapsedMs));
         return <div key={person.id} className={`pixel-panel px-2 py-1 ${state.activeMonitorId === person.monitorId ? "bg-[#f0ebf7]" : "bg-white"}`}>
-          <p className="text-xs font-semibold">{MONITOR_MAP[person.monitorId].label}{person.attempts >= 2 ? " · 2회 시도" : ""}</p>
-          <p className="text-xs font-semibold tabular-nums">{person.outcome ? OUTCOME_LABELS[person.outcome] : `남은 ${(remaining / 1000).toFixed(1)}초`}</p>
-          {!person.outcome && remaining === 0 && <p className="mt-1 text-xs">서버 판정 대기 중</p>}
+          <p className="text-xs font-semibold">{MONITOR_MAP_BY_KIND[state.kind][person.monitorId].label}{person.attempts >= 2 ? " · 2회 시도" : ""}</p>
+          <p className="text-xs font-semibold tabular-nums">{person.outcome
+            ? (state.kind === "security" && person.falseAlarm && person.outcome === "escaped"
+              ? (person.falseAlarmReveal ?? "오경보")
+              : state.kind === "security" ? SECURITY_OUTCOME_LABELS[person.outcome as "caught" | "escaped"]
+              : state.kind === "construction" ? CONSTRUCTION_OUTCOME_LABELS[person.outcome as "reported" | "not_found" | "unchecked"]
+              : OUTCOME_LABELS[person.outcome as "reported" | "reported_injured" | "report_missed"])
+            // Construction has no deadline mechanic — nothing to count down.
+            : state.kind === "construction" ? "미확인" : `남은 ${(remaining / 1000).toFixed(1)}초`}</p>
+          {!person.outcome && remaining === 0 && state.kind !== "construction" && <p className="mt-1 text-xs">서버 판정 대기 중</p>}
         </div>;
       })}
     </div>
@@ -52,7 +59,7 @@ export function MissionCountdownSummary({ state, elapsedMs, connected }: {
  * the drone (`boarded`), a small live drone marker eases between pins on
  * the map tracking `state.activeMonitorId` in real time, and the right
  * column swaps from the clue cards below to the drone-image panel + the
- * 3 rescue timers.
+ * 3 report-deadline timers.
  */
 export default function FlightPathMap({ state, boarded = false, elapsedMs, connected, departing = false, markerRef,
   voiceStatus, onMapReady, onMapError }: {
@@ -91,7 +98,7 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
   const route = state.confirmedRoute.length ? state.confirmedRoute : state.draftRoute;
   const isConfirmed = state.phase === "confirmed";
   const lineColor = isConfirmed ? "#0078d4" : "#8661c5";
-  const orderedPicked = MONITORS
+  const orderedPicked = MONITORS_BY_KIND[state.kind]
     .map((monitor) => ({ monitor, order: route.indexOf(monitor.id) }))
     .filter((entry) => entry.order >= 0)
     .sort((a, b) => a.order - b.order);
@@ -100,7 +107,7 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
   // first confirmed stop before the backend has reported an active site yet
   // (e.g. right after launch, still climbing out).
   const activeMonitorId = state.activeMonitorId ?? route[0] ?? null;
-  const droneMarkerMonitor = boarded && activeMonitorId ? MONITOR_MAP[activeMonitorId] : null;
+  const droneMarkerMonitor = boarded && activeMonitorId ? MONITOR_MAP_BY_KIND[state.kind][activeMonitorId] : null;
   // Entrance: mount at the off-map corner (MAP_MARKER_ENTRY, roughly where
   // Gibby's dock overlay visually sits) then flip to the real target
   // position one frame later, so the very first move is an actual CSS
@@ -174,7 +181,7 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
               strokeLinecap="round" vectorEffect="non-scaling-stroke" markerEnd="url(#route-arrow)" filter="url(#route-glow)" />;
           })}
         </svg>
-        {MONITORS.map((monitor) => {
+        {MONITORS_BY_KIND[state.kind].map((monitor) => {
           const order = route.indexOf(monitor.id);
           const picked = order >= 0;
           return <div key={monitor.id}
@@ -203,24 +210,12 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
         )}
       </div>
 
-      <div className={`mission-images flex min-h-0 flex-col gap-2 ${boarded ? "" : "overflow-y-auto pb-[calc(200px*var(--ui-scale))]"}`}>
-        {boarded ? (
-          <>
-            <div className="pixel-panel shrink-0 bg-white p-3">
-              <MissionCountdownSummary state={state} elapsedMs={elapsedMs} connected={connected} />
-            </div>
-            <div className="min-h-0 flex-1"><DroneImagePanel captures={state.captures} /></div>
-          </>
-        ) : MONITORS.map((monitor) => {
-          const person = state.people.find((entry) => entry.monitorId === monitor.id);
-          const order = route.indexOf(monitor.id);
-          return <article key={monitor.id}
-            className={`pixel-panel shrink-0 p-3 ${order >= 0 ? isConfirmed ? "bg-[#eaf3fb]" : "bg-[#f0ebf7]" : "bg-white"}`}>
-            <h3 className="text-xs font-semibold text-[#091f2c]">{monitor.label} <span className="font-normal text-[#091f2c]">{order >= 0 ? `· ${order + 1}번째 방문` : ""}</span></h3>
-            <p className="mt-1 text-[0.6875rem] leading-snug text-[#091f2c]">{person?.clue}</p>
-          </article>;
-        })}
-      </div>
+      {boarded && <div className={`mission-images flex min-h-0 flex-col gap-2`}>
+        <div className="pixel-panel shrink-0 bg-white p-3">
+          <MissionCountdownSummary state={state} elapsedMs={elapsedMs} connected={connected} />
+        </div>
+        <div className="min-h-0 flex-1"><DroneImagePanel captures={state.captures} kind={state.kind} /></div>
+      </div>}
     </div>
 
     {state.promptPhase === "confirmed" && state.missionPhase === "briefing" && <p className="mission-workspace-heading shrink-0 text-[0.6875rem] leading-4 text-[#091f2c] [text-shadow:1px_1px_0_#fff]">첫 두 방문지를 음성으로 선택하세요. 출발에 동의하면 자동 비행을 시작합니다.</p>}

@@ -359,7 +359,8 @@ class RemoteChannelTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(browser.subprotocol, "relay.operator.v1")
                 await browser.recv()
                 await browser.recv()
-                for name, args in (("confirm_prompt", PROMPT_ARGS), ("select_stop", {"monitor": "monitor-3"}),
+                for name, args in (("confirm_prompt", PROMPT_ARGS), ("confirm_prompt", PROMPT_ARGS),
+                                   ("confirm_prompt", PROMPT_ARGS), ("select_stop", {"monitor": "monitor-3"}),
                                    ("select_stop", {"monitor": "monitor-1"}), ("confirm_route", {}),
                                    ("launch_mission", {})):
                     await browser.send(json.dumps({"type": "command", "name": name, "args": args,

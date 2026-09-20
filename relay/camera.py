@@ -84,22 +84,30 @@ def validate_image(image: bytes, content_type: str) -> None:
 
 
 class FixtureCamera:
-    """Only the canonical scenario's three local monitor images can be captured."""
+    """Only the active scenario's local monitor images under public/monitors
+    can be captured. `people` defaults to the triage scenario for backward
+    compatibility; a session running a different scenario kind (e.g.
+    "security") passes its own `scenario["people"]` list in so captures
+    resolve against that scenario's own image paths instead."""
+
+    def __init__(self, people=None):
+        self.people = people if people is not None else SCENARIO["people"]
 
     def _path(self, monitor_id: str) -> Path:
         person = next(
-            (person for person in SCENARIO["people"] if person["monitorId"] == monitor_id),
+            (person for person in self.people if person["monitorId"] == monitor_id),
             None,
         )
         if person is None or monitor_id not in ("monitor-1", "monitor-2", "monitor-3"):
-            raise CaptureError("등록되지 않은 현장입니다. 구조 경로를 확인해 주세요.")
-        expected = f"/monitors/{monitor_id}.png"
-        if person["image"] != expected:
+            raise CaptureError("등록되지 않은 현장입니다. 신고 경로를 확인해 주세요.")
+        image = person["image"]
+        if not isinstance(image, str) or not image.startswith("/monitors/") or "/" in image[len("/monitors/"):]:
             raise CaptureError("촬영 파일 설정이 허용된 현장 PNG 경로와 다릅니다.")
-        path = PUBLIC_ROOT / "monitors" / f"{monitor_id}.png"
+        filename = image[len("/monitors/"):]
+        path = PUBLIC_ROOT / "monitors" / filename
         try:
             resolved = path.resolve()
-            allowed = PUBLIC_ROOT.resolve() / "monitors" / f"{monitor_id}.png"
+            allowed = (PUBLIC_ROOT / "monitors").resolve() / filename
         except (OSError, RuntimeError) as exc:
             raise CaptureError("촬영 파일의 로컬 경로를 확인할 수 없습니다.") from exc
         if resolved != allowed:
@@ -118,7 +126,7 @@ class FixtureCamera:
 
     def readiness(self) -> str | None:
         try:
-            for person in SCENARIO["people"]:
+            for person in self.people:
                 self.read_image(person["monitorId"])
         except CaptureError as exc:
             return str(exc)

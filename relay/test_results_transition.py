@@ -119,6 +119,11 @@ function emit(patch) { handlers.onRouteState({...initial,runId:"run",revision:2,
 function start() { render();find("GibbyIntroSequence").props.onReady(); }
 function route() {
   emit({promptPhase:"confirmed",revision:2});
+  // The confidence/reasoning banner needs a beat on the prompt screen
+  // before the app advances to the map transition (see app/page.tsx's
+  // deliberate setTimeout after promptPhase flips to "confirmed").
+  const [mapIntroId,advanceToMapIntro]=timers.entries().next().value;
+  timers.delete(mapIntroId);advanceToMapIntro();render();
   find("GibbyMapTransition").props.onDone();render();
   handlers.onTranscript("agent","Generated but not yet played",false);render();
   assert.equal(find("GibbyRouteDock").props.agentText,"");

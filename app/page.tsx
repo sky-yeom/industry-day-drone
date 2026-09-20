@@ -10,7 +10,9 @@ import GibbyResultsTransition from "@/components/GibbyResultsTransition";
 import PixelShell from "@/components/PixelShell";
 import ResultsPanel from "@/components/ResultsPanel";
 import { INITIAL_ROUTE_STATE } from "@/data/monitors";
-import { INITIAL_MISSION_STATE } from "@/data/scenario";
+import { INITIAL_MISSION_STATE, TRIAGE_SITES } from "@/data/scenario";
+import { SECURITY_SUSPECT_SITE } from "@/data/security-scenario";
+import { CONSTRUCTION_TARGET_SITE } from "@/data/construction-scenario";
 import { SCENARIOS, type ScenarioId } from "@/data/scenarios";
 import { fetchRelayConfig, VoiceSession, type RelayConfig, type VoiceStatus } from "@/lib/voiceClient";
 import type { ChatMessage, DashboardState } from "@/lib/types";
@@ -180,7 +182,14 @@ export default function Home() {
         const terminal = next.missionPhase === "complete" || next.missionPhase === "aborted";
         if (!advancedToRouteRef.current && !terminal && next.promptPhase === "confirmed") {
           advancedToRouteRef.current = true;
-          setStep("map-intro");
+          // Give the confidence/reasoning banner (just set on this same
+          // state update) a beat to actually render and be read/heard on
+          // the prompt screen before we swap it out for the map transition.
+          // Without this delay the two updates land in the same React
+          // commit and the banner is never visible at all.
+          window.setTimeout(() => {
+            if (current()) setStep("map-intro");
+          }, 4000);
         }
         if (!advancedToResultsRef.current &&
             terminal) {
@@ -230,15 +239,15 @@ export default function Home() {
       onBusy: () => {},
     });
     sessionRef.current = session;
-    void session.start().catch(() => {});
-  }, [beginReturn]);
+    void session.start({ scenarioKind: SCENARIOS[scenarioId].kind }).catch(() => {});
+  }, [beginReturn, scenarioId]);
 
   const retryConnection = useCallback(() => {
     reset();
     start();
   }, [reset, start]);
 
-  // Display interpolation only: expiration, rescue and scoring remain relay-owned.
+  // Display interpolation only: expiration, reporting and scoring remain relay-owned.
   const elapsedMs = state.elapsedMs + (state.clockRunning ? Math.max(0, now - snapshot.receivedAt) : 0);
   const visionReady = config?.visionReady ?? false;
   const agentText = speechText ?? [...transcript].reverse().find((message) => message.role === "agent")?.text ?? "";
@@ -251,14 +260,21 @@ export default function Home() {
       voiceStatus={status}
       error={error}
       onRetry={retryConnection}
+      state={state}
+      promptConfidence={state.promptConfidence}
+      promptConfidenceReason={state.promptConfidenceReason}
     />;
   }
 
   if (step === "map-intro") {
     const scenario = SCENARIOS[scenarioId];
     return <GibbyMapTransition
-      targetImage={scenario.targetImage}
-      targetAlt={scenario.targetAlt}
+      sites={
+        scenario.kind === "security" ? [SECURITY_SUSPECT_SITE]
+          : scenario.kind === "construction" ? [CONSTRUCTION_TARGET_SITE]
+          : TRIAGE_SITES
+      }
+      state={state}
       briefing={scenario.briefing}
       onDone={() => {
         if (!returnSceneRef.current && latestStateRef.current.runId === state.runId) setStep("route");

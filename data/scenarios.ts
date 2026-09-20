@@ -1,10 +1,14 @@
 import { SCENARIO_BRIEFING, TARGET_APPEARANCE } from "@/data/scenario";
-import type { BriefingBullet } from "@/lib/types";
+import { SECURITY_SCENARIO_BRIEFING, SECURITY_TARGET_APPEARANCE } from "@/data/security-scenario";
+import { CONSTRUCTION_SCENARIO_BRIEFING, CONSTRUCTION_TARGET_APPEARANCE } from "@/data/construction-scenario";
+import type { BriefingBullet, ScenarioKind } from "@/lib/types";
 
-export type ScenarioId = "saving-people" | "missing-person" | "safety-check";
+export type ScenarioId = "saving-people" | "security-breach" | "safety-check";
 
 export interface ScenarioConfig {
   id: ScenarioId;
+  /** Which relay scenario kind this button launches (see `scenario` WS param). */
+  kind: ScenarioKind;
   /** Label shown on the scenario-picker button. */
   buttonLabel: string;
   /** Title shown on the briefing/prompt screen. */
@@ -12,60 +16,42 @@ export interface ScenarioConfig {
   briefing: BriefingBullet[];
   targetImage: string;
   targetAlt: string;
-  /** Ribbon label over the target photo (e.g. "구조 필요"). */
+  /** Ribbon label over the target photo (e.g. "신고 대상"). */
   badgeLabel: string;
 }
 
-// Only "saving-people" is wired to the real relay/voice backend right now
-// (see app/page.tsx) — picking either of the other two still launches that
-// same real mission underneath; only this pre-mission intro/briefing screen
-// is scenario-specific for now. The other two get real, distinct backend
-// logic in a later pass.
-const MISSING_PERSON_BRIEFING: BriefingBullet[] = [
-  {
-    id: "missing-person-0",
-    text: "세 구역에서 동시에 경보가 울렸어! 그런데 드론(감시 장비)은 하나뿐이라, 한 번에 한 곳만 확인할 수 있어.",
-  },
-  {
-    id: "missing-person-1",
-    text: "금고: 문 센서만 반응하고 움직임은 없음 · 서버실: 출입 카드 실패가 이어지다 결국 성공 · 임원실: 움직임 감지 + 창문 열림.",
-  },
-  {
-    id: "missing-person-2",
-    text: "셋 중 둘은 센서 오작동으로 인한 오경보고, 하나만 진짜 침입이야. 사진 속 인물을 서두르지 말고 단서부터 신중히 짚어가며 찾아줘.",
-  },
-];
-
+// All three scenarios are wired to real, independent relay/voice backends
+// (see the `scenario` WS query param threaded from GibbyIntroSequence's
+// onScenarioChosen).
 export const SCENARIOS: Record<ScenarioId, ScenarioConfig> = {
   "saving-people": {
     id: "saving-people",
-    buttonLabel: "인명 구조",
-    title: "인명 구조",
+    kind: "triage",
+    buttonLabel: "인명 탐지·신고",
+    title: "인명 탐지·신고",
     briefing: SCENARIO_BRIEFING,
     targetImage: TARGET_APPEARANCE.referenceImage,
     targetAlt: TARGET_APPEARANCE.referenceAlt,
-    badgeLabel: "구조 필요",
+    badgeLabel: "신고 대상",
   },
-  "missing-person": {
-    id: "missing-person",
-    buttonLabel: "실종자 수색",
-    title: "실종자 수색",
-    briefing: MISSING_PERSON_BRIEFING,
-    // Placeholder — no dedicated reference photo yet, reuse the existing
-    // target image until a real asset is provided.
-    targetImage: TARGET_APPEARANCE.referenceImage,
-    targetAlt: TARGET_APPEARANCE.referenceAlt,
-    badgeLabel: "수색 대상",
+  "security-breach": {
+    id: "security-breach",
+    kind: "security",
+    buttonLabel: "보안 침입 감지",
+    title: "보안 침입 감지",
+    briefing: SECURITY_SCENARIO_BRIEFING,
+    targetImage: SECURITY_TARGET_APPEARANCE.referenceImage,
+    targetAlt: SECURITY_TARGET_APPEARANCE.referenceAlt,
+    badgeLabel: "용의자",
   },
   "safety-check": {
     id: "safety-check",
-    buttonLabel: "안전 점검",
-    title: "안전 점검",
-    // Placeholder — exact duplicate of Saving People's content until this
-    // scenario is designed for real.
-    briefing: SCENARIO_BRIEFING,
-    targetImage: TARGET_APPEARANCE.referenceImage,
-    targetAlt: TARGET_APPEARANCE.referenceAlt,
+    kind: "construction",
+    buttonLabel: "건설 현장 안전 점검",
+    title: "건설 현장 안전 점검",
+    briefing: CONSTRUCTION_SCENARIO_BRIEFING,
+    targetImage: CONSTRUCTION_TARGET_APPEARANCE.referenceImage,
+    targetAlt: CONSTRUCTION_TARGET_APPEARANCE.referenceAlt,
     badgeLabel: "점검 대상",
   },
 };
@@ -73,5 +59,6 @@ export const SCENARIOS: Record<ScenarioId, ScenarioConfig> = {
 export const SCENARIO_LIST: ScenarioConfig[] = [
   SCENARIOS["saving-people"],
   SCENARIOS["safety-check"],
-  SCENARIOS["missing-person"],
+  SCENARIOS["security-breach"],
 ];
+

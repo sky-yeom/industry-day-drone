@@ -128,7 +128,7 @@ async def main():
         assert final["score"]["total"] == 3
         assert all(p["outcome"] is not None for p in final["people"])
         if not args.voice:
-            assert final["score"]["rescuedCount"] == (0 if args.wrong_description else 2 if args.bad_priority else 3)
+            assert final["score"]["reportedCount"] == (0 if args.wrong_description else 2 if args.bad_priority else 3)
         for person in final["people"]:
             if person["outcome"] != "too_late":
                 frame = next(c for c in final["captures"] if c["id"] == person["captureId"])
@@ -142,7 +142,7 @@ async def main():
             assert result_voice[-1]["type"] == "mission.debrief.done", result_voice[-1]
             spoken = "".join(e.get("delta", "") for e in result_voice
                              if e["type"] in {"response.audio_transcript.delta", "response.output_audio_transcript.delta"})
-            assert "구조" in spoken and "?" not in spoken, spoken
+            assert "신고" in spoken and "?" not in spoken, spoken
             print("Results voice:", spoken)
         print("PASS:", next(e["text"] for e in events if e["type"] == "mission.debrief"))
 

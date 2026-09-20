@@ -4,8 +4,12 @@ import { Press_Start_2P } from "next/font/google";
 import { useCallback, useEffect, useState } from "react";
 import PixelGround from "@/components/PixelGround";
 import PixelPromptScreen from "@/components/PixelPromptScreen";
+import { SECURITY_ZONES } from "@/data/security-scenario";
+import { CONSTRUCTION_ZONES } from "@/data/construction-scenario";
+import { TRIAGE_SITES } from "@/data/scenario";
 import { SCENARIO_LIST, SCENARIOS, type ScenarioConfig, type ScenarioId } from "@/data/scenarios";
 import { useTypewriter } from "@/lib/useTypewriter";
+import type { MissionState } from "@/lib/types";
 import type { VoiceStatus } from "@/lib/voiceClient";
 
 // Pixel-game display font for headings/labels/buttons only; Korean copy
@@ -56,6 +60,9 @@ export default function GibbyIntroSequence({
   voiceStatus,
   error,
   onRetry,
+  state,
+  promptConfidence,
+  promptConfidenceReason,
 }: {
   onReady: () => void;
   onScenarioChosen?: (id: ScenarioId) => void;
@@ -63,6 +70,9 @@ export default function GibbyIntroSequence({
   voiceStatus?: VoiceStatus;
   error?: string | null;
   onRetry?: () => void;
+  state: MissionState;
+  promptConfidence?: number | null;
+  promptConfidenceReason?: string;
 }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [scenario, setScenario] = useState<ScenarioConfig>(SCENARIOS["saving-people"]);
@@ -154,7 +164,7 @@ export default function GibbyIntroSequence({
           nudges Gibby's own fixed resting position. */}
       {phase === "done" && typed && (
         <div className="absolute bottom-[calc(16%+(146px*var(--ui-scale)))] z-20 right-[calc(6%+(161px*var(--ui-scale)))]">
-          <div className="pixel-bubble pixel-bubble--right relative max-w-[16.25rem] px-4 py-3 text-sm leading-6 text-[#091f2c] sm:max-w-xs">
+          <div className="pixel-bubble pixel-bubble--right relative max-w-[15.625rem] px-4 py-3 text-sm leading-6 text-[#091f2c] sm:max-w-[19.375rem]">
             {typed}
           </div>
         </div>
@@ -206,13 +216,19 @@ export default function GibbyIntroSequence({
           the "sliding"/"exiting"/"done" phases bring it in. */}
       <div className={`intro-stage absolute inset-0 z-10 ${phase === "sliding" || phase === "exiting" || phase === "done" ? "intro-stage--in" : ""}`}>
         <PixelPromptScreen
-          targetImage={scenario.targetImage}
-          targetAlt={scenario.targetAlt}
           briefing={scenario.briefing}
-          badgeLabel={scenario.badgeLabel}
+          sites={
+            scenario.kind === "security" ? SECURITY_ZONES
+              : scenario.kind === "construction" ? CONSTRUCTION_ZONES
+              : TRIAGE_SITES
+          }
+          state={state}
+          scenarioKind={scenario.kind}
           voiceStatus={phase === "done" ? voiceStatus : undefined}
           error={phase === "done" ? error : null}
           onRetry={onRetry}
+          promptConfidence={promptConfidence}
+          promptConfidenceReason={promptConfidenceReason}
         />
       </div>
     </main>

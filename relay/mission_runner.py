@@ -151,11 +151,12 @@ class MissionRunner:
                     async def analyze_frame():
                         evidence = await self.vision.analyze(
                             capture,
-                            search_prompt=self.session.data["userPromptText"],
-                            appearance_constraints=self.session.data["appearanceConstraints"],
-                            unsupported_appearance=self.session.data["unsupportedAppearance"],
+                            search_prompt=person["promptText"],
+                            appearance_constraints=person["appearanceConstraints"],
+                            unsupported_appearance=person["unsupportedAppearance"],
                             scene_context={"monitor_id": monitor, "label": person["label"],
-                                           "report": person["clue"]})
+                                           "report": person["clue"]},
+                            kind=self.session.kind)
                         if self.session.apply_detection(run_id, capture.id, evidence):
                             return evidence
                         return None
@@ -166,12 +167,12 @@ class MissionRunner:
                     await self._notify(
                         f"현장 {monitor[-1]} 이미지에서 대상자를 확인했습니다."
                         if person["captureId"] == capture.id
-                        else f"현장 {monitor[-1]}의 구조 조건이 아직 충족되지 않았습니다.")
+                        else f"현장 {monitor[-1]}의 119 신고 조건이 아직 충족되지 않았습니다.")
                     if evidence["targetPresent"]:
                         break
             if self.session.phase in ACTIVE:
                 self.session.set_operation("analyzing", None, run_id)
-                await self._notify("방문을 마쳤습니다. 미확인 대상의 구조 시한까지 기다립니다.")
+                await self._notify("방문을 마쳤습니다. 미확인 대상의 신고 시한까지 기다립니다.")
             elif self.session.phase in TERMINAL:
                 await self._notify()
         except asyncio.CancelledError:

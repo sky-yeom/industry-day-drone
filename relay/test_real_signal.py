@@ -11,7 +11,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 from relay import config
 from relay.drone_client import DroneClient
 from relay.live_mission import LiveMissionRunner
-from relay.survey import SurveySession
+from relay.survey import MONITOR_IDS, SurveySession
 from relay.test_mission_runner import FakeVision
 from relay.camera import LiveCaptureCamera
 
@@ -81,7 +81,8 @@ class RealSignalTests(unittest.IsolatedAsyncioTestCase):
                 return original_opener.open(recorded, timeout=timeout)
 
         session = SurveySession(mode="azure", drone_control_mode="live")
-        session.confirm_prompt("wire fixture only")
+        for _ in MONITOR_IDS:
+            session.confirm_prompt("wire fixture only")
         session.select_stop("monitor-2")
         session.select_stop("monitor-3")
         session.confirm_route()

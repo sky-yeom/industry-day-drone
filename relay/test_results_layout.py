@@ -49,7 +49,7 @@ function loader(react = React, browser = {}) {
 
 const ResultsPanel = loader()(path.resolve("components/ResultsPanel.tsx")).default;
 const state = {
-  missionPhase: "complete", score: {total: 3, rescuedCount: 2},
+  missionPhase: "complete", score: {total: 3, reportedCount: 2}, kind: "triage",
   people: [1, 2, 3].map(id => ({
     id: `person-${id}`, monitorId: `monitor-${id}`, label: `사람 ${id}`, outcome: null,
   })),
@@ -62,7 +62,7 @@ for (const visible of [undefined, true, false]) {
   const html = renderResults(visible);
   const reveal = html.indexOf('transition-opacity');
   assert.ok(reveal > html.indexOf("처음으로"), "reset remains outside reveal");
-  for (const text of ["3명 중 2명 구조", "사람 1", "사람 2", "사람 3",
+  for (const text of ["3명 중 2명 신고", "사람 1", "사람 2", "사람 3",
                       "최종 작전 설명", "확정한 탐지 프롬프트"]) {
     assert.ok(html.indexOf(text) > reveal, `${text} belongs to the shared reveal`);
   }
@@ -116,10 +116,10 @@ panel.clientHeight = 600; resizePanel(); panelTree = renderPanel();
 assert.match(find(panelTree, grid).props.className, /grid-cols-1 grid-rows-2 sm:/);
 panel.clientWidth = 1024; panel.clientHeight = 257; resizePanel(); panelTree = renderPanel();
 const banner = find(panelTree, element => element.type === "div"
-  && element.props.children?.[0]?.props?.children === "구조 작전 종료");
+  && element.props.children?.[0]?.props?.children === "119 신고 작전 종료");
 assert.match(banner.props.className, /w-full.*flex-col/,
   "the summary stays a full-width, two-line banner even in short wide regions");
-assert.equal(banner.props.children[1].props.children, "3명 중 2명 구조");
+assert.equal(banner.props.children[1].props.children, "3명 중 2명 신고");
 assert.ok(find(panelTree, element => element.props?.className === "grid shrink-0 grid-cols-3 items-start gap-2"),
   "the three people stay in their own row below the summary");
 assert.doesNotMatch(panelTree.props.className, /sm:p-3/);
@@ -250,7 +250,7 @@ function pagination(props, width = 100, fixedHeight = 72) {
   };
 }
 
-const short = pagination({label: "짧은 설명", text: "구조 완료", contentFit: true, maxHeight: 150});
+const short = pagination({label: "짧은 설명", text: "신고 완료", contentFit: true, maxHeight: 150});
 assert.equal(short.pageBody().props.style.height, 24, "short content owns only its natural height");
 assert.match(short.nav().props.className, /invisible absolute/, "no reserved pager space for one page");
 assert.equal(short.nav().props["aria-hidden"], true);

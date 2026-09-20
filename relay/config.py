@@ -1,4 +1,4 @@
-"""Voice Live and image analysis configuration for the rescue dashboard.
+"""Voice Live and image analysis configuration for the report dashboard.
 
 Voice Live defaults were verified against the industry-day-drone Foundry
 resource. Image analysis requires a separately configured deployment.
@@ -87,6 +87,25 @@ if not SCENARIO_FILE.is_file():
     # Without this the miss surfaces as a FileNotFoundError from inside an
     # unrelated import, which is a poor thing to debug on a flight line.
     raise SystemExit(f"RELAY_SCENARIO_FILE does not point at a file: {SCENARIO_FILE}")
+# The "security" scenario kind (Security Breach: one suspect, three alarm
+# zones, two false positives) is a second, independently selectable scenario
+# picked per-session (see SurveySession(kind=...) in survey.py), not via a
+# process-wide mode switch like SCENARIO_FILE above.
+SECURITY_SCENARIO_FILE = Path(
+    os.getenv("RELAY_SECURITY_SCENARIO_FILE", "").strip()
+    or Path(__file__).resolve().parents[1] / "data" / "security-breach.json"
+)
+if not SECURITY_SCENARIO_FILE.is_file():
+    raise SystemExit(f"RELAY_SECURITY_SCENARIO_FILE does not point at a file: {SECURITY_SCENARIO_FILE}")
+# The "construction" scenario kind (Construction Site Safety: hot-pink
+# workwear without a hard hat, three zones, no deadline mechanic) is a
+# third, independently selectable scenario, same pattern as SECURITY above.
+CONSTRUCTION_SCENARIO_FILE = Path(
+    os.getenv("RELAY_CONSTRUCTION_SCENARIO_FILE", "").strip()
+    or Path(__file__).resolve().parents[1] / "data" / "construction-safety.json"
+)
+if not CONSTRUCTION_SCENARIO_FILE.is_file():
+    raise SystemExit(f"RELAY_CONSTRUCTION_SCENARIO_FILE does not point at a file: {CONSTRUCTION_SCENARIO_FILE}")
 AZURE_VISION_ENDPOINT = os.getenv("AZURE_VISION_ENDPOINT", "").strip()
 AZURE_VISION_DEPLOYMENT = os.getenv("AZURE_VISION_DEPLOYMENT", "").strip()
 AZURE_VISION_API_VERSION = os.getenv("AZURE_VISION_API_VERSION", "v1").strip()
@@ -150,12 +169,12 @@ TRANSCRIPTION_MODEL = os.getenv("VOICE_LIVE_TRANSCRIPTION_MODEL", "gpt-4o-transc
 # 명시적으로 나열해 우선순위를 높인다.
 TRANSCRIPTION_PROMPT = os.getenv(
     "VOICE_LIVE_TRANSCRIPTION_PROMPT",
-    "드론 긴급 구조 관제 대화입니다. 들린 말만 전사하고 짧은 대답도 생략하거나 다른 말로 고치지 않습니다. "
+    "드론 긴급 신고 관제 대화입니다. 들린 말만 전사하고 짧은 대답도 생략하거나 다른 말로 고치지 않습니다. "
     "자주 나오는 말: 현장 1, 현장 2, 현장 3, "
     "첫번째, 첫 번째, 첫째, 두번째, 두 번째, 둘째, 세번째, 세 번째, 셋째, "
     "일번, 한 번, 이번, 두 번, 삼번, 세 번, 1번, 2번, 3번, "
     "네, 예, 응, 어, 엉, 맞아, 맞아요, 오케이, 오키, 콜, 좋아, 가자, 아니요, "
-    "구조, 바다에 빠진 사람, 물에 빠진 사람, 익수자, 잔해 아래의 사람, 불길 속의 사람, 불이 난 집, "
+    "신고, 119, 바다에 빠진 사람, 물에 빠진 사람, 익수자, 잔해 아래의 사람, 불길 속의 사람, 불이 난 집, "
     "우선순위, 경로, 확정, 출발, 상태, 다시 시도, 중단, 다시, 취소.",
 )
 

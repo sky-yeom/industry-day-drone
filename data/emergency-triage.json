@@ -1,18 +1,10 @@
 {
-  "title": "코드 레드: 드론 구조대",
+  "title": "코드 레드: 드론 신고 정찰대",
   "briefing": [
-    "세 곳에서 긴급 구조 요청이 들어왔어! 우리 함께 세 사람을 모두 찾아서 구해주자!",
-    "어떤 사람을 찾아야 할지 목소리로 알려줘! 네가 확인한 설명으로 사람들을 찾을게.",
-    "네 설명을 확인하고 나면 각 현장 상황을 알려줄게. 출발하면 시간이 흐르니까, 어디부터 구조할지 신중하게 골라줘!"
+    "세 곳에서 119에 긴급 신고가 들어왔어! 우리 드론은 구조하러 가는 게 아니라, 사람을 찾아서 정확한 위치를 119 종합상황실에 신고하는 정찰팀이야.",
+    "세 현장 모두 사람이 다르니까, 불난 집·바다·잔해 순서로 각 현장 사람이 어떤 모습인지 하나씩 목소리로 알려줘!",
+    "세 명 모두 확인하고 나면 어디부터 확인해서 신고할지 함께 순서를 정할게. 출발하면 시간이 흐르니까 신중하게 골라줘!"
   ],
-  "targetAppearance": {
-    "shirtColor": "green",
-    "hairColor": "brown",
-    "garment": "t-shirt",
-    "description": "초록색 티셔츠를 입고 갈색 머리를 한 사람",
-    "referenceImage": "/monitors/reference-person.png",
-    "referenceAlt": "초록색 반팔 티셔츠를 입고 갈색 머리를 한 참고 인물"
-  },
   "travelMs": 7000,
   "captureMs": 1000,
   "mockAnalysisMs": 2000,
@@ -24,36 +16,84 @@
       "monitorId": "monitor-1",
       "label": "바다에 빠진 사람",
       "clue": "바다에 빠진 사람이 물에 떠 있으려고 힘겹게 버티고 있습니다.",
+      "reportDetail": "해안에서 방위 072°, 약 400m 지점 GPS 좌표를 119에 전달합니다.",
       "initiallyInjured": false,
+      "vulnerable": false,
       "deadlineMs": 28000,
       "image": "/monitors/monitor-1.png",
       "x": 17.5,
       "y": 43,
-      "mockBox": [0.35, 0.35, 0.29, 0.37]
+      "mockBox": [
+        0.35,
+        0.35,
+        0.29,
+        0.37
+      ],
+      "targetAppearance": {
+        "shirtColor": "blue",
+        "hairColor": "brown",
+        "garment": "t-shirt",
+        "description": "파란색 티셔츠를 입고 갈색 머리를 한 사람",
+        "referenceImage": "/monitors/reference-person-1.png",
+        "referenceAlt": "파란색 반팔 티셔츠를 입고 갈색 머리를 한 참고 인물"
+      },
+      "siteName": "바다"
     },
     {
       "id": "person-2",
       "monitorId": "monitor-2",
       "label": "잔해 아래의 사람",
       "clue": "무너진 잔해 아래에 갇혀 가벼운 부상을 입었습니다.",
+      "reportDetail": "붕괴 건물 동쪽 잔해 구역, 노약자로 추정되는 대상의 위치를 119에 전달합니다.",
       "initiallyInjured": true,
+      "vulnerable": true,
       "deadlineMs": 45000,
       "image": "/monitors/monitor-2.png",
       "x": 71,
       "y": 43,
-      "mockBox": [0.39, 0.32, 0.25, 0.42]
+      "mockBox": [
+        0.39,
+        0.32,
+        0.25,
+        0.42
+      ],
+      "targetAppearance": {
+        "shirtColor": "green",
+        "hairColor": "black",
+        "garment": "t-shirt",
+        "description": "초록색 티셔츠를 입고 검은 머리를 한 사람",
+        "referenceImage": "/monitors/reference-person-2.png",
+        "referenceAlt": "초록색 반팔 티셔츠를 입고 검은 머리를 한 참고 인물"
+      },
+      "siteName": "잔해 아래"
     },
     {
       "id": "person-3",
       "monitorId": "monitor-3",
       "label": "불길 속의 사람",
       "clue": "불이 난 집 안에 사람이 갇혀 있습니다. 불길이 번지고 있습니다.",
+      "reportDetail": "화재 건물 3층 두 번째 창문 위치를 119에 전달합니다.",
       "initiallyInjured": false,
+      "vulnerable": false,
       "deadlineMs": 18000,
       "image": "/monitors/monitor-3.png",
       "x": 46,
       "y": 29,
-      "mockBox": [0.42, 0.35, 0.17, 0.41]
+      "mockBox": [
+        0.42,
+        0.35,
+        0.17,
+        0.41
+      ],
+      "targetAppearance": {
+        "shirtColor": "orange",
+        "hairColor": "brown",
+        "garment": "t-shirt",
+        "description": "주황색 티셔츠를 입고 갈색 머리를 한 사람",
+        "referenceImage": "/monitors/reference-person-3.png",
+        "referenceAlt": "주황색 반팔 티셔츠를 입고 갈색 머리를 한 참고 인물"
+      },
+      "siteName": "불이 난 집"
     }
   ]
 }

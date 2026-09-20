@@ -23,12 +23,33 @@ AFFIRMATIVES = {
 }
 
 
+
+# Real speech attaches harmless filler before/around a clear "yes" ("음 맞아",
+# "어 진짜 맞아요"). These never count as consent on their own, but must not
+# block an affirmative reply that carries one, or a legitimate "맞아" gets
+# rejected forever and the model just repeats its readback question.
+AFFIRMATIVE_FILLERS = {
+    normalize(text) for text in (
+        "음", "음음", "흠", "저기", "그니까", "그러니까", "그러게", "일단", "막", "좀",
+        "진짜", "정말", "완전", "그냥",
+    )
+}
+
+
 def is_affirmative(text):
     value = normalize(text)
+    if not value:
+        return False
     if re.search(r"아니|않|말고|말아|잠깐|아직|취소|멈|안돼|싫|모르", value):
         return False
-    words = "|".join(sorted(AFFIRMATIVES, key=len, reverse=True))
-    return bool(value) and re.fullmatch(f"(?:{words}){{1,3}}", value) is not None
+    affirmative_words = "|".join(sorted(AFFIRMATIVES, key=len, reverse=True))
+    filler_words = "|".join(sorted(AFFIRMATIVE_FILLERS, key=len, reverse=True))
+    if re.fullmatch(f"(?:{affirmative_words}){{1,3}}", value) is not None:
+        return True
+    combined = f"(?:{affirmative_words}|{filler_words})+"
+    if re.fullmatch(combined, value) is None:
+        return False
+    return re.search(affirmative_words, value) is not None
 
 
 def is_retry_input(text):
@@ -37,12 +58,15 @@ def is_retry_input(text):
 
 STOP_ALIASES = {
     "monitor-1": ("1", "1번", "일번", "첫번째", "첫째", "현장하나", "현장1", "바다", "물",
-                  "바다에빠진사람", "물에빠진사람", "물에빠져있는사람", "익수자"),
+                  "바다에빠진사람", "물에빠진사람", "물에빠져있는사람", "익수자",
+                  "구역하나", "구역1", "금고", "위쪽통로", "위통로", "통로"),
     "monitor-2": ("2", "2번", "이번", "두번째", "둘째", "현장둘", "현장2", "잔해",
                   "잔해아래", "잔해아래사람", "잔해아래의사람", "잔해아래있는사람",
-                  "잔해아래에있는사람", "잔해아래에갇힌사람"),
+                  "잔해아래에있는사람", "잔해아래에갇힌사람",
+                  "구역둘", "구역2", "서버실", "기초공사구역", "기초공사", "기초구역"),
     "monitor-3": ("3", "3번", "삼번", "세번째", "셋째", "현장셋", "현장3", "불",
-                  "불난집", "불이난집", "불길속의사람", "불길속사람", "불이난집에갇힌사람"),
+                  "불난집", "불이난집", "불길속의사람", "불길속사람", "불이난집에갇힌사람",
+                  "구역셋", "구역3", "임원실", "오른쪽플랫폼", "플랫폼"),
 }
 
 
@@ -262,7 +286,8 @@ class VoiceTurns:
                     or any(not earlier.text or not is_affirmative(earlier.text) for earlier in preceding)):
                 return self.reject("no_pending_readback", "확인할 설명을 prepare_prompt로 저장한 뒤 되말하고 새 동의를 기다리세요.")
         elif name == "select_stop":
-            if not isinstance(args, dict) or not names_stop(turn.text, args.get("monitor")):
+            resolved_monitor = session.resolve_monitor(args.get("monitor")) if isinstance(args, dict) else None
+            if resolved_monitor is None or not names_stop(turn.text, resolved_monitor):
                 return self.reject("stop_mismatch", "참가자의 이번 답변에서 그 목적지를 확인하지 못했습니다. 목적지를 대신 고르지 말고 다시 물어보세요.")
         elif name == "launch_mission":
             if not is_affirmative(turn.text) or not turn.route_readback_done:

@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import PagedText from "@/components/PagedText";
-import { MONITOR_MAP } from "@/data/monitors";
-import { OUTCOME_LABELS, type DashboardState } from "@/lib/types";
+import { MONITOR_MAP_BY_KIND } from "@/data/monitors";
+import { OUTCOME_LABELS, SECURITY_OUTCOME_LABELS, CONSTRUCTION_OUTCOME_LABELS, type DashboardState } from "@/lib/types";
 
 function ResultTextCard({ title, label, text, compact = false, sharedHeight, onHeightChange, onSpaceChange }: {
   title: string; label: string; text: string;
@@ -101,7 +101,7 @@ export default function ResultsPanel({ state, debrief, onReset, visible = true }
         className={`pixel-button bg-[#ffd23f] px-4 text-sm font-semibold text-[#091f2c] ${compactSummary ? "py-1 leading-5" : "py-2"}`}>처음으로</button>}
     </div>
     {!terminal ? <div hidden={!visible} className="pixel-panel flex min-h-0 flex-1 items-center justify-center bg-white p-4 text-center text-sm text-[#091f2c]">
-      아직 구조 결과가 없습니다. 작전 종료 후 여기에 표시됩니다.
+      아직 신고 결과가 없습니다. 작전 종료 후 여기에 표시됩니다.
     </div> : <div aria-hidden={!visible} inert={!visible}
       className={`relative min-h-0 flex-1 transition-opacity duration-500 motion-reduce:transition-none ${visible ? "opacity-100" : "pointer-events-none opacity-0"}`}>
       {insufficientSpace && <p role="status" className="absolute inset-0 flex items-center justify-center text-center text-sm leading-6 text-[#091f2c]">
@@ -111,16 +111,33 @@ export default function ResultsPanel({ state, debrief, onReset, visible = true }
         className={`flex h-full min-h-0 flex-col gap-2 ${insufficientSpace ? "invisible overflow-hidden" : ""}`}>
       <div className="flex shrink-0 flex-col gap-2">
       <div className={`pixel-panel flex w-full shrink-0 flex-col items-center bg-[#ffd23f] text-center ${compactSummary ? "px-2 py-1" : "px-3 py-2"}`}>
-        <p className="text-[0.625rem] font-bold leading-3 tracking-[0.2em] text-[#091f2c]">{state.missionPhase === "aborted" ? "작전 중단" : "구조 작전 종료"}</p>
-        <p className={`${compactSummary ? "text-lg leading-6" : "text-xl"} font-bold text-[#091f2c]`}>{score ? `${score.total}명 중 ${score.rescuedCount}명 구조` : "결과 확인 중"}</p>
+        <p className="text-[0.625rem] font-bold leading-3 tracking-[0.2em] text-[#091f2c]">
+          {state.missionPhase === "aborted" ? "작전 중단"
+            : state.kind === "security" ? "112 신고 작전 종료"
+            : state.kind === "construction" ? "안전관리자 신고 작전 종료"
+            : "119 신고 작전 종료"}
+        </p>
+        <p className={`${compactSummary ? "text-lg leading-6" : "text-xl"} font-bold text-[#091f2c]`}>{score ? (state.kind === "security"
+          ? `${score.total}곳 중 ${score.caughtCount ?? 0}곳 확인`
+          : state.kind === "construction"
+          ? `${score.total}곳 중 ${score.violationsReportedCount ?? 0}곳 신고`
+          : `${score.total}명 중 ${score.reportedCount}명 신고`) : "결과 확인 중"}</p>
       </div>
       <div className="grid shrink-0 grid-cols-3 items-start gap-2">
         {state.people.map((person) => <article key={person.id} className={`pixel-panel min-w-0 [overflow-wrap:anywhere] ${compactSummary ? "p-1" : "p-1.5"}`}>
           <div className={compactSummary ? "flex flex-wrap items-baseline gap-x-2" : undefined}>
-          <h3 className="text-xs font-semibold text-[#091f2c]">{MONITOR_MAP[person.monitorId].label}</h3>
+          <h3 className="text-xs font-semibold text-[#091f2c]">{MONITOR_MAP_BY_KIND[state.kind][person.monitorId].label}</h3>
           <p className={`${compactSummary ? "" : "mt-1"} text-[0.6875rem] text-[#091f2c]`}>{person.label}</p>
           </div>
-          <p className={`${compactSummary ? "mt-0.5" : "mt-1"} text-xs font-semibold text-[#091f2c]`}>{person.outcome ? OUTCOME_LABELS[person.outcome] : "미해결 · 작전 중단"}</p>
+          <p className={`${compactSummary ? "mt-0.5" : "mt-1"} text-xs font-semibold text-[#091f2c]`}>
+            {person.outcome
+              ? (state.kind === "security" && person.falseAlarm && person.outcome === "escaped"
+                ? (person.falseAlarmReveal ?? "오경보")
+                : state.kind === "security" ? SECURITY_OUTCOME_LABELS[person.outcome as "caught" | "escaped"]
+                : state.kind === "construction" ? CONSTRUCTION_OUTCOME_LABELS[person.outcome as "reported" | "not_found" | "unchecked"]
+                : OUTCOME_LABELS[person.outcome as "reported" | "reported_injured" | "report_missed"])
+              : "미해결 · 작전 중단"}
+          </p>
         </article>)}
       </div>
       </div>

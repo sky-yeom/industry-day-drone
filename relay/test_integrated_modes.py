@@ -161,8 +161,9 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
                             if event["type"] == "tool.finished" and event["id"] == rid:
                                 self.assertTrue(event["result"]["ok"], event)
                                 return
-                    await command("confirm_prompt", {"prompt_text": "초록색 티셔츠를 입은 사람",
-                                                      "appearance_constraints": [], "unsupported_appearance": []})
+                    for _ in range(3):
+                        await command("confirm_prompt", {"prompt_text": "초록색 티셔츠를 입은 사람",
+                                                          "appearance_constraints": [], "unsupported_appearance": []})
                     await ws.send(json.dumps({"type": "route_intro.ready"}))
                     await command("select_stop", {"monitor": "monitor-2"})
                     await command("select_stop", {"monitor": "monitor-3"})
@@ -215,6 +216,9 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
                 try:
                     participant_turn(bridge, "사람을 찾아줘")
                     self.assertTrue(session.prepare_prompt("사람을 찾아줘", [], [])["ok"])
+                    for _ in range(2):
+                        session.confirm_prompt("사람을 찾아줘", [], [])
+                    self.assertTrue(session.prepare_prompt("사람을 찾아줘", [], [])["ok"])
                     spoken_reply(bridge)
                     await bridge.handle_tool_call({
                         "name": "confirm_prompt", "call_id": "prompt",
@@ -222,15 +226,25 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
                         turn=participant_turn(bridge, "응"))
                     pending = next(e for e in browser.events if e["type"] == "route_intro.pending")
                     responses = [e for e in upstream.sent if e["type"] == "response.create"]
-                    self.assertEqual(len(responses), 1, "prefetch starts before visual readiness")
+                    self.assertEqual(len(responses), 1, "confidence narration is requested first")
                     self.assertEqual(responses[0]["response"]["metadata"],
-                                     {"runId": pending["runId"], "routeIntro": pending["introId"]})
+                                     {"runId": pending["runId"], "confidenceNarration": bridge._confidence_narration_id})
                     self.assertEqual(responses[0]["response"]["tool_choice"], "none")
                     output = next(e for e in upstream.sent if e["type"] == "conversation.item.create"
                                   and e["item"]["type"] == "function_call_output")
                     facts = json.loads(output["item"]["output"])["facts"]
-                    self.assertIn(facts, responses[0]["response"]["instructions"])
                     self.assertLess(upstream.sent.index(output), upstream.sent.index(responses[0]))
+                    upstream.incoming = [
+                        {"type": "response.created", "response": {
+                            "id": "confidence-1", "metadata": responses[0]["response"]["metadata"]}},
+                        {"type": "response.done", "response": {"id": "confidence-1", "status": "completed"}}]
+                    await bridge.pump_upstream()
+                    responses = [e for e in upstream.sent if e["type"] == "response.create"]
+                    self.assertEqual(len(responses), 2, "prefetch starts before visual readiness")
+                    self.assertEqual(responses[1]["response"]["metadata"],
+                                     {"runId": pending["runId"], "routeIntro": pending["introId"]})
+                    self.assertEqual(responses[1]["response"]["tool_choice"], "none")
+                    self.assertIn(facts, responses[1]["response"]["instructions"])
                     for _ in range(2):
                         browser.incoming.put_nowait(json.dumps({
                             "type": "route_intro.ready", "runId": pending["runId"],
@@ -239,7 +253,7 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
                     with self.assertRaises(server.WebSocketDisconnect):
                         await bridge.pump_browser()
                     self.assertFalse(bridge._route_intro_pending)
-                    self.assertEqual(sum(e["type"] == "response.create" for e in upstream.sent), 1)
+                    self.assertEqual(sum(e["type"] == "response.create" for e in upstream.sent), 2)
                     self.assertEqual(session.phase, "briefing")
                     self.assertEqual(session.state.draftRoute, [])
                 finally:

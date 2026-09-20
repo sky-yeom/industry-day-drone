@@ -352,7 +352,7 @@ class LiveMissionRunner(MissionRunner):
                 self._work.cancel()
                 await asyncio.gather(self._work, return_exceptions=True)
         elif expired_terminal and self._work and not self._work.done():
-            # Running out of rescue time ends the scoring, not the flight. The
+            # Running out of report time ends the scoring, not the flight. The
             # aircraft still owns a route that finishes on its own landing pad,
             # and cutting its authority here would strand it hovering indoors.
             # _run_live is already waiting for that landing, so wait with it and
@@ -425,9 +425,9 @@ class LiveMissionRunner(MissionRunner):
                     await self._notify()
                     try:
                         evidence = await self.vision.analyze(frame,
-                            search_prompt=self.session.data["userPromptText"],
-                            appearance_constraints=self.session.data["appearanceConstraints"],
-                            unsupported_appearance=self.session.data["unsupportedAppearance"],
+                            search_prompt=person["promptText"],
+                            appearance_constraints=person["appearanceConstraints"],
+                            unsupported_appearance=person["unsupportedAppearance"],
                             scene_context={"monitor_id": monitor, "label": person["label"],
                                            "report": person["clue"]})
                     except VisionError as exc:
@@ -435,7 +435,7 @@ class LiveMissionRunner(MissionRunner):
                         # aircraft. Stopping here would leave it hovering wherever a
                         # cloud call happened to fail; the safest place for it is its
                         # own landing pad at the end of the route. Keep the photo
-                        # unjudged, tell the operator, and fly on. The rescue deadline
+                        # unjudged, tell the operator, and fly on. The report deadline
                         # is untouched, so an unjudged person still times out honestly.
                         log.warning("analysis reached no verdict for %s (%s: %s); continuing the route",
                                     monitor, type(exc).__name__,

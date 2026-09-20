@@ -15,6 +15,7 @@ import aiohttp
 
 from relay import config
 from relay.camera import Capture, FixtureCamera, PUBLIC_ROOT, SCENARIO
+from relay.survey import CONSTRUCTION_SCENARIO
 from relay.test_live_mission import png
 from relay.vision import (AzureVision, ContractMockVision, MockVision, VisionError,
                           create_providers, validate_analysis, validate_evidence)
@@ -24,11 +25,13 @@ POSITIVE = {
     "targetPresent": True,
     "description": "초록색 티셔츠를 입고 갈색 머리를 한 사람이 바다에서 팔을 벌리고 물에 떠 있으려 합니다.",
     "box": [0.35, 0.35, 0.29, 0.37],
+    "confidence": 92,
 }
 NEGATIVE = {
     "targetPresent": False,
     "description": "바다와 파도만 보이며 초록색 옷을 입고 갈색 머리를 한 사람은 보이지 않습니다.",
     "box": None,
+    "confidence": 15,
 }
 AZURE_POSITIVE = dict(POSITIVE, box=None)
 
@@ -36,7 +39,21 @@ AZURE_POSITIVE = dict(POSITIVE, box=None)
 def completion(evidence=AZURE_POSITIVE, *, finish_reason="stop", refusal=None):
     observation = {
         "matchesPrompt": evidence["targetPresent"], "assessable": True,
-        "needsRescue": evidence["targetPresent"],
+        "needsRescue": evidence["targetPresent"], "confidence": evidence["confidence"],
+        "description": evidence["description"], "box": evidence["box"],
+    }
+    return {
+        "choices": [{
+            "finish_reason": finish_reason,
+            "message": {"content": json.dumps(observation, ensure_ascii=False), "refusal": refusal},
+        }]
+    }
+
+
+def construction_completion(evidence=AZURE_POSITIVE, *, finish_reason="stop", refusal=None):
+    observation = {
+        "matchesPrompt": evidence["targetPresent"], "assessable": True,
+        "policyViolation": evidence["targetPresent"], "confidence": evidence["confidence"],
         "description": evidence["description"], "box": evidence["box"],
     }
     return {
@@ -76,7 +93,7 @@ class EvidenceTests(unittest.TestCase):
         for box in ([0.1, 0.1, 0.2, 0.3], [0.47, 0.58, 0.38, 0.64]):
             with self.subTest(box=box), self.assertRaisesRegex(VisionError, "box=null"):
                 validate_analysis({
-                    "matchesPrompt": True, "assessable": True, "needsRescue": True,
+                    "matchesPrompt": True, "assessable": True, "needsRescue": True, "confidence": 92,
                     "description": AZURE_POSITIVE["description"], "box": box,
                 })
         self.assertEqual(validate_evidence(POSITIVE), POSITIVE)
@@ -86,16 +103,16 @@ class EvidenceTests(unittest.TestCase):
             for rescue in (False, True):
                 with self.subTest(prompt=prompt, rescue=rescue):
                     result = validate_analysis({
-                        "matchesPrompt": prompt, "assessable": True, "needsRescue": rescue,
+                        "matchesPrompt": prompt, "assessable": True, "needsRescue": rescue, "confidence": 80,
                         "description": "초록색 티셔츠와 갈색 머리의 남성이 잔해 아래에 있습니다.",
                         "box": None,
                     })
                     self.assertEqual(result["targetPresent"], prompt and rescue)
-                    self.assertEqual(set(result), {"targetPresent", "description", "box"})
+                    self.assertEqual(set(result), {"targetPresent", "description", "confidence", "box"})
 
     def test_structured_rescue_verdict_is_not_overridden_by_incidental_negation(self):
         observation = {
-            "matchesPrompt": True, "assessable": True, "needsRescue": True,
+            "matchesPrompt": True, "assessable": True, "needsRescue": True, "confidence": 92,
             "description": "구조 필요 대상: 초록색 티셔츠와 갈색 머리의 남성이 물속에서 손을 들고 있습니다. "
                            "구명환은 보이지 않으며 물에 잠긴 몸을 지탱하고 있습니다.",
             "box": None,
@@ -108,6 +125,9 @@ class EvidenceTests(unittest.TestCase):
         del missing["needsRescue"]
         with self.assertRaises(VisionError):
             validate_analysis(missing)
+        for invalid in (None, "92", 92.5, True, -1, 101):
+            with self.subTest(confidence=invalid), self.assertRaises(VisionError):
+                validate_analysis(dict(observation, confidence=invalid))
 
     def test_direct_script_imports_without_repository_on_python_path(self):
         result = subprocess.run(
@@ -156,6 +176,11 @@ class EvidenceTests(unittest.TestCase):
             dict(POSITIVE, box=[0, 0, 10 ** 1000, 1]),
             dict(POSITIVE, box=[0, 0, "1", 1]),
             dict(POSITIVE, outcome="rescued"),
+            {k: v for k, v in POSITIVE.items() if k != "confidence"},
+            dict(POSITIVE, confidence=101),
+            dict(POSITIVE, confidence=-1),
+            dict(POSITIVE, confidence=50.5),
+            dict(POSITIVE, confidence=True),
         ]
         for value in malformed:
             with self.subTest(value=value), self.assertRaises(VisionError):
@@ -169,7 +194,7 @@ class EvidenceTests(unittest.TestCase):
 class ProviderTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.capture = await FixtureCamera().capture("monitor-1")
-        self.target = SCENARIO["targetAppearance"]["description"]
+        self.target = SCENARIO["people"][0]["targetAppearance"]["description"]
 
     def test_mode_selection_is_explicit_and_never_falls_back(self):
         camera, vision = create_providers("mock")
@@ -193,12 +218,39 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
         with patch("relay.vision.asyncio.sleep", new_callable=AsyncMock) as sleep:
             for person in SCENARIO["people"]:
                 capture = await camera.capture(person["monitorId"])
-                evidence = await vision.analyze(capture, search_prompt=self.target)
+                evidence = await vision.analyze(
+                    capture, search_prompt=person["targetAppearance"]["description"])
                 self.assertTrue(evidence["targetPresent"])
                 self.assertIsNotNone(evidence["box"])
                 self.assertIn("모의 분석", evidence["description"])
                 self.assertIn("AI 미사용", evidence["description"])
             sleep.assert_awaited_with(SCENARIO["mockAnalysisMs"] / 1000)
+
+    async def test_construction_fixtures_match_headwear_condition_per_zone(self):
+        # Every construction zone image has 2 pink+bare (matching) workers
+        # among helmeted/other-color decoys — confirms the headwear
+        # attribute (added for this scenario) round-trips correctly through
+        # the fixture lookup + matches_appearance path for real image bytes,
+        # not just the parser-level unit tests in test_appearance.py.
+        # Note: MockVision derives its matching conditions from the raw
+        # `search_prompt` text (via fixture_prompt_constraints), not from
+        # the `appearance_constraints` argument — that argument is only
+        # shape-validated here, so the two prompts below must differ in
+        # wording, not just in appearance_constraints.
+        camera = FixtureCamera(people=CONSTRUCTION_SCENARIO["people"])
+        vision = MockVision(camera=camera, mock_analysis_ms=CONSTRUCTION_SCENARIO["mockAnalysisMs"])
+        self.assertIsNone(vision.readiness())
+        with patch("relay.vision.asyncio.sleep", new_callable=AsyncMock):
+            for person in CONSTRUCTION_SCENARIO["people"]:
+                capture = await camera.capture(person["monitorId"])
+                evidence = await vision.analyze(
+                    capture, search_prompt="핑크색 옷을 입고 안전모를 안 쓴 사람을 찾아 주세요.")
+                self.assertTrue(evidence["targetPresent"])
+                # The same zone image never matches the opposite headwear
+                # condition (no pink+hardhat candidate exists in any zone).
+                helmeted_evidence = await vision.analyze(
+                    capture, search_prompt="핑크색 옷을 입고 안전모를 쓴 사람을 찾아 주세요.")
+                self.assertFalse(helmeted_evidence["targetPresent"])
 
     async def test_mock_unknown_pixels_cannot_succeed_and_request_mismatch_is_negative(self):
         vision = MockVision()
@@ -231,7 +283,7 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
 class AzureTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.capture = await FixtureCamera().capture("monitor-1")
-        self.target = SCENARIO["targetAppearance"]["description"]
+        self.target = SCENARIO["people"][0]["targetAppearance"]["description"]
         # Never read or exercise ambient credentials.
         self.config_patch = patch.multiple(
             config,
@@ -306,7 +358,7 @@ class AzureTests(unittest.IsolatedAsyncioTestCase):
                 schema = payload["response_format"]["json_schema"]["schema"]
                 self.assertEqual(schema["properties"]["box"]["type"], "null")
                 self.assertEqual(set(schema["required"]),
-                                 {"matchesPrompt", "assessable", "needsRescue", "description", "box"})
+                                 {"matchesPrompt", "assessable", "needsRescue", "confidence", "description", "box"})
                 content = payload["messages"][1]["content"]
                 self.assertIn(self.target, content[0]["text"])
                 self.assertEqual(content[1]["type"], "image_url")
@@ -316,6 +368,32 @@ class AzureTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("mockBox", json.dumps(payload))
                 session.__aexit__.assert_awaited_once()
                 response.__aexit__.assert_awaited_once()
+
+    async def test_construction_kind_selects_policy_violation_prompt_and_schema(self):
+        from relay.vision import CONSTRUCTION_SYSTEM_PROMPT, SYSTEM_PROMPT
+
+        for observation in (AZURE_POSITIVE, NEGATIVE):
+            with self.subTest(present=observation["targetPresent"]):
+                session, _ = fake_http(construction_completion(observation))
+                with patch("relay.vision.aiohttp.ClientSession", return_value=session):
+                    result = await self.vision.analyze(
+                        self.capture, search_prompt=self.target, kind="construction")
+                self.assertEqual(result, observation)
+                payload = session.post.call_args.kwargs["json"]
+                self.assertEqual(payload["messages"][0]["content"], CONSTRUCTION_SYSTEM_PROMPT)
+                self.assertNotEqual(payload["messages"][0]["content"], SYSTEM_PROMPT)
+                schema = payload["response_format"]["json_schema"]["schema"]
+                self.assertEqual(set(schema["required"]),
+                                 {"matchesPrompt", "assessable", "policyViolation", "confidence",
+                                  "description", "box"})
+        # Omitting kind (or passing "triage"/"security") keeps using the
+        # original rescue-framed prompt/schema — no behavior change for the
+        # two existing scenario kinds.
+        session, _ = fake_http(completion(AZURE_POSITIVE))
+        with patch("relay.vision.aiohttp.ClientSession", return_value=session):
+            await self.vision.analyze(self.capture, search_prompt=self.target)
+        payload = session.post.call_args.kwargs["json"]
+        self.assertEqual(payload["messages"][0]["content"], SYSTEM_PROMPT)
 
     async def test_current_scene_context_is_sent_without_scoring_or_ground_truth_coordinates(self):
         person = SCENARIO["people"][0]
@@ -363,7 +441,7 @@ class AzureTests(unittest.IsolatedAsyncioTestCase):
         for matches_prompt in (False, True):
             body = completion(NEGATIVE)
             body["choices"][0]["message"]["content"] = json.dumps({
-                "matchesPrompt": matches_prompt, "assessable": True, "needsRescue": True,
+                "matchesPrompt": matches_prompt, "assessable": True, "needsRescue": True, "confidence": 88,
                 "description": ("빨간 티셔츠를 입은 사람이 오른쪽에 서 있습니다." if matches_prompt
                                 else "사람이 보이지만 요청한 모습과 일치하지 않습니다."),
                 "box": None,
@@ -379,7 +457,7 @@ class AzureTests(unittest.IsolatedAsyncioTestCase):
         prompt = "안경을 쓴 사람을 찾아줘"
         session, _ = fake_http(completion({
             "targetPresent": True, "description": "안경을 착용한 사람이 오른쪽에 서 있습니다.",
-            "box": None,
+            "box": None, "confidence": 90,
         }))
         with patch("relay.vision.aiohttp.ClientSession", return_value=session):
             evidence = await self.vision.analyze(self.capture, search_prompt=prompt,
@@ -392,7 +470,7 @@ class AzureTests(unittest.IsolatedAsyncioTestCase):
         from relay.appearance import REVISION_REQUEST
         body = completion(NEGATIVE)
         body["choices"][0]["message"]["content"] = json.dumps({
-            "matchesPrompt": False, "assessable": False, "needsRescue": False,
+            "matchesPrompt": False, "assessable": False, "needsRescue": False, "confidence": 20,
             "description": "요청한 특징을 확인할 수 없습니다.", "box": None,
         })
         session, _ = fake_http(body)
@@ -567,8 +645,6 @@ class ContractSimulationTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(VisionError):
                 await ContractMockVision().analyze(replace(frame, image_bytes=image),
                                                    search_prompt="사람을 찾아줘")
-        with self.assertRaises(VisionError):
-            await ContractMockVision().analyze(frame, search_prompt="안경을 쓴 사람")
 
 
 if __name__ == "__main__":

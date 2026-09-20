@@ -239,7 +239,7 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_whole_route_once_waits_for_actual_arrival_and_matching_frames(self):
         self.vision.results = [
-            {"targetPresent": True, "description": "초록색 티셔츠와 갈색 머리의 남성이 보입니다.", "box": None}
+            {"targetPresent": True, "description": "초록색 티셔츠와 갈색 머리의 남성이 보입니다.", "box": None, "confidence": 90}
             for _ in range(3)
         ]
         first, second = await asyncio.gather(self.runner.launch(), self.runner.launch())

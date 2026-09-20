@@ -1,0 +1,110 @@
+{
+  "title": "코드 블루: 보안 침입 감지",
+  "briefing": [
+    "세 곳에서 동시에 경보가 울렸어! 금고, 서버실, 임원실. 드론은 한 대뿐이라 한 곳씩만 확인할 수 있어.",
+    "세 곳 중 두 곳은 센서 오작동이나 직원 때문에 울린 오경보고, 한 곳에만 진짜 침입자가 있어.",
+    "먼저 침입자가 어떤 모습인지 하나만 말해줘. 그다음 어디부터 확인할지 함께 정하자. 시간을 끌면 진짜 침입자를 놓칠 수 있어!"
+  ],
+  "travelMs": 7000,
+  "captureMs": 1000,
+  "mockAnalysisMs": 2000,
+  "maxDetectionAttempts": 2,
+  "injuryWindowMs": 20000,
+  "people": [
+    {
+      "id": "zone-1",
+      "monitorId": "monitor-1",
+      "label": "금고",
+      "clue": "문 센서만 반응했고, 움직임은 감지되지 않았습니다.",
+      "reportDetail": "112(경찰 신고 대표번호)에 알릴 실제 침입 증거가 없습니다.",
+      "falseAlarm": true,
+      "falseAlarmReveal": "금고는 문 센서만 반응했고 실제로는 아무도 없었어. 센서 오작동, 오경보였어.",
+      "initiallyInjured": false,
+      "vulnerable": false,
+      "dramaticRank": 2,
+      "clueRank": 3,
+      "deadlineMs": 120000,
+      "image": "/monitors/security-vault.png",
+      "x": 20,
+      "y": 40,
+      "mockBox": [
+        0.3,
+        0.3,
+        0.3,
+        0.4
+      ],
+      "targetAppearance": {
+        "shirtColor": "black",
+        "hairColor": "black",
+        "garment": "t-shirt",
+        "description": "검은색 티셔츠를 입고 검은 머리를 한 사람",
+        "referenceImage": "/monitors/security-reference-suspect.png",
+        "referenceAlt": "검은색 티셔츠를 입고 검은 머리를 한 용의자 참고 사진"
+      },
+      "siteName": "금고"
+    },
+    {
+      "id": "zone-2",
+      "monitorId": "monitor-2",
+      "label": "서버실",
+      "clue": "출입 카드가 여러 번 실패하다가 결국 인증에 성공했습니다.",
+      "reportDetail": "서버실 내부 용의자 위치를 112(경찰 신고 대표번호)에 전달합니다.",
+      "falseAlarm": false,
+      "initiallyInjured": false,
+      "vulnerable": false,
+      "dramaticRank": 3,
+      "clueRank": 1,
+      "deadlineMs": 96000,
+      "image": "/monitors/security-server-room.png",
+      "x": 50,
+      "y": 35,
+      "mockBox": [
+        0.38,
+        0.3,
+        0.26,
+        0.42
+      ],
+      "targetAppearance": {
+        "shirtColor": "black",
+        "hairColor": "black",
+        "garment": "t-shirt",
+        "description": "검은색 티셔츠를 입고 검은 머리를 한 사람",
+        "referenceImage": "/monitors/security-reference-suspect.png",
+        "referenceAlt": "검은색 티셔츠를 입고 검은 머리를 한 용의자 참고 사진"
+      },
+      "siteName": "서버실"
+    },
+    {
+      "id": "zone-3",
+      "monitorId": "monitor-3",
+      "label": "임원실",
+      "clue": "움직임이 감지됐고 창문이 살짝 열려 있습니다.",
+      "reportDetail": "112(경찰 신고 대표번호)에 알릴 실제 침입 증거가 없습니다.",
+      "falseAlarm": true,
+      "falseAlarmReveal": "임원실은 그냥 청소 담당 직원이었어. 창문은 환기하려고 열어둔 거였고.",
+      "initiallyInjured": false,
+      "vulnerable": false,
+      "dramaticRank": 1,
+      "clueRank": 2,
+      "deadlineMs": 160000,
+      "image": "/monitors/security-exec-office.png",
+      "x": 78,
+      "y": 40,
+      "mockBox": [
+        0.35,
+        0.32,
+        0.28,
+        0.4
+      ],
+      "targetAppearance": {
+        "shirtColor": "black",
+        "hairColor": "black",
+        "garment": "t-shirt",
+        "description": "검은색 티셔츠를 입고 검은 머리를 한 사람",
+        "referenceImage": "/monitors/security-reference-suspect.png",
+        "referenceAlt": "검은색 티셔츠를 입고 검은 머리를 한 용의자 참고 사진"
+      },
+      "siteName": "임원실"
+    }
+  ]
+}

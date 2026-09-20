@@ -10,7 +10,7 @@ from fastapi import WebSocketDisconnect
 from starlette.websockets import WebSocketState
 from relay import server
 from relay import tools
-from relay.survey import SCENARIO, SurveySession
+from relay.survey import MONITOR_IDS, SCENARIO, SurveySession
 from relay.test_mission_runner import FakeCamera, FakeVision, settle
 from relay.test_survey import PROMPT_ARGS, SEARCH_PROMPT, ready
 
@@ -76,6 +76,15 @@ def participant_turn(bridge, text):
     return bridge.voice_turns.latest
 
 
+def confirm_all_sites(session, prompt_text=None, appearance_constraints=None, unsupported_appearance=None):
+    """Directly confirm every site's prompt on the session (bypassing voice/bridge)."""
+    prompt_text = SEARCH_PROMPT if prompt_text is None else prompt_text
+    outcome = None
+    for _ in MONITOR_IDS:
+        outcome = session.confirm_prompt(prompt_text, appearance_constraints, unsupported_appearance)
+    return outcome
+
+
 def spoken_reply(bridge, *, route_readback=False):
     response_id = f"reply-{len(bridge.voice_turns.responses)}"
     bridge.voice_turns.bind_response(response_id)
@@ -104,7 +113,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         await self.bridge.close()
 
     async def test_stable_command_ids_idempotence_and_validation(self):
-        self.session.confirm_prompt(SEARCH_PROMPT)
+        confirm_all_sites(self.session, SEARCH_PROMPT)
         args = {"monitor": "monitor-3"}
         first = await self.bridge.run_tool("select_stop", args, "request-1")
         second = await self.bridge.run_tool("select_stop", args, "request-1")
@@ -131,13 +140,14 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(f"읽을 문장: {tools.GREETING}", response["instructions"])
         self.assertIn("정확히 그대로", response["instructions"])
         self.assertNotIn("상황을 한 문장으로만 안내하세요", response["instructions"])
-        self.assertNotIn(SCENARIO["targetAppearance"]["description"], response["instructions"])
-        self.assertNotIn("초록색 티셔츠 입은 사람 찾으면", response["instructions"])
         self.assertIn("특징의 종류, 예시, 추천 답변을 말하지 않습니다", response["instructions"])
+        self.assertNotIn("초록색 티셔츠 입은 사람 찾으면", response["instructions"])
         self.assertEqual(response["tool_choice"], "none")
         self.assertEqual(self.session.data["promptPhase"], "briefing")
         self.assertEqual(self.session.data["userPromptText"], "")
         self.assertEqual(self.session.state.draftRoute, [])
+        for person in SCENARIO["people"]:
+            self.assertNotIn(person["targetAppearance"]["description"], response["instructions"])
 
     async def test_voice_confirms_saved_draft_without_replacement_arguments(self):
         definitions = {tool["name"]: tool for tool in tools.TOOLS}
@@ -186,7 +196,8 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(snapshot["appearanceConstraints"], constraints)
                 self.assertEqual(snapshot["unsupportedAppearance"], unsupported)
                 self.assertIn(text, outcome["facts"])
-                self.assertNotIn(SCENARIO["targetAppearance"]["description"], outcome["facts"])
+                for person in SCENARIO["people"]:
+                    self.assertNotIn(person["targetAppearance"]["description"], outcome["facts"])
 
     async def test_departure_closes_voice_but_mission_and_text_results_continue(self):
         ready(self.session)
@@ -223,7 +234,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([e["responseId"] for e in self.browser.events if e["type"] == "mission.launch.done"], ["departure"])
         self.vision.block.set()
         await settle(lambda: any(e["type"] == "mission.debrief" for e in self.browser.events))
-        self.assertEqual(self.session.data["score"]["rescuedCount"], 3)
+        self.assertEqual(self.session.data["score"]["reportedCount"], 3)
         self.assertEqual(sum(e["type"] == "response.create" for e in upstream.sent), 1)
         self.assertFalse(any(e["type"] == "mission.debrief.response" for e in self.browser.events))
 
@@ -342,7 +353,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(e["type"] == "mission.debrief.done" for e in self.browser.events))
 
     async def test_voice_tool_and_browser_share_dispatch_no_response_overlap(self):
-        self.session.confirm_prompt(SEARCH_PROMPT)
+        confirm_all_sites(self.session, SEARCH_PROMPT)
         upstream = Upstream()
         self.bridge.upstream = upstream
         self.bridge._response_active = True
@@ -709,6 +720,8 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             {"type": "command", "name": name, "args": args, "requestId": str(i)}
             for i, (name, args) in enumerate((
                 ("confirm_prompt", PROMPT_ARGS),
+                ("confirm_prompt", PROMPT_ARGS),
+                ("confirm_prompt", PROMPT_ARGS),
                 ("select_stop", {"monitor": "monitor-3"}),
                 ("select_stop", {"monitor": "monitor-2"}),
                 ("confirm_route", {}),
@@ -727,20 +740,34 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(browser.events[0]["type"], "relay.ready")
         self.assertEqual(browser.events[1]["state"]["missionPhase"], "briefing")
         self.assertEqual(session.phase, "complete")
-        self.assertEqual(session.data["score"]["rescuedCount"], 3)
+        self.assertEqual(session.data["score"]["reportedCount"], 3)
         self.assertTrue(browser.closed)
 
     async def test_route_intro_prefetches_before_client_ready_signal(self):
         upstream = Upstream()
         self.bridge.upstream = upstream
+        for _ in range(len(MONITOR_IDS) - 1):
+            self.session.confirm_prompt(**PROMPT_ARGS)
         participant_turn(self.bridge, SEARCH_PROMPT)
         self.session.prepare_prompt(**PROMPT_ARGS)
         spoken_reply(self.bridge)
         await self.bridge.handle_tool_call({
             "name": "confirm_prompt", "call_id": "prompt-1",
             "arguments": "{}"}, turn=participant_turn(self.bridge, "좋아"))
-        self.assertFalse(self.bridge._route_intro_pending)
+        # A short, standalone confidence narration is requested first (spoken
+        # immediately on the prompting page); route intro stays pending until
+        # that one finishes.
+        self.assertTrue(self.bridge._route_intro_pending)
         self.assertEqual(sum(e["type"] == "response.create" for e in upstream.sent), 1)
+        confidence_id = self.bridge._confidence_narration_id
+        upstream.incoming = [
+            {"type": "response.created", "response": {
+                "id": "confidence-1", "metadata": {
+                    "runId": self.session.run_id, "confidenceNarration": confidence_id}}},
+            {"type": "response.done", "response": {"id": "confidence-1", "status": "completed"}}]
+        await self.bridge.pump_upstream()
+        self.assertFalse(self.bridge._route_intro_pending)
+        self.assertEqual(sum(e["type"] == "response.create" for e in upstream.sent), 2)
         pending = next(e for e in self.browser.events if e["type"] == "route_intro.pending")
         state_index = next(i for i, e in enumerate(self.browser.events)
                            if e["type"] == "route.state")
@@ -751,12 +778,14 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(WebSocketDisconnect):
             await self.bridge.pump_browser()
         self.assertFalse(self.bridge._route_intro_pending)
-        self.assertEqual(sum(e["type"] == "response.create" for e in upstream.sent), 1)
+        self.assertEqual(sum(e["type"] == "response.create" for e in upstream.sent), 2)
 
     async def test_command_prompt_first_guard_and_validation(self):
         for name, args in (("select_stop", {"monitor": "monitor-3"}), ("confirm_route", {}),
                            ("launch_mission", {}), ("confirm_prompt", {"prompt_text": " "})):
             self.assertFalse((await self.bridge.run_tool(name, args))["ok"])
+        for _ in range(len(MONITOR_IDS) - 1):
+            self.session.confirm_prompt(**PROMPT_ARGS)
         self.assertTrue((await self.bridge.run_tool(
             "confirm_prompt", PROMPT_ARGS, "participant-prompt"))["ok"])
         self.assertEqual(self.session.data["userPromptText"], SEARCH_PROMPT)
@@ -822,6 +851,12 @@ class StrictVoiceTests(unittest.IsolatedAsyncioTestCase):
             {"type": "response.done", "response": {"id": response_id, "status": "completed"}})
 
     async def intro(self):
+        # Two earlier sites are already confirmed directly on the session (no
+        # bridge/voice interaction to assert on); this helper exercises the
+        # bridge-driven flow for the third and final confirmation only, which
+        # is the one that reveals the case briefing and starts the route intro.
+        for _ in range(len(MONITOR_IDS) - 1):
+            self.session.confirm_prompt(**PROMPT_ARGS)
         self.session.prepare_prompt(**PROMPT_ARGS)
         spoken_reply(self.bridge)
         turn = participant_turn(self.bridge, "응")
@@ -833,7 +868,18 @@ class StrictVoiceTests(unittest.IsolatedAsyncioTestCase):
         pending = self.events("route_intro.pending")[-1]
         await self.provider_events({
             "type": "response.done", "response": {"id": "confirm-tool", "status": "completed"}})
+        # Confidence narration is a short, separate response spoken first (on
+        # the prompting page); the case/route intro below is only requested
+        # once that one finishes.
         self.assertEqual(len(self.requests()), 1)
+        confidence_metadata = self.requests()[-1]["metadata"]
+        self.assertEqual(confidence_metadata,
+                         {"runId": self.session.run_id, "confidenceNarration": self.bridge._confidence_narration_id})
+        await self.provider_events({
+            "type": "response.created", "response": {"id": "confidence-first", "metadata": confidence_metadata}})
+        await self.provider_events({
+            "type": "response.done", "response": {"id": "confidence-first", "status": "completed"}})
+        self.assertEqual(len(self.requests()), 2)
         metadata = self.requests()[-1]["metadata"]
         self.assertEqual(metadata, {"runId": self.session.run_id, "routeIntro": pending["introId"]})
         await self.provider_events({
@@ -997,6 +1043,8 @@ class StrictVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.events("voice.input.ready")), 2)
 
     async def test_late_admitted_consent_prefetches_once_without_opening_between_turns(self):
+        for _ in range(len(MONITOR_IDS) - 1):
+            self.session.confirm_prompt(**PROMPT_ARGS)
         self.session.prepare_prompt(**PROMPT_ARGS)
         spoken_reply(self.bridge)
         await self.admit("consent")
@@ -1010,10 +1058,15 @@ class StrictVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.data["userPromptText"], SEARCH_PROMPT)
         self.assertEqual(len(self.events("route_intro.pending")), 1)
         self.assertEqual(len(self.requests()), 1)
-        self.assertEqual(self.requests()[0]["metadata"]["routeIntro"], self.bridge._route_intro_id)
+        self.assertEqual(self.requests()[0]["metadata"]["confidenceNarration"],
+                         self.bridge._confidence_narration_id)
         self.assertEqual(len(self.events("voice.input.ready")), 1)
-        await self.finish("intro", **self.requests()[0]["metadata"])
-        self.assertEqual(self.events("voice.input.ready")[-1]["responseIds"], ["native-consent", "intro"])
+        await self.finish("confidence", **self.requests()[0]["metadata"])
+        self.assertEqual(len(self.requests()), 2)
+        self.assertEqual(self.requests()[1]["metadata"]["routeIntro"], self.bridge._route_intro_id)
+        await self.finish("intro", **self.requests()[1]["metadata"])
+        self.assertEqual(self.events("voice.input.ready")[-1]["responseIds"],
+                         ["native-consent", "confidence", "intro"])
 
     async def test_missing_or_failed_asr_recovers_without_discarding_input(self):
         self.bridge.INPUT_TIMEOUT_SECONDS = 0.01
@@ -1134,12 +1187,12 @@ class StrictVoiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_intro_mapping_precedes_created_and_prefetch_does_not_wait_for_map(self):
         pending = await self.intro()
-        request = self.requests()[0]
+        request = self.requests()[1]
         self.assertEqual(request["tool_choice"], "none")
         for person in self.session.scenario["people"]:
             self.assertIn(person["clue"], request["instructions"])
         mapped = self.events("route_intro.response")[0]
-        created = self.events("response.created")[0]
+        created = self.events("response.created")[-1]
         self.assertLess(self.browser.events.index(mapped), self.browser.events.index(created))
         self.assertLess(self.browser.events.index(pending),
                         next(i for i, e in enumerate(self.browser.events) if e["type"] == "route.state"))
@@ -1148,8 +1201,8 @@ class StrictVoiceTests(unittest.IsolatedAsyncioTestCase):
         await self.browser_messages(
             pending | {"type": "route_intro.ready"},
             pending | {"type": "route_intro.ready"})
-        self.assertEqual(len(self.requests()), 1)
-        self.assertEqual(self.events("voice.input.ready")[-1]["responseIds"], ["intro-first"])
+        self.assertEqual(len(self.requests()), 2)
+        self.assertEqual(self.events("voice.input.ready")[-1]["responseIds"], ["confidence-first", "intro-first"])
 
     async def test_intro_buffer_retry_waits_for_done_and_map_and_only_retries_once(self):
         pending = await self.intro()
@@ -1159,20 +1212,21 @@ class StrictVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.events("route_intro.failed")[-1]["retrying"])
         await self.provider_events({
             "type": "response.done", "response": {"id": "intro-first", "status": "completed"}})
-        self.assertEqual(len(self.requests()), 1)
+        self.assertEqual(len(self.requests()), 2)
         self.assertFalse(self.events("voice.input.ready"))
         await self.browser_messages(pending | {"type": "route_intro.ready", "runId": "old"})
-        self.assertEqual(len(self.requests()), 1)
-        await self.browser_messages(pending | {"type": "route_intro.ready"})
         self.assertEqual(len(self.requests()), 2)
+        await self.browser_messages(pending | {"type": "route_intro.ready"})
+        self.assertEqual(len(self.requests()), 3)
         await self.provider_events({
             "type": "response.created", "response": {"id": "intro-retry", "metadata": self.requests()[-1]["metadata"]}})
         await self.browser_messages(retry | {"responseId": "intro-retry"})
         await self.provider_events({
             "type": "response.done", "response": {"id": "intro-retry", "status": "completed"}})
-        self.assertEqual(len(self.requests()), 2)
+        self.assertEqual(len(self.requests()), 3)
         self.assertFalse(self.events("route_intro.failed")[-1]["retrying"])
-        self.assertEqual(self.events("voice.input.ready")[-1]["responseIds"], ["intro-first", "intro-retry"])
+        self.assertEqual(self.events("voice.input.ready")[-1]["responseIds"],
+                         ["confidence-first", "intro-first", "intro-retry"])
         self.assertFalse(any(e["type"] == "response.cancel" for e in self.upstream.sent))
 
     async def test_intro_provider_failure_and_abort_retire_pending_retry(self):
@@ -1180,23 +1234,23 @@ class StrictVoiceTests(unittest.IsolatedAsyncioTestCase):
         await self.provider_events({
             "type": "response.done", "response": {"id": "intro-first", "status": "failed"}})
         self.assertTrue(self.events("route_intro.failed")[-1]["retrying"])
-        self.assertEqual(len(self.requests()), 1)
+        self.assertEqual(len(self.requests()), 2)
         self.session.abort_mission()
         await self.bridge.runner._notify()
         await self.browser_messages(pending | {"type": "route_intro.ready"})
         self.assertIsNone(self.bridge._route_intro_id)
-        self.assertEqual(len(self.requests()), 1)
+        self.assertEqual(len(self.requests()), 2)
         self.assertFalse(self.events("voice.input.ready"))
 
     async def test_intro_provider_error_waits_for_terminal_response_without_cancel(self):
         pending = await self.intro()
         await self.provider_events({"type": "error", "error": {"code": "response_failed"}})
         await self.browser_messages(pending | {"type": "route_intro.ready"})
-        self.assertEqual(len(self.requests()), 1)
+        self.assertEqual(len(self.requests()), 2)
         self.assertTrue(self.bridge._response_active)
         await self.provider_events({
             "type": "response.done", "response": {"id": "intro-first", "status": "failed"}})
-        self.assertEqual(len(self.requests()), 2)
+        self.assertEqual(len(self.requests()), 3)
         self.assertEqual(len(self.events("route_intro.failed")), 1)
         self.assertFalse(any(e["type"] == "response.cancel" for e in self.upstream.sent))
 

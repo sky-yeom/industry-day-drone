@@ -1,0 +1,93 @@
+{
+  "title": "건설 현장 안전 점검",
+  "briefing": [
+    "건설 현장 세 구역에서 안전 점검이 필요해! 위쪽 통로, 가운데 기초 공사 구역, 오른쪽 플랫폼, 이렇게 세 곳을 드론 한 대로 한 곳씩 확인해야 해.",
+    "핑크색 작업복을 입고 안전모를 쓰지 않은 사람을 찾아서 현장 안전관리자에게 위치를 신고해야 해.",
+    "먼저 어떤 사람을 찾아야 하는지 말해줘. 주변 구조물이나 자재를 기준으로 위치를 알려주면 더 정확하게 신고할 수 있어."
+  ],
+  "travelMs": 7000,
+  "captureMs": 1000,
+  "mockAnalysisMs": 2000,
+  "maxDetectionAttempts": 2,
+  "injuryWindowMs": 999999999,
+  "people": [
+    {
+      "id": "zone-1",
+      "monitorId": "monitor-1",
+      "label": "위쪽 통로",
+      "clue": "좁은 콘크리트 통로를 따라 작업자들이 자재를 점검하고 있습니다.",
+      "reportDetail": "오른쪽 통로, 철근 자재 더미 근처에서 위반 사항을 안전관리자에게 전달합니다.",
+      "initiallyInjured": false,
+      "vulnerable": false,
+      "noticeableRank": 2,
+      "carefulRank": 3,
+      "deadlineMs": 999999999,
+      "image": "/monitors/construction-upper-walkway.png",
+      "x": 20,
+      "y": 40,
+      "mockBox": [0.57, 0.22, 0.10, 0.24],
+      "targetAppearance": {
+        "shirtColor": "pink",
+        "hairColor": "black",
+        "garment": "t-shirt",
+        "headwear": "bare",
+        "description": "핑크색 작업복을 입고 안전모를 쓰지 않은 사람",
+        "referenceImage": "/monitors/construction-reference-worker.png",
+        "referenceAlt": "핑크색 작업복을 입고 안전모를 쓰지 않은 참고 사진"
+      },
+      "siteName": "위쪽 통로"
+    },
+    {
+      "id": "zone-2",
+      "monitorId": "monitor-2",
+      "label": "기초 공사 구역",
+      "clue": "쌓아 둔 목재와 철근 더미 주변에서 작업자들이 자재를 옮기고 있습니다.",
+      "reportDetail": "목재 자재 더미 옆에서 위반 사항을 안전관리자에게 전달합니다.",
+      "initiallyInjured": false,
+      "vulnerable": false,
+      "noticeableRank": 1,
+      "carefulRank": 2,
+      "deadlineMs": 999999999,
+      "image": "/monitors/construction-foundation-area.png",
+      "x": 50,
+      "y": 35,
+      "mockBox": [0.29, 0.32, 0.06, 0.20],
+      "targetAppearance": {
+        "shirtColor": "pink",
+        "hairColor": "black",
+        "garment": "t-shirt",
+        "headwear": "bare",
+        "description": "핑크색 작업복을 입고 안전모를 쓰지 않은 사람",
+        "referenceImage": "/monitors/construction-reference-worker.png",
+        "referenceAlt": "핑크색 작업복을 입고 안전모를 쓰지 않은 참고 사진"
+      },
+      "siteName": "기초 공사 구역"
+    },
+    {
+      "id": "zone-3",
+      "monitorId": "monitor-3",
+      "label": "오른쪽 플랫폼",
+      "clue": "개방된 바닥 가장자리 근처에서 작업자들이 거푸집과 배관 자재를 다루고 있습니다.",
+      "reportDetail": "배관 자재 앞, 개방된 바닥 가장자리 근처에서 위반 사항을 안전관리자에게 전달합니다.",
+      "initiallyInjured": false,
+      "vulnerable": false,
+      "noticeableRank": 3,
+      "carefulRank": 1,
+      "deadlineMs": 999999999,
+      "image": "/monitors/construction-side-platform.png",
+      "x": 78,
+      "y": 40,
+      "mockBox": [0.41, 0.35, 0.11, 0.29],
+      "targetAppearance": {
+        "shirtColor": "pink",
+        "hairColor": "black",
+        "garment": "t-shirt",
+        "headwear": "bare",
+        "description": "핑크색 작업복을 입고 안전모를 쓰지 않은 사람",
+        "referenceImage": "/monitors/construction-reference-worker.png",
+        "referenceAlt": "핑크색 작업복을 입고 안전모를 쓰지 않은 참고 사진"
+      },
+      "siteName": "오른쪽 플랫폼"
+    }
+  ]
+}

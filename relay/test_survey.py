@@ -7,8 +7,8 @@ from relay.survey import MONITOR_IDS, SCENARIO, SurveySession, validate_evidence
 from relay.appearance import REVISION_REQUEST
 
 
-POSITIVE = {"targetPresent": True, "description": "초록색 티셔츠를 입고 갈색 머리를 한 대상자가 보입니다.", "box": [0.1, 0.1, 0.2, 0.3]}
-NEGATIVE = {"targetPresent": False, "description": "대상자가 보이지 않습니다.", "box": None}
+POSITIVE = {"targetPresent": True, "description": "초록색 티셔츠를 입고 갈색 머리를 한 대상자가 보입니다.", "box": [0.1, 0.1, 0.2, 0.3], "confidence": 92}
+NEGATIVE = {"targetPresent": False, "description": "대상자가 보이지 않습니다.", "box": None, "confidence": 15}
 SEARCH_PROMPT = "초록색 티셔츠를 입고 갈색 머리를 한 사람을 찾아 주세요."
 APPEARANCE = [
     {"attribute": "shirtColor", "operator": "include", "values": ["green"]},
@@ -35,8 +35,16 @@ def capture(monitor="monitor-1", id="frame-1", image_bytes=b"pixels"):
                            content_type="image/png", image_url="data:image/png;base64,cGl4ZWxz")
 
 
+def confirm_all(session, prompt_args=PROMPT_ARGS):
+    """Confirm every site's prompt (relay-controlled sequencing), returning the final outcome."""
+    outcome = None
+    for _ in MONITOR_IDS:
+        outcome = session.confirm_prompt(**prompt_args)
+    return outcome
+
+
 def ready(session, route=("monitor-3", "monitor-1", "monitor-2")):
-    session.confirm_prompt(**PROMPT_ARGS)
+    confirm_all(session)
     session.select_stop(route[0])
     session.select_stop(route[1])
     session.confirm_route()
@@ -58,7 +66,7 @@ class SurveyTests(unittest.TestCase):
     def test_route_ready_is_not_launch_and_clear_prelaunch_only(self):
         s = self.session
         self.assertFalse(s.launch_mission()["ok"])
-        s.confirm_prompt(SEARCH_PROMPT)
+        confirm_all(s, {"prompt_text": SEARCH_PROMPT})
         self.assertFalse(s.select_stop(["monitor-1"])["ok"])
         self.assertFalse(s.select_stop("불난 집")["ok"])
         self.assertTrue(s.select_stop("monitor-3")["ok"])
@@ -112,6 +120,10 @@ class SurveyTests(unittest.TestCase):
             self.assertFalse(s.confirm_prompt(invalid)["ok"])
         self.assertTrue(s.confirm_prompt("  사람을 찾아줘  ")["ok"])
         self.assertEqual(s.data["userPromptText"], "사람을 찾아줘")
+        self.assertEqual(s.data["promptPhase"], "briefing")
+        self.assertFalse(s.select_stop("monitor-3")["ok"])
+        self.assertTrue(s.confirm_prompt("사람을 찾아줘")["ok"])
+        self.assertTrue(s.confirm_prompt("사람을 찾아줘")["ok"])
         self.assertEqual(s.data["promptPhase"], "confirmed")
         self.assertTrue(all(p["outcome"] is None for p in s.data["people"]))
         s.confirm_route()
@@ -130,10 +142,15 @@ class SurveyTests(unittest.TestCase):
                 self.assertEqual(session.data["promptPhase"], "briefing")
                 self.assertFalse(session.select_stop("monitor-1")["ok"])
 
-    def test_mock_rejects_unannotated_conditions_before_route_but_azure_keeps_visual_text(self):
+    def test_mock_ignores_unassessable_extras_but_azure_keeps_visual_text(self):
+        """Extra descriptors the mock vision engine can't verify (e.g. glasses)
+        no longer block prepare/confirm_prompt in mock mode — only the
+        recognizable color/garment/hair signal is used for matching, and
+        the raw text (including the unassessable part) is still recorded."""
         mock, azure = SurveySession(), SurveySession(mode="azure")
-        self.assertFalse(mock.prepare_prompt("안경 쓴 사람", [], ["안경"])["ok"])
-        self.assertFalse(mock.confirm_prompt("초록색 옷과 안경을 쓴 사람")["ok"])
+        self.assertTrue(mock.prepare_prompt("안경 쓴 사람", [], ["안경"])["ok"])
+        self.assertTrue(mock.confirm_prompt("초록색 옷과 안경을 쓴 사람")["ok"])
+        self.assertEqual(mock.data["userPromptText"], "초록색 옷과 안경을 쓴 사람")
         self.assertTrue(azure.prepare_prompt("안경 쓴 사람", [], ["안경"])["ok"])
         self.assertEqual(azure.pending_prompt["prompt_text"], "안경 쓴 사람")
         self.assertTrue(mock.prepare_prompt("빨간 옷")["ok"])
@@ -142,20 +159,25 @@ class SurveyTests(unittest.TestCase):
         from relay import tools
 
         self.assertEqual(tools.GREETING,
-                         "안녕! 난 Gibby라고해! 지금 긴급 구조 요청이 세 건 들어왔는데, 사람들 구조하기 위해 너의 도움이 필요해! "
-                         "어떤 사람을 찾아야 할지 알려줄래?")
-        self.assertEqual(tools.OPENING_QUESTION, "어떤 사람을 찾아야 할지 알려줄래?")
-        self.assertIn("네가 확인한 설명으로", SCENARIO["briefing"][1])
+                         "안녕! 난 Gibby라고해! 지금 119에 긴급 신고가 세 건 들어왔어. 바다, 잔해 아래, 불이 난 집, "
+                         "이렇게 세 곳에 사람이 있는데 드론은 한 대뿐이라 한 곳씩 차례로 찾아서 위치를 신고해야 해. 먼저 "
+                         "바다에서 어떤 사람을 찾아줘야 하는지 말해줄 수 있어?")
+        self.assertEqual(tools.OPENING_QUESTION, "바다에서 어떤 사람을 찾아줘야 하는지 말해줄 수 있어?")
+        self.assertIn("하나씩", SCENARIO["briefing"][1])
         for hint in ("머리", "티셔츠", "초록", "갈색", "같은 외형"):
             self.assertNotIn(hint, tools.GREETING)
             self.assertNotIn(hint, " ".join(SCENARIO["briefing"]))
         rejected = self.session.confirm_prompt("")
+        first = self.session.confirm_prompt(SEARCH_PROMPT)
+        second = self.session.confirm_prompt(SEARCH_PROMPT)
         confirmed = self.session.confirm_prompt(SEARCH_PROMPT)
         for person in SCENARIO["people"]:
             self.assertNotIn(person["clue"], tools.GREETING)
             self.assertNotIn(person["clue"], rejected["facts"])
+            self.assertNotIn(person["clue"], first["facts"])
+            self.assertNotIn(person["clue"], second["facts"])
             self.assertIn(person["clue"], confirmed["facts"])
-        self.assertIn("모두 설명한 뒤", confirmed["ask"])
+        self.assertIn("설명한 뒤", confirmed["ask"])
 
     def test_wrong_appearance_is_saved_without_correcting_or_blocking_route(self):
         wrong = [{"attribute": "hairColor", "operator": "include", "values": ["blond"]}]
@@ -163,8 +185,28 @@ class SurveyTests(unittest.TestCase):
         self.assertTrue(outcome["ok"])
         self.assertEqual(self.session.data["userPromptText"], "금발인 사람을 찾아줘")
         self.assertEqual(self.session.data["appearanceConstraints"], wrong)
+        self.assertEqual(self.session.person("monitor-1")["appearanceConstraints"], wrong)
+        confirm_all(self.session)
         self.assertTrue(self.session.select_stop("monitor-3")["ok"])
         self.assertTrue(all(person["outcome"] is None for person in self.session.data["people"]))
+
+    def test_confirming_prompt_sets_a_deterministic_confidence_and_reasoning(self):
+        s = self.session
+        self.assertIsNone(s.data["promptConfidence"])
+        self.assertEqual(s.data["promptConfidenceReason"], "")
+        outcome = s.confirm_prompt(**PROMPT_ARGS)
+        self.assertTrue(outcome["ok"])
+        self.assertIsInstance(s.data["promptConfidence"], int)
+        self.assertTrue(0 <= s.data["promptConfidence"] <= 100)
+        self.assertTrue(s.data["promptConfidenceReason"])
+        self.assertEqual(outcome["confidence"], s.data["promptConfidence"])
+        self.assertEqual(outcome["confidenceReason"], s.data["promptConfidenceReason"])
+        self.assertNotIn("확신도", outcome["facts"])
+        # Fewer confirmed appearance attributes and an unsupported clause both
+        # push the confidence for finding the right person down.
+        weaker = SurveySession(mode="azure")
+        weaker.confirm_prompt("안경 쓴 사람을 찾아줘", [], ["안경"], )
+        self.assertLess(weaker.data["promptConfidence"], s.data["promptConfidence"])
 
     def test_invalid_appearance_does_not_confirm_prompt(self):
         self.assertFalse(self.session.confirm_prompt("사람을 찾아줘", [{"attribute": "shirtColor"}], [])["ok"])
@@ -181,23 +223,23 @@ class SurveyTests(unittest.TestCase):
 
     def test_debrief_uses_gibby_tone_without_changing_results(self):
         for mode in ("mock", "azure"):
-            for rescued, injured, late in ((3, 1, 0), (3, 0, 0), (2, 1, 1), (0, 0, 3)):
-                with self.subTest(mode=mode, rescued=rescued, injured=injured):
+            for reported, injured, missed in ((3, 1, 0), (3, 0, 0), (2, 1, 1), (0, 0, 3)):
+                with self.subTest(mode=mode, reported=reported, injured=injured):
                     session = SurveySession(mode=mode)
                     ready(session)
                     session.data.update(missionPhase="complete", score={
-                        "total": 3, "rescuedCount": rescued, "injuredCount": injured, "tooLateCount": late,
+                        "total": 3, "reportedCount": reported, "injuredCount": injured, "reportMissedCount": missed,
                     })
                     before = deepcopy(session.data)
                     text = session.debrief()
-                    self.assertIn(f"3명 중 {rescued}명을 구조했어." if rescued
-                                  else "3명 중 아무도 구조하지 못했어.", text)
+                    self.assertIn(f"3명 중 {reported}명의 위치를 119에 제때 신고했어." if reported
+                                  else "3명 중 아무도 119에 제때 신고하지 못했어.", text)
                     if injured:
-                        self.assertIn(f"그중 {injured}명은 다친 상태야.", text)
-                    elif rescued:
-                        self.assertIn("구조한 사람 중 다친 사람은 없어.", text)
-                    self.assertIn(f"{late}명은 구조할 수 있는 시간을 넘겼어." if late
-                                  else "구조 시한은 모두 지켰어.", text)
+                        self.assertIn(f"그중 {injured}명은 부상이 확인돼서 119에도 함께 전달했어.", text)
+                    elif reported:
+                        self.assertIn("신고한 사람 중 다친 사람은 없어.", text)
+                    self.assertIn(f"{missed}명은 신고할 수 있는 시간을 넘겼어." if missed
+                                  else "신고 시한은 모두 지켰어.", text)
                     self.assertIn("모의 분석" if mode == "mock" else "Azure 이미지 분석", text)
                     self.assertIn("가상 훈련이야.", text)
                     self.assertIn("우리가 고른 순서는", text)
@@ -209,8 +251,8 @@ class SurveyTests(unittest.TestCase):
         session.abort_mission()
         text = session.debrief()
         self.assertIn("훈련은 여기서 멈췄어.", text)
-        self.assertIn("아직 확인하지 못한 사람들의 구조 결과는 알 수 없어.", text)
-        self.assertNotIn("구조했어", text)
+        self.assertIn("아직 확인하지 못한 사람들의 신고 결과는 알 수 없어.", text)
+        self.assertNotIn("신고했어", text)
 
     def test_all_six_route_permutations(self):
         outcomes = {}
@@ -229,9 +271,9 @@ class SurveyTests(unittest.TestCase):
                 clock.advance(max(person["deadlineMs"] for person in SCENARIO["people"]))
                 s.expire()
                 self.assertEqual(s.phase, "complete")
-                outcomes[route] = s.snapshot()["score"]["rescuedCount"]
+                outcomes[route] = s.snapshot()["score"]["reportedCount"]
                 for person in s.data["people"]:
-                    if person["outcome"] != "too_late":
+                    if person["outcome"] != "report_missed":
                         self.assertLess(person["resolvedAtMs"], person["deadlineMs"])
                         self.assertIsNotNone(person["captureId"])
         expected = {(1, 2, 3): 2, (1, 3, 2): 2, (2, 1, 3): 2,
@@ -243,13 +285,13 @@ class SurveyTests(unittest.TestCase):
 
     def test_baseline_and_deterioration_boundary(self):
         for monitor, ms, outcome in (
-            ("monitor-1", 22999, "rescued"),
-            ("monitor-1", 23000, "rescued_but_hurt"),
-            ("monitor-1", 27999, "rescued_but_hurt"),
-            ("monitor-1", 28000, "too_late"),
-            ("monitor-2", 1, "rescued_but_hurt"),
-            ("monitor-3", 12999, "rescued"),
-            ("monitor-3", 13000, "rescued_but_hurt"),
+            ("monitor-1", 22999, "reported"),
+            ("monitor-1", 23000, "reported_injured"),
+            ("monitor-1", 27999, "reported_injured"),
+            ("monitor-1", 28000, "report_missed"),
+            ("monitor-2", 1, "reported_injured"),
+            ("monitor-3", 12999, "reported"),
+            ("monitor-3", 13000, "reported_injured"),
         ):
             with self.subTest(monitor=monitor, ms=ms):
                 clock = Clock()
@@ -271,9 +313,9 @@ class SurveyTests(unittest.TestCase):
                     session.launch_mission()
                     clock.advance(deadline - remaining)
                     detect(session, person["monitorId"])
-                    expected = ("too_late" if remaining == 0 else
-                                "rescued_but_hurt" if person["initiallyInjured"] or remaining <= 5000 else
-                                "rescued")
+                    expected = ("report_missed" if remaining == 0 else
+                                "reported_injured" if person["initiallyInjured"] or remaining <= 5000 else
+                                "reported")
                     self.assertEqual(session.person(person["monitorId"])["outcome"], expected)
 
     def test_strict_deadline_and_late_analysis(self):
@@ -289,7 +331,7 @@ class SurveyTests(unittest.TestCase):
                 clock.advance(ms)
                 s.apply_detection(s.run_id, "frame-1", POSITIVE)
                 self.assertEqual(s.person("monitor-3")["outcome"],
-                                 "rescued_but_hurt" if ms < 18000 else "too_late")
+                                 "reported_injured" if ms < 18000 else "report_missed")
 
     def test_negative_arrival_and_unanswered_only_expire_at_deadline(self):
         s = self.session
@@ -303,12 +345,12 @@ class SurveyTests(unittest.TestCase):
         self.assertIsNone(s.person("monitor-3")["outcome"])
         self.clock.advance(18000)
         s.expire()
-        self.assertEqual(s.person("monitor-3")["outcome"], "too_late")
+        self.assertEqual(s.person("monitor-3")["outcome"], "report_missed")
         self.assertIsNone(s.person("monitor-1")["outcome"])
         self.assertIsNone(s.data["score"])
         self.clock.advance(27000)
         s.expire()
-        self.assertEqual(s.data["score"]["tooLateCount"], 3)
+        self.assertEqual(s.data["score"]["reportMissedCount"], 3)
         self.assertIn(NEGATIVE["description"], s.debrief())
         self.assertIn("마지막 사진의 관찰 내용은 이거야.", s.debrief())
 
@@ -325,7 +367,7 @@ class SurveyTests(unittest.TestCase):
                 if ending == "deadline":
                     clock.advance(45000)
                     session.expire()
-                    self.assertEqual(session.data["score"]["tooLateCount"], 3)
+                    self.assertEqual(session.data["score"]["reportMissedCount"], 3)
                 else:
                     session.abort_mission()
                     self.assertIsNone(session.data["score"])
@@ -376,10 +418,14 @@ class SurveyTests(unittest.TestCase):
     def test_evidence_validation(self):
         for evidence in (None, {}, {"targetPresent": "true"}, POSITIVE | {"description": ""},
                          POSITIVE | {"box": [0, 0, 2, 1]}, POSITIVE | {"box": [True, 0, 1, 1]},
-                         POSITIVE | {"box": [float("nan"), 0, 1, 1]}, NEGATIVE | {"box": [0, 0, 1, 1]}):
+                         POSITIVE | {"box": [float("nan"), 0, 1, 1]}, NEGATIVE | {"box": [0, 0, 1, 1]},
+                         {k: v for k, v in POSITIVE.items() if k != "confidence"},
+                         POSITIVE | {"confidence": 101}, POSITIVE | {"confidence": -1},
+                         POSITIVE | {"confidence": 92.5}, POSITIVE | {"confidence": True}):
             with self.subTest(evidence=evidence), self.assertRaises(ValueError):
                 validate_evidence(evidence)
         self.assertIsNone(validate_evidence(POSITIVE | {"box": None})["box"])
+        self.assertEqual(validate_evidence(POSITIVE)["confidence"], 92)
 
     def test_flat_snapshot_and_independent_sessions(self):
         s = self.session
@@ -388,11 +434,13 @@ class SurveyTests(unittest.TestCase):
         snapshot = s.snapshot()
         expected = {"phase", "draftRoute", "confirmedRoute", "runId", "revision", "missionPhase",
                     "mode", "elapsedMs", "clockRunning", "activeMonitorId", "people", "captures",
-                    "score", "error", "promptPhase", "userPromptText",
-                    "appearanceConstraints", "unsupportedAppearance", "droneControlMode", "droneStopState",
-                    "droneErrorCode", "droneState", "activeVisitIndex", "droneMissionId"}
+                    "score", "error", "promptPhase", "activePromptMonitorId", "userPromptText",
+                    "appearanceConstraints", "unsupportedAppearance", "promptConfidence",
+                    "promptConfidenceReason", "droneControlMode", "droneStopState",
+                    "droneErrorCode", "droneState", "activeVisitIndex", "droneMissionId",
+                    "dangerOrder", "vulnerableAdjustedOrder", "kind"}
         self.assertEqual(set(snapshot), expected)
-        snapshot["people"][0]["outcome"] = "rescued"
+        snapshot["people"][0]["outcome"] = "reported"
         self.assertIsNone(s.person("monitor-1")["outcome"])
         self.assertIsNone(other.person("monitor-1")["outcome"])
 

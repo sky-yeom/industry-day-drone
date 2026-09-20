@@ -4,9 +4,25 @@ import unittest
 from unittest.mock import patch
 
 from relay.mission_runner import MissionRunner
-from relay.survey import SCENARIO, SurveySession
+from relay.survey import MONITOR_IDS, SCENARIO, SurveySession
 from relay.test_survey import Clock, NEGATIVE, POSITIVE, capture, ready
 from relay import tools
+
+
+def reconfirm_all(session, prompt_text, appearance_constraints=None, unsupported_appearance=None):
+    """Re-open and re-confirm every site's prompt with the same description.
+
+    Used by tests that need real (non-default) participant wording applied to
+    all three already-routed sites, e.g. to exercise real vision matching.
+    """
+    session.data["promptPhase"] = "briefing"
+    session.data["activePromptMonitorId"] = MONITOR_IDS[0]
+    for person in session.data["people"]:
+        person["promptConfirmed"] = False
+    outcome = None
+    for _ in MONITOR_IDS:
+        outcome = session.confirm_prompt(prompt_text, appearance_constraints, unsupported_appearance)
+    return outcome
 
 
 class FakeCamera:
@@ -37,7 +53,7 @@ class FakeVision:
         return self.error
 
     async def analyze(self, frame, *, search_prompt, appearance_constraints=None,
-                      unsupported_appearance=None, scene_context=None):
+                      unsupported_appearance=None, scene_context=None, kind="triage"):
         self.calls.append((frame, search_prompt))
         self.search_prompts.append(search_prompt)
         self.appearance_constraints.append((appearance_constraints, unsupported_appearance))
@@ -98,12 +114,12 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         participant_instruction = "제가 쓴 지시: 화면 구석까지 살피고 사람이 보이는 위치를 알려 주세요."
         requested = [{"attribute": "hairColor", "operator": "include", "values": ["brown"]}]
         self.session.data["mode"] = "azure"
-        self.assertTrue(self.session.confirm_prompt(participant_instruction, requested, [])["ok"])
+        self.assertTrue(reconfirm_all(self.session, participant_instruction, requested, [])["ok"])
         first, second = await asyncio.gather(self.runner.launch(), self.runner.launch())
         self.assertTrue(first["ok"] and second["ok"])
         await settle(lambda: self.session.phase == "complete")
         self.assertEqual(self.camera.calls, ["monitor-3", "monitor-1", "monitor-2"])
-        self.assertEqual(self.session.data["score"]["rescuedCount"], 3)
+        self.assertEqual(self.session.data["score"]["reportedCount"], 3)
         self.assertEqual(self.session.data["score"]["injuredCount"], 1)
         self.assertEqual(self.vision.search_prompts, [participant_instruction] * 3)
         self.assertEqual(self.vision.appearance_constraints, [(requested, [])] * 3)
@@ -120,7 +136,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         debrief = next(i for i, e in enumerate(self.events) if e["type"] == "mission.debrief")
         self.assertEqual(self.events[debrief - 1]["state"]["missionPhase"], "complete")
         self.assertEqual(self.events[debrief]["text"], self.session.debrief())
-        self.assertIn("우리 함께 3명 중 3명을 구조했어.", self.events[debrief]["text"])
+        self.assertIn("우리 함께 3명 중 3명의 위치를 119에 제때 신고했어.", self.events[debrief]["text"])
         self.assertEqual(sum(e["type"] == "mission.debrief" for e in self.events), 1)
 
     async def test_negative_once_recaptured_then_unresolved_until_expiry(self):
@@ -132,7 +148,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(self.session.phase, "complete")
         await self.advance(18000)
         await settle(lambda: self.session.phase == "complete")
-        self.assertEqual(self.session.data["score"]["tooLateCount"], 1)
+        self.assertEqual(self.session.data["score"]["reportMissedCount"], 1)
 
     async def test_debrief_survives_deadline_cancellation_during_publication(self):
         entered, release = asyncio.Event(), asyncio.Event()
@@ -176,7 +192,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         from relay.vision import MockVision
 
         wrong = [{"attribute": "shirtColor", "operator": "include", "values": ["red"]}]
-        self.session.confirm_prompt("빨간색 티셔츠를 입은 사람을 찾아줘", wrong, [])
+        reconfirm_all(self.session, "빨간색 티셔츠를 입은 사람을 찾아줘", wrong, [])
         self.runner.camera = FixtureCamera()
         self.runner.vision = MockVision()
         with patch.dict(CAMERA_SCENARIO, {"mockAnalysisMs": 0}):
@@ -188,8 +204,8 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(person["outcome"] is None for person in self.session.data["people"]))
         await self.advance(max(person["deadlineMs"] for person in self.session.data["people"]))
         await settle(lambda: self.session.phase == "complete")
-        self.assertEqual(self.session.data["score"]["rescuedCount"], 0)
-        self.assertEqual(self.session.data["score"]["tooLateCount"], 3)
+        self.assertEqual(self.session.data["score"]["reportedCount"], 0)
+        self.assertEqual(self.session.data["score"]["reportMissedCount"], 3)
         self.assertIn("요청한 외형 조건", self.session.debrief())
         self.assertIn("마지막 사진의 관찰 내용", self.session.debrief())
 
@@ -228,9 +244,9 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         await settle(lambda: self.session.phase == "complete")
         self.assertEqual(self.session.elapsed_ms(), 33000)
         self.assertEqual(self.session.person("monitor-3")["resolvedAtMs"], 13000)
-        self.assertEqual(self.session.person("monitor-3")["outcome"], "rescued_but_hurt")
+        self.assertEqual(self.session.person("monitor-3")["outcome"], "reported_injured")
         self.assertEqual(self.session.person("monitor-1")["resolvedAtMs"], 23000)
-        self.assertEqual(self.session.person("monitor-1")["outcome"], "rescued_but_hurt")
+        self.assertEqual(self.session.person("monitor-1")["outcome"], "reported_injured")
         self.assertEqual(self.session.person("monitor-2")["resolvedAtMs"], 33000)
 
     async def test_expiry_independent_of_blocked_inference_and_cleanup(self):
@@ -238,13 +254,13 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         await self.runner.launch()
         await settle(lambda: len(self.vision.calls) == 1)
         await self.advance(18000)
-        self.assertEqual(self.session.person("monitor-3")["outcome"], "too_late")
+        self.assertEqual(self.session.person("monitor-3")["outcome"], "report_missed")
         self.assertFalse(self.runner._work.done())
         await self.advance(27000)
         await settle(lambda: self.runner._work.done())
         self.assertTrue(self.vision.cancelled)
         self.assertEqual(self.session.phase, "complete")
-        self.assertEqual(self.session.data["score"]["rescuedCount"], 0)
+        self.assertEqual(self.session.data["score"]["reportedCount"], 0)
 
     async def test_late_positive_does_not_reverse_expiry(self):
         self.vision.block = asyncio.Event()
@@ -253,7 +269,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         await self.advance(18000)
         self.vision.block.set()
         await settle(lambda: self.session.phase == "complete")
-        self.assertEqual(self.session.person("monitor-3")["outcome"], "too_late")
+        self.assertEqual(self.session.person("monitor-3")["outcome"], "report_missed")
         self.assertIsNone(self.session.person("monitor-3")["captureId"])
 
     async def test_camera_error_pause_retry_preserves_clock(self):
@@ -265,7 +281,7 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(self.session.data["error"])
         self.assertTrue((await self.runner.retry())["ok"])
         await settle(lambda: self.session.phase == "complete")
-        self.assertEqual(self.session.data["score"]["rescuedCount"], 3)
+        self.assertEqual(self.session.data["score"]["reportedCount"], 3)
         self.assertEqual(self.camera.calls.count("monitor-3"), 2)
 
     async def test_analysis_error_and_malformed_result_retry_same_capture(self):

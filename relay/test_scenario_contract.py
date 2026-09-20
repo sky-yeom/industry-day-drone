@@ -56,9 +56,12 @@ class ScenarioContractTests(unittest.TestCase):
         self.assertGreaterEqual(3 * stop_cost, by_monitor["monitor-1"]["deadlineMs"])
 
     def test_reference_photo_is_retained_without_constraining_detection(self):
-        reference = (ROOT / "public" / SCENARIO["targetAppearance"]["referenceImage"].lstrip("/")).read_bytes()
-        self.assertEqual(reference[:8], b"\x89PNG\r\n\x1a\n")
-        self.assertNotIn(hashlib.sha256(reference).hexdigest(), FIXTURE_OBSERVATIONS)
+        for person in SCENARIO["people"]:
+            with self.subTest(monitor=person["monitorId"]):
+                reference = (ROOT / "public"
+                             / person["targetAppearance"]["referenceImage"].lstrip("/")).read_bytes()
+                self.assertEqual(reference[:8], b"\x89PNG\r\n\x1a\n")
+                self.assertNotIn(hashlib.sha256(reference).hexdigest(), FIXTURE_OBSERVATIONS)
 
     def test_current_raster_images_have_pinned_per_person_observations(self):
         for person in SCENARIO["people"]:
@@ -72,7 +75,7 @@ class ScenarioContractTests(unittest.TestCase):
                 self.assertGreater(len({item["appearance"]["shirtColor"] for item in observations}), 1)
                 for observation in observations:
                     validate_evidence({"targetPresent": True, "description": observation["description"],
-                                       "box": observation["box"]})
+                                       "box": observation["box"], "confidence": 92})
 
     def test_monitor_images_are_distinct(self):
         positive = {

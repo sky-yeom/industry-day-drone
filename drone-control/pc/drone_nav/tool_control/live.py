@@ -216,8 +216,16 @@ class MissionClient(NDJSONClient):
         # Landing is two chained SDK calls on the bridge - it disarms the stick
         # manager and only then submits KeyStartAutoLanding - so it needs at
         # least takeoff's budget rather than a motion command's.
+        # STATUS is a read: line 245 already classifies it as mutating nothing.
+        # It nevertheless fell to the default 0.4s, the tightest budget of any
+        # command, and 0.4s is only twice the 219ms worst case measured over 515
+        # status reads on the 0917 flights. On 0921 one read overran it while
+        # telemetry_poll_failures was still 0 and the phone answered normally
+        # 0.5s later; the run died at 1.4m mid-climb and needed an RC landing.
+        # A slow answer cannot smuggle in stale telemetry - fresh() rejects any
+        # age over 500ms on its own - so the wait only costs time, not safety.
         budget = {"takeoff": 3., "arm": 3., "gimbal": 2., "stick_mode": 3., "disarm": 1.,
-                  "land": 3., "ground_ack": 6.}.get(kind, .4)
+                  "land": 3., "ground_ack": 6., "status": 2.}.get(kind, .4)
         self._socket.deadline = time.perf_counter() + budget
         prior_raw, prior_received = copy.deepcopy(self.raw), self.received
         self.last_telemetry = None

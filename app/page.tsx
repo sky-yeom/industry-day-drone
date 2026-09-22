@@ -247,6 +247,8 @@ export default function Home() {
     start();
   }, [reset, start]);
 
+  const sendText = useCallback((text: string) => sessionRef.current?.sendText(text) ?? false, []);
+
   // Display interpolation only: expiration, reporting and scoring remain relay-owned.
   const elapsedMs = state.elapsedMs + (state.clockRunning ? Math.max(0, now - snapshot.receivedAt) : 0);
   const visionReady = config?.visionReady ?? false;
@@ -258,6 +260,7 @@ export default function Home() {
       onScenarioChosen={setScenarioId}
       agentText={agentText}
       voiceStatus={status}
+      onSendText={sendText}
       error={error}
       onRetry={retryConnection}
       state={state}
@@ -314,6 +317,7 @@ export default function Home() {
         <FlightPathMap state={state} boarded={boarded} elapsedMs={elapsedMs} connected={connected}
           markerRef={markerRef} departing={Boolean(returnScene)}
           voiceStatus={!missionLaunched ? status : undefined}
+          onSendText={!missionLaunched ? sendText : undefined}
           onMapReady={() => sessionRef.current?.sendRouteIntroReady()} onMapError={setSceneError} />
       </div>}
       {step === "results" && <div className="results-content h-full min-h-0">

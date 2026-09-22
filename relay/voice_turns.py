@@ -15,23 +15,33 @@ AFFIRMATIVES = {
     normalize(text) for text in (
         "네", "넵", "네네", "예", "응", "응응", "엉", "어", "맞아", "맞아요", "맞습니다",
         "오케이", "오키", "오케이야", "okay", "ok", "콜", "좋아", "좋아요", "그래", "그래요",
-        "그렇지", "그거야", "그렇게 해", "그렇게 해줘", "동의해", "가자", "출발",
+        "그렇지", "그거야", "동의해", "가자", "출발",
         "출발해", "출발해줘", "출발하자", "네 출발해", "응 출발해", "좋아 출발해",
         "출발해주세요", "출발시켜줘", "출발시켜주세요",
         "확인", "확인이요", "확인해", "확인했어", "확인했어요", "네 확인",
     )
 }
 
-
+# "(그렇게) X" carries a lot of natural endings ("해", "해줘", "해주세요",
+# "하자", "할게", "하겠습니다" ...), both with and without the "그렇게"
+# prefix ("해줘" alone is a common bare "go ahead, do it"). Hardcoding each
+# combination as a literal string in AFFIRMATIVES is exactly how
+# "그렇게 하자" / "그렇게 해주세요" / bare "해줘" fell through before, so
+# match the family with one suffix-tolerant pattern instead of another
+# string to add every time a new natural phrasing shows up.
+_SO_DO_IT_PATTERN = f"(?:{normalize('그렇게')})?(?:해|해줘|해주세요|하자|할게|하겠습니다|해요)"
 
 # Real speech attaches harmless filler before/around a clear "yes" ("음 맞아",
-# "어 진짜 맞아요"). These never count as consent on their own, but must not
-# block an affirmative reply that carries one, or a legitimate "맞아" gets
-# rejected forever and the model just repeats its readback question.
+# "어 진짜 맞아요", "아 네 맞아요"). These never count as consent on their
+# own, but must not block an affirmative reply that carries one, or a
+# legitimate "맞아" gets rejected forever and the model just repeats its
+# readback question. This also covers a short trailing filler/gratitude
+# tag after a recognized "yes" ("응 그렇게 해줘 고마워").
 AFFIRMATIVE_FILLERS = {
     normalize(text) for text in (
-        "음", "음음", "흠", "저기", "그니까", "그러니까", "그러게", "일단", "막", "좀",
-        "진짜", "정말", "완전", "그냥",
+        "아", "어", "음", "음음", "흠", "저기", "그니까", "그러니까", "그러게", "일단",
+        "막", "좀", "진짜", "정말", "완전", "그냥", "그거", "그럼", "고마워", "고맙습니다",
+        "감사", "감사해요", "감사합니다",
     )
 }
 
@@ -42,7 +52,7 @@ def is_affirmative(text):
         return False
     if re.search(r"아니|않|말고|말아|잠깐|아직|취소|멈|안돼|싫|모르", value):
         return False
-    affirmative_words = "|".join(sorted(AFFIRMATIVES, key=len, reverse=True))
+    affirmative_words = "|".join(sorted(AFFIRMATIVES, key=len, reverse=True) + [_SO_DO_IT_PATTERN])
     filler_words = "|".join(sorted(AFFIRMATIVE_FILLERS, key=len, reverse=True))
     if re.fullmatch(f"(?:{affirmative_words}){{1,3}}", value) is not None:
         return True
@@ -153,9 +163,14 @@ class VoiceTurns:
         if not isinstance(item_id, str) or not item_id or item_id in self.turns:
             return
         context = self.context(session)
+        # Bind to the readback the model has already committed to (created
+        # server-side), not to whether its first TTS byte has streamed back
+        # yet. Waiting on that separate "audible" signal races a normal-speed
+        # spoken reply and rejects valid consent no matter what was said.
+        pending_revision = self.prompt_readback[1] if self.prompt_readback else None
         self.latest = ParticipantTurn(
-            item_id, context, self.audible_prompt_revision,
-            self.confirmed_route_replied, self.audible_prompt_generation)
+            item_id, context, pending_revision,
+            self.confirmed_route_replied, self.prompt_generation)
         self.turns[item_id] = self.latest
         if item_id in self.early_transcripts:
             self.transcribe(item_id, self.early_transcripts.pop(item_id))
@@ -185,8 +200,8 @@ class VoiceTurns:
         if (turn.prompt_revision is not None and not is_retry_input(turn.text)
                 and not is_affirmative(turn.text)):
             self.rejected_prompt_revision = turn.prompt_revision
-            if self.audible_prompt_revision == turn.prompt_revision:
-                self.audible_prompt_revision = None
+            if self.prompt_readback and self.prompt_readback[1] == turn.prompt_revision:
+                self.prompt_readback = None
             turn.prompt_revision = None
 
     def bind_response(self, response_id, item_id=None, *, inherit=True):

@@ -1086,14 +1086,90 @@ class StrictVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(e["type"] == "response.cancel" for e in self.upstream.sent))
 
     async def test_missing_native_response_has_bounded_tool_free_recovery(self):
+        # A stuck native response only warrants a forced recovery reply when
+        # the participant actually said something real (a transcript came
+        # back) - otherwise there is nothing to reply to.
         self.bridge.INPUT_TIMEOUT_SECONDS = 0.01
         await self.admit()
+        await self.provider_events({
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "input", "transcript": "안녕"})
         await self.bridge._input_timeout_task
         self.assertFalse(self.bridge._native_response_pending)
         self.assertEqual(len(self.requests()), 1)
         self.assertEqual(self.requests()[0]["tool_choice"], "none")
         await self.finish("recovery")
         self.assertEqual(len(self.events("voice.input.ready")), 2)
+
+    async def test_missing_native_response_with_no_real_speech_does_not_force_a_reply(self):
+        # A stray speech_started/speech_stopped cycle with no transcript at
+        # all (ambient noise, not real speech) must not make Gibby speak on
+        # his own once the recovery timeout fires.
+        self.bridge.INPUT_TIMEOUT_SECONDS = 0.01
+        await self.admit()
+        await self.bridge._input_timeout_task
+        self.assertFalse(self.bridge._native_response_pending)
+        self.assertEqual(len(self.requests()), 0)
+        self.assertEqual(len(self.events("voice.input.ready")), 2)
+
+    async def test_short_noise_blip_does_not_get_spoken(self):
+        # Voice Live's own create_response:true auto-creates a response the
+        # instant it sees speech_stopped - including for a ~50ms noise/echo
+        # blip that never contained real words. That auto-created response
+        # must never actually reach (and play on) the browser.
+        window = await self.open_window()
+        await self.browser_messages({"type": "audio", "windowId": window, "data": "pcm"})
+        await self.provider_events(
+            {"type": "input_audio_buffer.speech_started", "item_id": "noise", "audio_start_ms": 1000},
+            {"type": "input_audio_buffer.speech_stopped", "item_id": "noise", "audio_end_ms": 1050},
+            {"type": "conversation.item.input_audio_transcription.failed", "item_id": "noise"})
+        await self.provider_events(
+            {"type": "response.created", "response": {"id": "phantom"}},
+            {"type": "response.output_audio.delta", "response_id": "phantom", "delta": "zz"},
+            {"type": "response.done", "response": {"id": "phantom", "status": "completed"}})
+        self.assertFalse(self.events("response.created"))
+        self.assertFalse(self.events("response.output_audio.delta"))
+        self.assertFalse(self.events("response.done"))
+        # The mic must still reopen promptly - the participant isn't blocked
+        # just because a phantom turn was silently discarded.
+        self.assertEqual(len(self.events("voice.input.ready")), 2)
+
+    async def test_normal_length_reply_still_plays(self):
+        # A real (if short) spoken reply must not be swallowed by the same
+        # noise-blip filter - only genuinely too-brief segments are muted.
+        window = await self.open_window()
+        await self.browser_messages({"type": "audio", "windowId": window, "data": "pcm"})
+        await self.provider_events(
+            {"type": "input_audio_buffer.speech_started", "item_id": "input", "audio_start_ms": 1000},
+            {"type": "input_audio_buffer.speech_stopped", "item_id": "input", "audio_end_ms": 1400})
+        await self.provider_events(
+            {"type": "response.created", "response": {"id": "reply"}},
+            {"type": "response.output_audio.delta", "response_id": "reply", "delta": "zz"},
+            {"type": "response.done", "response": {"id": "reply", "status": "completed"}})
+        self.assertEqual(len(self.events("response.created")), 1)
+        self.assertEqual(len(self.events("response.output_audio.delta")), 1)
+        self.assertEqual(len(self.events("response.done")), 1)
+
+    async def test_long_running_noise_or_echo_is_muted_once_its_transcript_resolves_empty(self):
+        # A segment long enough to pass the short-blip duration filter (e.g.
+        # the assistant's own TTS bleeding into an open mic/speaker setup, or
+        # sustained ambient noise) must still be muted if the participant's
+        # item never actually transcribes to real words - genuine speech
+        # transcribes to non-empty text well before the reply finishes.
+        window = await self.open_window()
+        await self.browser_messages({"type": "audio", "windowId": window, "data": "pcm"})
+        await self.provider_events(
+            {"type": "input_audio_buffer.speech_started", "item_id": "echo", "audio_start_ms": 1000},
+            {"type": "input_audio_buffer.speech_stopped", "item_id": "echo", "audio_end_ms": 3000})
+        await self.provider_events({"type": "response.created", "response": {"id": "echoed"}})
+        await self.provider_events(
+            {"type": "conversation.item.input_audio_transcription.failed", "item_id": "echo"})
+        await self.provider_events(
+            {"type": "response.output_audio.delta", "response_id": "echoed", "delta": "zz"},
+            {"type": "response.done", "response": {"id": "echoed", "status": "completed"}})
+        self.assertEqual(len(self.events("response.created")), 1)
+        self.assertFalse(self.events("response.output_audio.delta"))
+        self.assertFalse(self.events("response.done"))
 
     async def test_empty_transcription_is_reported_once_and_recovers(self):
         await self.admit()

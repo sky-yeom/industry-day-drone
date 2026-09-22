@@ -277,6 +277,16 @@ class Bridge:
         self._debrief_response_id = None
         self._last_response = None
         self._blocked_native_response_id = None
+        self._speech_start_ms = None
+        self._suppress_native_response = False
+        self._muted_response_ids = set()
+        # Maps a participant item_id to the native (relay-unrequested)
+        # response_id it triggered, so that if the transcript for that item
+        # later resolves empty (no real speech captured - ambient noise or
+        # the assistant's own audio bleeding into an open mic/speaker setup)
+        # we can retroactively mute a response that the duration heuristic
+        # alone did not catch (e.g. a long-running noise/echo segment).
+        self._native_response_item_map = {}
         self._sent_voice_context = None
         self._prompt_confirmation = None
         self._input_confirmation_attempt = None
@@ -451,11 +461,40 @@ class Bridge:
             self.sync_prompt_correction()
         if self._native_response_pending:
             self._native_response_pending = False
-            self._response_requested = True
-            self._response_tools_allowed = False
-            self.trace_voice("native_response_timeout", item_id=item_id)
+            # A speech_started/speech_stopped cycle with no transcript at all
+            # by this point is almost always Voice Live's own VAD firing on
+            # ambient noise rather than real speech - genuine speech nearly
+            # always transcribes well within this window. Forcing a spoken
+            # reply here makes Gibby talk on his own with nothing said; only
+            # recover with a forced response when we actually have real
+            # transcribed words waiting for a reply.
+            if turn and turn.text:
+                self._response_requested = True
+                self._response_tools_allowed = False
+                self.trace_voice("native_response_timeout", item_id=item_id)
+            else:
+                self.trace_voice("native_response_discarded_empty_turn", item_id=item_id)
         await self.flush_response()
         await self.offer_input()
+
+    def _mute_native_response_if_no_real_speech(self, item_id):
+        # A native (relay-unrequested) response can already be created/mid-
+        # stream by the time its triggering item's transcript resolves. If
+        # that transcript comes back empty - no real words were captured,
+        # most likely ambient noise or the assistant's own audio bleeding
+        # into an open mic/speaker setup - mute the response even though the
+        # upfront speech-duration heuristic did not already catch it (that
+        # heuristic only screens out very short blips, not a longer stretch
+        # of noise/echo). Muting here still stops any audio not yet sent.
+        response_id = self._native_response_item_map.pop(item_id, None)
+        if not response_id or response_id in self._muted_response_ids:
+            return
+        turn = self.voice_turns.turns.get(item_id)
+        if turn and turn.text:
+            return
+        if response_id == self._active_response_id or response_id in self._generating_response_ids:
+            self._muted_response_ids.add(response_id)
+            self.trace_voice("response_muted_empty_transcript", response_id=response_id, item_id=item_id)
 
     async def report_input_failure(self, item_id):
         turn = self.voice_turns.turns.get(item_id)
@@ -874,12 +913,27 @@ class Bridge:
                     if self._active_response_id not in self._turn_response_ids:
                         self._turn_response_ids.append(self._active_response_id)
                 metadata = response.get("metadata") or {}
+                relay_requested = bool(metadata.get("routeIntro") or metadata.get("confidenceNarration")
+                                       or metadata.get("promptReadback") or metadata.get("routeReadback")
+                                       or metadata.get("missionLaunch") or metadata.get("missionDebrief"))
+                if self._suppress_native_response and not relay_requested and self._active_response_id:
+                    self._muted_response_ids.add(self._active_response_id)
+                    self.trace_voice("response_muted_short_speech", response_id=self._active_response_id)
+                self._suppress_native_response = False
                 if self.strict_turn_taking and not admitted_response:
                     self.voice_turns.bind_response(response.get("id"), inherit=False)
                     self.trace_voice("unsolicited_response", response_id=response.get("id"))
                 else:
                     self.voice_turns.bind_response(response.get("id"), metadata.get("participantItemId"))
                 turn = self.voice_turns.mark_response(response.get("id"), "created")
+                # Track this native/unrequested response against the
+                # participant item that triggered it so a later-arriving
+                # empty transcript for that item can retroactively mute it
+                # even when its captured duration alone did not look short
+                # enough to suppress up front (see transcription handlers).
+                if (admitted_response and not relay_requested and self._active_response_id
+                        and turn is not None and turn.item_id):
+                    self._native_response_item_map[turn.item_id] = self._active_response_id
                 self.trace_voice("response_created", response_id=response.get("id"),
                                  item_id=turn.item_id if turn else None)
                 if (metadata.get("routeIntro") == self._route_intro_id and self._route_intro_id
@@ -919,6 +973,7 @@ class Bridge:
                 self._response_requested = False
                 self._native_response_retry = False
                 self._blocked_native_response_id = None
+                self._speech_start_ms = event.get("audio_start_ms")
                 self._narration.clear()
                 self.trace_voice("speech_started", item_id=event.get("item_id"),
                                  audio_start_ms=event.get("audio_start_ms"),
@@ -931,9 +986,23 @@ class Bridge:
                 # VAD creates the next response itself; do not race its native turn.
                 self._native_response_pending = True
                 self._blocked_native_response_id = self._active_response_id
+                audio_end_ms = event.get("audio_end_ms")
+                speech_duration_ms = (
+                    audio_end_ms - self._speech_start_ms
+                    if audio_end_ms is not None and self._speech_start_ms is not None else None)
+                # A speech_started/speech_stopped cycle this brief is almost
+                # always ambient noise or mic echo, not real words - genuine
+                # replies (even "네"/"어") run longer than this. Don't let
+                # Voice Live's own auto-created response for it be spoken.
+                self._suppress_native_response = (
+                    speech_duration_ms is not None
+                    and speech_duration_ms < config.NATIVE_RESPONSE_MIN_SPEECH_MS)
+                if self._suppress_native_response:
+                    self.trace_voice("speech_stopped_noise_suppressed", item_id=item_id,
+                                     duration_ms=speech_duration_ms)
                 self.trace_voice("speech_stopped", item_id=item_id,
                                  provider_event=etype, audio_end_ms=event.get("audio_end_ms"),
-                                 timing_basis="event_receipt")
+                                 duration_ms=speech_duration_ms, timing_basis="event_receipt")
                 if self.strict_turn_taking:
                     await self.invalidate_input()
                     if self._input_timeout_task:
@@ -957,6 +1026,8 @@ class Bridge:
                     self._active_response_id = None
                 self.voice_turns.finish_response(event.get("response") or {}, self.session)
                 turn = self.voice_turns.mark_response(finished_id, "done")
+                if turn and turn.item_id and self._native_response_item_map.get(turn.item_id) == finished_id:
+                    del self._native_response_item_map[turn.item_id]
                 self.trace_voice("response_done", response_id=finished_id,
                                  item_id=turn.item_id if turn else None,
                                  status=(event.get("response") or {}).get("status"))
@@ -966,12 +1037,14 @@ class Bridge:
                 self.voice_turns.transcribe(event.get("item_id"), event.get("transcript"))
                 self.trace_voice("transcript", item_id=event.get("item_id"),
                                  nonempty=bool((event.get("transcript") or "").strip()))
+                self._mute_native_response_if_no_real_speech(event.get("item_id"))
                 if (self.strict_turn_taking and item_id == self._accepted_item_id
                         and not self.voice_turns.turns[item_id].text):
                     await self.report_input_failure(item_id)
             elif etype == "conversation.item.input_audio_transcription.failed":
                 self.voice_turns.transcribe(event.get("item_id"), "")
                 self.trace_voice("transcript_failed", item_id=event.get("item_id"))
+                self._mute_native_response_if_no_real_speech(event.get("item_id"))
                 if self.strict_turn_taking and item_id == self._accepted_item_id:
                     await self.report_input_failure(item_id)
             self.sync_prompt_correction()
@@ -990,7 +1063,7 @@ class Bridge:
                 if first_audio:
                     self.trace_voice("response_first_audio", response_id=response_id,
                                      item_id=turn.item_id if turn else None)
-                if latency is not None:
+                if latency is not None and response_id not in self._muted_response_ids:
                     turn, ms = latency
                     await self.send_browser({
                         "type": "metrics.ttfa", "runId": self.session.run_id,
@@ -1011,7 +1084,15 @@ class Bridge:
                 self._tool_tasks.add(task)
                 task.add_done_callback(self._tool_tasks.discard)
                 continue
-            await self.send_browser(event)
+            muted_response_id = ((event.get("response") or {}).get("id")
+                                 if etype in {"response.created", "response.done"}
+                                 else event.get("response_id"))
+            if muted_response_id in self._muted_response_ids:
+                self.trace_voice("response_forward_muted", response_id=muted_response_id, provider_event=etype)
+                if etype == "response.done":
+                    self._muted_response_ids.discard(muted_response_id)
+            else:
+                await self.send_browser(event)
             if etype == "response.done":
                 response = event.get("response") or {}
                 if (self._confidence_narration_response_id

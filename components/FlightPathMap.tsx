@@ -4,6 +4,7 @@ import Image from "next/image";
 import { useEffect, useRef, useState, type Ref } from "react";
 import DroneImagePanel from "@/components/DroneImagePanel";
 import VoiceTurnIndicator from "@/components/VoiceTurnIndicator";
+import VoiceTextFallback from "@/components/VoiceTextFallback";
 import type { VoiceStatus } from "@/lib/voiceClient";
 import { MONITOR_MAP_BY_KIND, MONITORS_BY_KIND } from "@/data/monitors";
 import { BOARDING_MIRRORED, MAP_MARKER_ENTRY, MAP_MARKER_HEIGHT, MAP_MARKER_SRC, MAP_MARKER_WIDTH } from "@/lib/gibbyDroneSprite";
@@ -62,7 +63,7 @@ export function MissionCountdownSummary({ state, elapsedMs, connected }: {
  * 3 report-deadline timers.
  */
 export default function FlightPathMap({ state, boarded = false, elapsedMs, connected, departing = false, markerRef,
-  voiceStatus, onMapReady, onMapError }: {
+  voiceStatus, onSendText, onMapReady, onMapError }: {
   state: DashboardState;
   boarded?: boolean;
   elapsedMs: number;
@@ -70,6 +71,7 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
   departing?: boolean;
   markerRef?: Ref<HTMLDivElement>;
   voiceStatus?: VoiceStatus;
+  onSendText?: (text: string) => boolean;
   onMapReady?: () => void;
   onMapError?: (message: string) => void;
 }) {
@@ -134,25 +136,26 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
     // both the map and the cards column far smaller than needed.
     className={`mission-workspace flex h-full min-h-0 w-full flex-col gap-3 p-3 sm:p-4 ${departing ? "mission-workspace--exiting" : ""}`}
     inert={departing} aria-hidden={departing || undefined}>
-    <div className="mission-workspace-heading flex shrink-0 items-center justify-between gap-3 px-1">
-      <div>
-        <div className="flex flex-wrap items-baseline gap-2">
-          <p className="text-[0.625rem] font-bold tracking-[0.2em] text-[#091f2c]">실시간 경로 관제</p>
-          <h2 className="text-lg font-semibold text-[#091f2c]">비행경로</h2>
-          {voiceStatus && <VoiceTurnIndicator status={voiceStatus} />}
-        </div>
+    <div className="mission-workspace-heading relative z-30 flex shrink-0 items-start justify-between gap-3 px-1">
+      <div className="flex flex-wrap items-baseline gap-2">
+        <p className="text-[0.625rem] font-bold tracking-[0.2em] text-[#091f2c]">실시간 경로 관제</p>
+        <h2 className="text-lg font-semibold text-[#091f2c]">비행경로</h2>
+        {voiceStatus && <VoiceTurnIndicator status={voiceStatus} />}
       </div>
-      <div className="shrink-0 text-right">
+      <div className="flex shrink-0 flex-col items-end gap-2">
         <span className={`pixel-panel px-3 py-1.5 text-xs font-semibold text-[#091f2c] ${isConfirmed ? "bg-[#0078d4]" : "bg-white"}`}>
           {isConfirmed ? "경로 확정" : route.length === 3 ? "확정 대기" : "경로 구성 중"}
         </span>
+        {voiceStatus && onSendText && (
+          <div className="pixel-panel max-w-xs bg-white/95 p-2"><VoiceTextFallback onSendText={onSendText} /></div>
+        )}
       </div>
     </div>
 
     <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,0.8fr)]">
-      <div className="mission-map pixel-frame pixel-rendering relative mx-auto aspect-[3/2] w-full max-w-[51.25rem] overflow-hidden">
+      <div className="mission-map pixel-frame pixel-rendering relative mx-auto aspect-[3/2] w-full max-w-[43.5625rem] overflow-hidden">
         <Image src="/gibby/map.png" alt="탐색 지역 지도" fill unoptimized loading="eager"
-          className="object-contain" sizes="(max-width: 1024px) 90vw, 820px"
+          className="object-contain" sizes="(max-width: 1024px) 90vw, 697px"
           onLoad={() => setMapReady(true)} onError={() => {
             mapCallbacks.current.onMapError?.("지도를 불러오지 못했어. 현장 설명을 보고 진행해 줘.");
             setMapReady(true);

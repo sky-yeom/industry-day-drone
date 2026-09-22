@@ -47,19 +47,19 @@ FIXTURE_OBSERVATIONS = {
     # alarms; the server-room image has one matching candidate plus decoys,
     # the same "correct answer among decoys" pattern used by the three real
     # people above.
-    "9f4e101dd59fff76044e0f3370e84421bf7d0fe3b4d99c41623a95aecf6b014b": [
-        person("blue", "blond", "파란색 티셔츠와 금발 머리의 경비원이 빈 금고 앞에 서 있습니다.",
-               [0.30, 0.30, 0.30, 0.40]),
+    "25bd62fd1217883d082b6c1635f8e59354e96a33a3cb513c74014225b64097c4": [
+        person("blue", "blond", "파란색 유니폼을 입은 금발 머리의 경비원이 열린 금고 문 앞에 서 있습니다.",
+               [0.33, 0.24, 0.12, 0.55]),
     ],
-    "db7214692d79e57d29bc5cb6b41e753ce826f3da5fc7b413cdc931c855cc3ca0": [
+    "12f9a2671e874bd98f3ca8dd7e9561dc4f3ac80bc527de6a35c94e478fec72a8": [
         person("black", "black", "검은색 티셔츠와 검은 머리의 사람이 서버 랙 사이에 웅크리고 있습니다.",
-               [0.38, 0.30, 0.26, 0.42]),
+               [0.22, 0.48, 0.22, 0.52]),
         person("gray", "brown", "회색 티셔츠와 갈색 머리의 사람이 뒤쪽 모니터 앞에 앉아 있습니다.",
-               [0.60, 0.20, 0.20, 0.30]),
+               [0.77, 0.29, 0.13, 0.19]),
     ],
-    "5c16a6f09b6487f636eb2a3f7b6aebdadb0a82eaaebb62ceab5c609c62951da5": [
+    "977571d417d03e8b4ad84ad4bd8fd859a1a4893da8a222e925aaf7aa62bf44ec": [
         person("blue", "brown", "파란색 유니폼과 갈색 머리의 청소 담당 직원이 열린 창문 옆에 서 있습니다.",
-               [0.35, 0.32, 0.28, 0.40]),
+               [0.55, 0.20, 0.08, 0.40]),
     ],
     # Construction Site Safety scenario fixtures. Every hot-pink worker
     # visible in all three real reference photos is bareheaded (no hard

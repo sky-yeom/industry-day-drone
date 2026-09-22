@@ -159,8 +159,9 @@ class SurveyTests(unittest.TestCase):
         from relay import tools
 
         self.assertEqual(tools.GREETING,
-                         "안녕! 난 Gibby라고해! 지금 119에 긴급 신고가 세 건 들어왔어. 바다, 잔해 아래, 불이 난 집, "
-                         "이렇게 세 곳에 사람이 있는데 드론은 한 대뿐이라 한 곳씩 차례로 찾아서 위치를 신고해야 해. 먼저 "
+                         "안녕! 난 Gibby야! 너는 119종합상황실 소속 상황요원이고, 방금 익명 문자로 사진이랑 같이 위급 신고가 "
+                         "들어왔어. 바다, 잔해 아래, 불이 난 집, 이렇게 세 곳에 사람이 있는데 드론은 한 대뿐이라 한 곳씩 차례로 "
+                         "찾아서 위치를 신고해야 해. 네가 오더만 내려주면 내가 드론 보낼게! 먼저 "
                          "바다에서 어떤 사람을 찾아줘야 하는지 말해줄 수 있어?")
         self.assertEqual(tools.OPENING_QUESTION, "바다에서 어떤 사람을 찾아줘야 하는지 말해줄 수 있어?")
         self.assertIn("하나씩", SCENARIO["briefing"][1])

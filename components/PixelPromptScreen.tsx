@@ -9,6 +9,7 @@ import { CONSTRUCTION_TARGET_SITE, type ConstructionZone } from "@/data/construc
 import type { BriefingBullet, MissionState, ScenarioKind } from "@/lib/types";
 import type { VoiceStatus } from "@/lib/voiceClient";
 import VoiceTurnIndicator from "@/components/VoiceTurnIndicator";
+import VoiceTextFallback from "@/components/VoiceTextFallback";
 
 const pixelFont = Press_Start_2P({ weight: "400", subsets: ["latin"] });
 
@@ -29,6 +30,7 @@ export default function PixelPromptScreen({
   state,
   scenarioKind,
   voiceStatus,
+  onSendText,
   error,
   onRetry,
   promptConfidence,
@@ -45,6 +47,7 @@ export default function PixelPromptScreen({
   // would flash the wrong (default triage) layout for a moment.
   scenarioKind: ScenarioKind;
   voiceStatus?: VoiceStatus;
+  onSendText?: (text: string) => boolean;
   error?: string | null;
   onRetry?: () => void;
   promptConfidence?: number | null;
@@ -53,6 +56,9 @@ export default function PixelPromptScreen({
   const confirmed = state.promptPhase === "confirmed";
   return (
     <div className="relative z-10 flex h-full min-h-0 w-full flex-col justify-center gap-3 pl-4 pr-[calc(6%+481px*var(--ui-scale))] pb-[8dvh] pt-4 sm:pl-6 sm:pt-6">
+      {voiceStatus && onSendText && (
+        <div className="pixel-panel absolute right-4 top-4 z-30 w-full max-w-xs bg-white/95 p-2 sm:right-6 sm:top-6"><VoiceTextFallback onSendText={onSendText} /></div>
+      )}
       <div className="flex min-h-0 flex-1 flex-col gap-3" style={{ zoom: 0.85 }}>
       <div className="flex shrink-0 flex-wrap items-baseline gap-x-3 gap-y-1">
         <p className="text-sm font-bold tracking-[0.14em] text-[#091f2c] sm:text-base">임무 브리핑</p>

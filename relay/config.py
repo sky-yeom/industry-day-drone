@@ -148,6 +148,13 @@ PREFIX_PADDING_MS = int(os.getenv("VOICE_LIVE_PREFIX_PADDING_MS", "420"))
 # 실제 상태 변경은 별도의 발화/동의 검증을 통과해야 합니다.
 # 행사장 잡음과 실제 짧은 한국어 답변으로 확인한 뒤 환경 변수로 조정합니다.
 SPEECH_DURATION_MS = int(os.getenv("VOICE_LIVE_SPEECH_DURATION_MS", "80"))
+
+# create_response:true라서 Voice Live가 speech_stopped 직후 스스로 새 응답을
+# 만든다. 이때 실제로 잡힌 발화 길이(audio_end_ms - audio_start_ms)가 이 값보다
+# 짧으면 잡음/에코로 보고 그 응답을 브라우저로 전달하지 않는다(재생 안 함).
+# VAD_THRESHOLD/SILENCE_DURATION_MS는 짧은 "네"/"1번" 대답을 놓치지 않으려고
+# 일부러 낮춰둔 값이라 건드리지 않고, 재생 여부만 이 문턱값으로 따로 거른다.
+NATIVE_RESPONSE_MIN_SPEECH_MS = int(os.getenv("VOICE_LIVE_MIN_SPEECH_MS", "350"))
 VOICE_DIAGNOSTICS = os.getenv("VOICE_LIVE_DIAGNOSTICS", "0") == "1"
 VOICE_TRACE_DIRECTORY = os.getenv("RELAY_VOICE_TRACE_DIRECTORY", "").strip()
 

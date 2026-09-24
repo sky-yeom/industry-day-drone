@@ -4,9 +4,6 @@ import { Press_Start_2P } from "next/font/google";
 import { useCallback, useEffect, useState } from "react";
 import PixelGround from "@/components/PixelGround";
 import PixelPromptScreen from "@/components/PixelPromptScreen";
-import { SECURITY_ZONES } from "@/data/security-scenario";
-import { CONSTRUCTION_ZONES } from "@/data/construction-scenario";
-import { TRIAGE_SITES } from "@/data/scenario";
 import { SCENARIO_LIST, SCENARIOS, type ScenarioConfig, type ScenarioId } from "@/data/scenarios";
 import { useTypewriter } from "@/lib/useTypewriter";
 import type { MissionState } from "@/lib/types";
@@ -62,6 +59,7 @@ export default function GibbyIntroSequence({
   state,
   promptConfidence,
   promptConfidenceReason,
+  onForceNext,
 }: {
   onReady: () => void;
   onScenarioChosen?: (id: ScenarioId) => void;
@@ -72,6 +70,7 @@ export default function GibbyIntroSequence({
   state: MissionState;
   promptConfidence?: number | null;
   promptConfidenceReason?: string;
+  onForceNext?: () => void;
 }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [scenario, setScenario] = useState<ScenarioConfig>(SCENARIOS["saving-people"]);
@@ -215,11 +214,6 @@ export default function GibbyIntroSequence({
       <div className={`intro-stage absolute inset-0 z-10 ${phase === "sliding" || phase === "exiting" || phase === "done" ? "intro-stage--in" : ""}`}>
         <PixelPromptScreen
           briefing={scenario.briefing}
-          sites={
-            scenario.kind === "security" ? SECURITY_ZONES
-              : scenario.kind === "construction" ? CONSTRUCTION_ZONES
-              : TRIAGE_SITES
-          }
           state={state}
           scenarioKind={scenario.kind}
           voiceStatus={phase === "done" ? voiceStatus : undefined}
@@ -227,6 +221,7 @@ export default function GibbyIntroSequence({
           onRetry={onRetry}
           promptConfidence={promptConfidence}
           promptConfidenceReason={promptConfidenceReason}
+          onForceNext={phase === "done" ? onForceNext : undefined}
         />
       </div>
     </main>

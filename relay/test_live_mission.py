@@ -250,6 +250,8 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.commands("drone_execute_route")), 1)
         self.assertEqual(self.commands("drone_execute_route")[0][1]["arguments"]["destination_ids"], ["tag-3", "tag-1", "tag-2"])
         self.backend.arrived = True
+        await settle(lambda: len(self.session.data["captures"]) == 3)
+        self.clock.advance(max(p["deadlineMs"] for p in self.session.data["people"]) + 1000)
         await settle(lambda: self.session.phase == "complete")
         self.assertEqual([c["monitorId"] for c in self.session.data["captures"]], ["monitor-3", "monitor-1", "monitor-2"])
         self.assertEqual([c["visitIndex"] for c in self.session.data["captures"]], [0, 1, 2])
@@ -271,6 +273,8 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
         self.backend.arrived = True
         self.vision.results = [NEGATIVE]
         await self.runner.launch()
+        await settle(lambda: self.session.person("monitor-3")["outcome"] == "reported")
+        self.clock.advance(max(p["deadlineMs"] for p in self.session.data["people"]) + 1000)
         await settle(lambda: self.session.phase == "complete")
         self.assertEqual([f.id for f, _ in self.vision.calls][:2], ["frame-0-0", "frame-0-1"])
         self.assertEqual(len(self.commands("drone_execute_route")), 1)
@@ -283,6 +287,8 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
         await settle(lambda: len(self.commands("drone_get_captures")) >= 4)
         self.assertEqual([f.id for f, _ in self.vision.calls], ["frame-0-0"])
         self.backend.frames_per_visit = 2
+        await settle(lambda: self.session.person("monitor-3")["outcome"] == "reported")
+        self.clock.advance(max(p["deadlineMs"] for p in self.session.data["people"]) + 1000)
         await settle(lambda: self.session.phase == "complete")
         self.assertEqual([f.id for f, _ in self.vision.calls][:2], ["frame-0-0", "frame-0-1"])
         self.assertEqual(len(self.commands("drone_execute_route")), 1)

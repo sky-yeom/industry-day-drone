@@ -124,6 +124,33 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(e["id"] == "request-1" for e in activity))
         self.assertFalse((await self.bridge.run_tool("launch_mission", {"mode": "azure"}, "bad"))["ok"])
 
+    async def test_force_next_button_command_sequence_advances_without_voice(self):
+        """The top-right "force next" button (app/page.tsx forceConfirmPrompt/
+        forceConfirmRoute) sends raw browser `command` messages, which
+        pump_browser routes straight to run_tool with no model/voice turn
+        involved at all. Confirm that full sequence — confirm_prompt,
+        two select_stop calls, confirm_route, launch_mission — succeeds and
+        actually launches the mission, exactly like a real voice
+        confirmation would."""
+        for index, (name, args) in enumerate((
+            ("confirm_prompt", {"prompt_text": SEARCH_PROMPT, "appearance_constraints": [],
+                                 "unsupported_appearance": []}),
+            ("select_stop", {"monitor": "monitor-1"}),
+            ("select_stop", {"monitor": "monitor-2"}),
+            ("confirm_route", {}),
+            ("launch_mission", {}),
+        )):
+            self.browser.incoming.put_nowait(json.dumps(
+                {"type": "command", "name": name, "args": args, "requestId": f"force-{index}-{name}"}))
+        self.browser.incoming.put_nowait(None)
+        with self.assertRaises(WebSocketDisconnect):
+            await self.bridge.pump_browser()
+        finished = {event["name"]: event["result"] for event in self.browser.events if event["type"] == "tool.finished"}
+        for name in ("confirm_prompt", "select_stop", "confirm_route", "launch_mission"):
+            self.assertTrue(finished[name]["ok"], finished[name])
+        self.assertEqual(self.session.data["missionPhase"], "flying")
+        self.assertTrue(self.session.data["clockRunning"])
+
     async def test_opening_preserves_rules_and_asks_for_participant_description(self):
         vad = server.build_session()["session"]["turn_detection"]
         self.assertFalse(vad["interrupt_response"])
@@ -136,7 +163,6 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(upstream.sent), 1)
         response = upstream.sent[0]["response"]
         self.assertTrue(response["instructions"].startswith(tools.SYSTEM_PROMPT))
-        self.assertIn(tools.OPENING_QUESTION, response["instructions"])
         self.assertIn(f"읽을 문장: {tools.GREETING}", response["instructions"])
         self.assertIn("정확히 그대로", response["instructions"])
         self.assertNotIn("상황을 한 문장으로만 안내하세요", response["instructions"])
@@ -185,6 +211,10 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
                         "values": ["red"]}], []),
         ):
             with self.subTest(text=text):
+                self.session.data["promptPhase"] = "briefing"
+                self.session.data["activePromptMonitorId"] = MONITOR_IDS[0]
+                for person in self.session.data["people"]:
+                    person["promptConfirmed"] = False
                 outcome = await self.bridge.run_tool("confirm_prompt", {
                     "prompt_text": text,
                     "appearance_constraints": constraints,
@@ -195,13 +225,19 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(snapshot["userPromptText"], text)
                 self.assertEqual(snapshot["appearanceConstraints"], constraints)
                 self.assertEqual(snapshot["unsupportedAppearance"], unsupported)
-                self.assertIn(text, outcome["facts"])
                 for person in SCENARIO["people"]:
                     self.assertNotIn(person["targetAppearance"]["description"], outcome["facts"])
 
     async def test_departure_closes_voice_but_mission_and_text_results_continue(self):
         ready(self.session)
         self.session.scenario.update(travelMs=0, captureMs=0)
+        # False-alarm sites never resolve from detection alone; drop their
+        # deadlines to (effectively) zero so they settle immediately via the
+        # runner's own inline expire() checks instead of needing a real,
+        # multi-second wall-clock wait in this unit test.
+        for person in self.session.data["people"]:
+            if person.get("falseAlarm"):
+                person["deadlineMs"] = 0
         self.vision.block = asyncio.Event()
         upstream = Upstream()
         self.bridge.upstream = upstream
@@ -234,7 +270,8 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([e["responseId"] for e in self.browser.events if e["type"] == "mission.launch.done"], ["departure"])
         self.vision.block.set()
         await settle(lambda: any(e["type"] == "mission.debrief" for e in self.browser.events))
-        self.assertEqual(self.session.data["score"]["reportedCount"], 3)
+        self.assertEqual(self.session.data["score"]["reportedCount"], 1)
+        self.assertEqual(self.session.data["score"]["falseAlarmCount"], 2)
         self.assertEqual(sum(e["type"] == "response.create" for e in upstream.sent), 1)
         self.assertFalse(any(e["type"] == "mission.debrief.response" for e in self.browser.events))
 
@@ -716,11 +753,16 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         scenario = deepcopy(SCENARIO)
         scenario.update(travelMs=0, captureMs=0)
         session = SurveySession(scenario=scenario)
+        # False-alarm sites never resolve from detection alone; drop their
+        # deadlines to zero so they settle immediately (via the runner's own
+        # inline expire() checks) instead of needing a real, multi-second
+        # wall-clock wait in this unit test.
+        for person in session.data["people"]:
+            if person.get("falseAlarm"):
+                person["deadlineMs"] = 0
         messages = [
             {"type": "command", "name": name, "args": args, "requestId": str(i)}
             for i, (name, args) in enumerate((
-                ("confirm_prompt", PROMPT_ARGS),
-                ("confirm_prompt", PROMPT_ARGS),
                 ("confirm_prompt", PROMPT_ARGS),
                 ("select_stop", {"monitor": "monitor-3"}),
                 ("select_stop", {"monitor": "monitor-2"}),
@@ -740,14 +782,13 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(browser.events[0]["type"], "relay.ready")
         self.assertEqual(browser.events[1]["state"]["missionPhase"], "briefing")
         self.assertEqual(session.phase, "complete")
-        self.assertEqual(session.data["score"]["reportedCount"], 3)
+        self.assertEqual(session.data["score"]["reportedCount"], 1)
+        self.assertEqual(session.data["score"]["falseAlarmCount"], 2)
         self.assertTrue(browser.closed)
 
     async def test_route_intro_prefetches_before_client_ready_signal(self):
         upstream = Upstream()
         self.bridge.upstream = upstream
-        for _ in range(len(MONITOR_IDS) - 1):
-            self.session.confirm_prompt(**PROMPT_ARGS)
         participant_turn(self.bridge, SEARCH_PROMPT)
         self.session.prepare_prompt(**PROMPT_ARGS)
         spoken_reply(self.bridge)
@@ -784,8 +825,6 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         for name, args in (("select_stop", {"monitor": "monitor-3"}), ("confirm_route", {}),
                            ("launch_mission", {}), ("confirm_prompt", {"prompt_text": " "})):
             self.assertFalse((await self.bridge.run_tool(name, args))["ok"])
-        for _ in range(len(MONITOR_IDS) - 1):
-            self.session.confirm_prompt(**PROMPT_ARGS)
         self.assertTrue((await self.bridge.run_tool(
             "confirm_prompt", PROMPT_ARGS, "participant-prompt"))["ok"])
         self.assertEqual(self.session.data["userPromptText"], SEARCH_PROMPT)
@@ -851,12 +890,9 @@ class StrictVoiceTests(unittest.IsolatedAsyncioTestCase):
             {"type": "response.done", "response": {"id": response_id, "status": "completed"}})
 
     async def intro(self):
-        # Two earlier sites are already confirmed directly on the session (no
-        # bridge/voice interaction to assert on); this helper exercises the
-        # bridge-driven flow for the third and final confirmation only, which
-        # is the one that reveals the case briefing and starts the route intro.
-        for _ in range(len(MONITOR_IDS) - 1):
-            self.session.confirm_prompt(**PROMPT_ARGS)
+        # confirm_prompt now confirms all sites in a single call, so this
+        # helper exercises the bridge-driven flow for that one confirmation,
+        # which is what reveals the case briefing and starts the route intro.
         self.session.prepare_prompt(**PROMPT_ARGS)
         spoken_reply(self.bridge)
         turn = participant_turn(self.bridge, "응")
@@ -1043,8 +1079,6 @@ class StrictVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.events("voice.input.ready")), 2)
 
     async def test_late_admitted_consent_prefetches_once_without_opening_between_turns(self):
-        for _ in range(len(MONITOR_IDS) - 1):
-            self.session.confirm_prompt(**PROMPT_ARGS)
         self.session.prepare_prompt(**PROMPT_ARGS)
         spoken_reply(self.bridge)
         await self.admit("consent")

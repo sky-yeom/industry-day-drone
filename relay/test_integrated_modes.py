@@ -140,7 +140,11 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
                     state = None
                     async def receive():
                         nonlocal state
-                        event = json.loads(await asyncio.wait_for(ws.recv(), 20))
+                        # False-alarm sites only ever resolve at their
+                        # deadline (up to 40s), and the runner only pushes
+                        # route.state on an actual revision change, so this
+                        # can legitimately go quiet for a while mid-mission.
+                        event = json.loads(await asyncio.wait_for(ws.recv(), 45))
                         self.assertNotEqual(event["type"], "relay.error", event)
                         if event["type"] == "route.state":
                             state = event["state"]
@@ -161,9 +165,8 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
                             if event["type"] == "tool.finished" and event["id"] == rid:
                                 self.assertTrue(event["result"]["ok"], event)
                                 return
-                    for _ in range(3):
-                        await command("confirm_prompt", {"prompt_text": "초록색 티셔츠를 입은 사람",
-                                                          "appearance_constraints": [], "unsupported_appearance": []})
+                    await command("confirm_prompt", {"prompt_text": "초록색 티셔츠를 입은 사람",
+                                                      "appearance_constraints": [], "unsupported_appearance": []})
                     await ws.send(json.dumps({"type": "route_intro.ready"}))
                     await command("select_stop", {"monitor": "monitor-2"})
                     await command("select_stop", {"monitor": "monitor-3"})
@@ -172,7 +175,11 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
                         await receive()
                     self.assertEqual(state["confirmedRoute"], ["monitor-2", "monitor-3", "monitor-1"])
                     await command("launch_mission", {})
-                    deadline = time.monotonic() + 30
+                    # False-alarm sites (monitor-1/monitor-2) only ever
+                    # resolve once their real-time deadline elapses (up to
+                    # 40s here), never via detection alone, so this needs a
+                    # longer real-wallclock budget than a plain capture wait.
+                    deadline = time.monotonic() + 45
                     while time.monotonic() < deadline:
                         event = await receive()
                         if state["missionPhase"] == "complete" and state["droneState"] == "completed":
@@ -215,9 +222,6 @@ class IntegratedModeTests(unittest.IsolatedAsyncioTestCase):
                 bridge.runner.close = AsyncMock()
                 try:
                     participant_turn(bridge, "사람을 찾아줘")
-                    self.assertTrue(session.prepare_prompt("사람을 찾아줘", [], [])["ok"])
-                    for _ in range(2):
-                        session.confirm_prompt("사람을 찾아줘", [], [])
                     self.assertTrue(session.prepare_prompt("사람을 찾아줘", [], [])["ok"])
                     spoken_reply(bridge)
                     await bridge.handle_tool_call({

@@ -2,8 +2,8 @@
   "title": "코드 레드: 드론 신고 정찰대",
   "briefing": [
     "너는 119 종합상황실 상황요원이야! 방금 익명 문자로 사진이랑 같이 위급 신고가 들어왔어. 드론은 구조하러 가는 게 아니라 사람을 찾아서 정확한 위치를 알려주는 정찰팀이니까, 네가 오더 내려주면 나(기비)랑 드론부터 보내보자!",
-    "세 현장 모두 사람이 다르니까, 불난 집·바다·잔해 순서로 각 현장 사람이 어떤 모습인지 하나씩 목소리로 알려줘!",
-    "세 명 모두 확인하고 나면 어디부터 확인해서 신고할지 함께 순서를 정할게. 출발하면 시간이 흐르니까 신중하게 골라줘!"
+    "바다, 잔해 아래, 불이 난 집, 이렇게 세 곳에서 신고가 들어왔는데 그중 두 곳은 오인 신고고 한 곳에만 실제로 사람이 있어.",
+    "먼저 찾는 사람이 어떤 모습인지 하나만 말해줘. 그다음 어디부터 확인할지 함께 정하자. 시간을 끌면 진짜 위급 상황을 놓칠 수 있어!"
   ],
   "travelMs": 7000,
   "captureMs": 1000,
@@ -14,12 +14,16 @@
     {
       "id": "person-1",
       "monitorId": "monitor-1",
-      "label": "바다에 빠진 사람",
-      "clue": "바다에 빠진 사람이 물에 떠 있으려고 힘겹게 버티고 있습니다.",
-      "reportDetail": "해안에서 방위 072°, 약 400m 지점 GPS 좌표를 119에 전달합니다.",
+      "label": "바다에서 신고된 사람",
+      "clue": "파도에 떠밀려 사람처럼 보이는 물체가 떠 있다는 목격 신고입니다.",
+      "reportDetail": "119에 알릴 실제 인명 사고가 아닙니다.",
+      "falseAlarm": true,
+      "falseAlarmReveal": "바다는 그냥 유실된 부표였어. 신고자가 사람으로 착각한 거였어.",
       "initiallyInjured": false,
       "vulnerable": false,
-      "deadlineMs": 28000,
+      "dramaticRank": 2,
+      "clueRank": 3,
+      "deadlineMs": 30000,
       "image": "/monitors/monitor-1.png",
       "x": 17.5,
       "y": 43,
@@ -30,24 +34,28 @@
         0.37
       ],
       "targetAppearance": {
-        "shirtColor": "blue",
+        "shirtColor": "green",
         "hairColor": "brown",
         "garment": "t-shirt",
-        "description": "파란색 티셔츠를 입고 갈색 머리를 한 사람",
-        "referenceImage": "/monitors/reference-person-1.png",
-        "referenceAlt": "파란색 반팔 티셔츠를 입고 갈색 머리를 한 참고 인물"
+        "description": "초록색 티셔츠를 입고 갈색 머리를 한 사람",
+        "referenceImage": "/monitors/reference-person.png",
+        "referenceAlt": "초록색 반팔 티셔츠를 입고 갈색 머리를 한 참고 인물"
       },
       "siteName": "바다"
     },
     {
       "id": "person-2",
       "monitorId": "monitor-2",
-      "label": "잔해 아래의 사람",
-      "clue": "무너진 잔해 아래에 갇혀 가벼운 부상을 입었습니다.",
-      "reportDetail": "붕괴 건물 동쪽 잔해 구역, 노약자로 추정되는 대상의 위치를 119에 전달합니다.",
-      "initiallyInjured": true,
-      "vulnerable": true,
-      "deadlineMs": 45000,
+      "label": "잔해 아래 신고된 사람",
+      "clue": "잔해 틈에서 사람 신음 같은 소리가 들린다는 신고입니다.",
+      "reportDetail": "119에 알릴 실제 인명 사고가 아닙니다.",
+      "falseAlarm": true,
+      "falseAlarmReveal": "잔해 아래는 사람이 아니라 길을 잃은 개였어. 짖는 소리를 사람 목소리로 착각한 거였어.",
+      "initiallyInjured": false,
+      "vulnerable": false,
+      "dramaticRank": 3,
+      "clueRank": 2,
+      "deadlineMs": 40000,
       "image": "/monitors/monitor-2.png",
       "x": 71,
       "y": 43,
@@ -59,23 +67,26 @@
       ],
       "targetAppearance": {
         "shirtColor": "green",
-        "hairColor": "black",
+        "hairColor": "brown",
         "garment": "t-shirt",
-        "description": "초록색 티셔츠를 입고 검은 머리를 한 사람",
-        "referenceImage": "/monitors/reference-person-2.png",
-        "referenceAlt": "초록색 반팔 티셔츠를 입고 검은 머리를 한 참고 인물"
+        "description": "초록색 티셔츠를 입고 갈색 머리를 한 사람",
+        "referenceImage": "/monitors/reference-person.png",
+        "referenceAlt": "초록색 반팔 티셔츠를 입고 갈색 머리를 한 참고 인물"
       },
       "siteName": "잔해 아래"
     },
     {
       "id": "person-3",
       "monitorId": "monitor-3",
-      "label": "불길 속의 사람",
-      "clue": "불이 난 집 안에 사람이 갇혀 있습니다. 불길이 번지고 있습니다.",
+      "label": "불이 난 집에 갇힌 사람",
+      "clue": "불이 난 집 안에서 사람이 창문을 두드리며 도움을 요청하고 있습니다. 불길이 번지고 있어 시간이 없습니다.",
       "reportDetail": "화재 건물 3층 두 번째 창문 위치를 119에 전달합니다.",
+      "falseAlarm": false,
       "initiallyInjured": false,
       "vulnerable": false,
-      "deadlineMs": 18000,
+      "dramaticRank": 1,
+      "clueRank": 1,
+      "deadlineMs": 24000,
       "image": "/monitors/monitor-3.png",
       "x": 46,
       "y": 29,
@@ -86,12 +97,12 @@
         0.41
       ],
       "targetAppearance": {
-        "shirtColor": "orange",
+        "shirtColor": "green",
         "hairColor": "brown",
         "garment": "t-shirt",
-        "description": "주황색 티셔츠를 입고 갈색 머리를 한 사람",
-        "referenceImage": "/monitors/reference-person-3.png",
-        "referenceAlt": "주황색 반팔 티셔츠를 입고 갈색 머리를 한 참고 인물"
+        "description": "초록색 티셔츠를 입고 갈색 머리를 한 사람",
+        "referenceImage": "/monitors/reference-person.png",
+        "referenceAlt": "초록색 반팔 티셔츠를 입고 갈색 머리를 한 참고 인물"
       },
       "siteName": "불이 난 집"
     }

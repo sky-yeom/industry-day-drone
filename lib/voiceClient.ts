@@ -24,7 +24,7 @@ const ROUTE_BUFFER_LIMIT = 4 * 1024 * 1024;
 // and can transcribe Gibby's own trailing words as if the participant had
 // replied. Env-overridable so it can be tuned on-site for the venue's
 // actual speaker setup without a rebuild.
-const MIC_REOPEN_DELAY_MS = Number(process.env.NEXT_PUBLIC_MIC_REOPEN_DELAY_MS ?? 450);
+const MIC_REOPEN_DELAY_MS = Number(process.env.NEXT_PUBLIC_MIC_REOPEN_DELAY_MS ?? 800);
 class VoiceProtocolError extends Error {}
 
 const RELAY_HTTP =

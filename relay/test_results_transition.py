@@ -151,7 +151,11 @@ oldReady();render();
 assert.deepEqual(session.ready,["run"]);
 oldReady();render();
 assert.deepEqual(session.ready,["run"],"readiness is idempotent");
-assert.equal(find("ResultsPanel").props.visible,false);
+// The result boxes show as soon as the return animation completes, rather
+// than waiting for the separate voice-narration connection to start audio -
+// onResultsReveal firing later (or not at all, e.g. voice-off) must not be
+// required and must not un-reveal what is already shown.
+assert.equal(find("ResultsPanel").props.visible,true);
 handlers.onResultsReveal();render();
 assert.equal(find("ResultsPanel").props.visible,true);
 emit({missionPhase:"complete",revision:5});

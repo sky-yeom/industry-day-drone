@@ -43,8 +43,6 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.session.data["clockRunning"])
 
     async def test_description_requires_readback_then_separate_consent(self):
-        for _ in range(len(MONITOR_IDS) - 1):
-            self.session.confirm_prompt(**PROMPT_ARGS)
         turn = participant_turn(self.bridge, SEARCH_PROMPT)
         self.assertFalse((await self.call("confirm_prompt", {}, turn))["ok"])
         self.assertTrue((await self.call("prepare_prompt", PROMPT_ARGS, turn))["ok"])
@@ -223,8 +221,6 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
                 self.session.data["activePromptMonitorId"] = MONITOR_IDS[0]
                 for person in self.session.data["people"]:
                     person["promptConfirmed"] = False
-                for _ in range(len(MONITOR_IDS) - 1):
-                    self.session.confirm_prompt(**PROMPT_ARGS)
                 self.session.prepare_prompt(**PROMPT_ARGS)
                 self.bridge.voice_turns.prepare_prompt()
                 spoken_reply(self.bridge)

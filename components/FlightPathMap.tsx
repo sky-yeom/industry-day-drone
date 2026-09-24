@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { useEffect, useRef, useState, type Ref } from "react";
 import DroneImagePanel from "@/components/DroneImagePanel";
+import ForceNextButton from "@/components/ForceNextButton";
 import VoiceTurnIndicator from "@/components/VoiceTurnIndicator";
 import type { VoiceStatus } from "@/lib/voiceClient";
 import { MAP_IMAGE_BY_KIND, MONITOR_MAP_BY_KIND, MONITORS_BY_KIND } from "@/data/monitors";
@@ -18,27 +19,44 @@ export const MISSION_LABELS: Record<DashboardState["missionPhase"], string> = {
 export function MissionCountdownSummary({ state, elapsedMs, connected }: {
   state: DashboardState; elapsedMs: number; connected: boolean;
 }) {
-  return <section aria-label="세 사람의 119 신고 시한과 현재 작전 상태" className="space-y-1">
+  // Triage shares one clock for the whole mission (there's only one real
+  // person to save; the other 2 sites are false alarms), so it gets a
+  // single combined countdown instead of a per-site timer in each card —
+  // matches the "one timer to save that person" framing directly.
+  const realPerson = state.kind === "triage"
+    ? state.people.find((person) => !person.falseAlarm) : null;
+  const sharedRemaining = realPerson
+    ? Math.max(0, realPerson.deadlineMs - (realPerson.resolvedAtMs ?? elapsedMs)) : null;
+  return <section aria-label="119 신고 시한과 현재 작전 상태" className="space-y-1">
     <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
       <strong>{MISSION_LABELS[state.missionPhase]}{state.activeMonitorId ? ` · ${MONITOR_MAP_BY_KIND[state.kind][state.activeMonitorId].label}` : ""}</strong>
       <span className="tabular-nums">
         경과 {(elapsedMs / 1000).toFixed(1)}초 · {state.clockRunning ? connected ? "진행 중" : "연결 끊김 · 마지막 수신 상태" : "정지"}
       </span>
     </div>
+    {sharedRemaining !== null && !realPerson?.outcome && (
+      <p className="pixel-panel bg-[#fde4e4] px-2 py-1 text-xs font-bold tabular-nums text-[#7a1f1f]">
+        구조 시한 · 남은 {(sharedRemaining / 1000).toFixed(1)}초
+      </p>
+    )}
     <div className="grid grid-cols-3 gap-2">
       {state.people.map((person) => {
         const remaining = Math.max(0, person.deadlineMs - (person.resolvedAtMs ?? elapsedMs));
         return <div key={person.id} className={`pixel-panel px-2 py-1 ${state.activeMonitorId === person.monitorId ? "bg-[#f0ebf7]" : "bg-white"}`}>
           <p className="text-xs font-semibold">{MONITOR_MAP_BY_KIND[state.kind][person.monitorId].label}{person.attempts >= 2 ? " · 2회 시도" : ""}</p>
           <p className="text-xs font-semibold tabular-nums">{person.outcome
-            ? (state.kind === "security" && person.falseAlarm && person.outcome === "escaped"
+            ? (person.falseAlarm && ((state.kind === "security" && person.outcome === "escaped")
+                || (state.kind === "triage" && person.outcome === "report_missed"))
               ? (person.falseAlarmReveal ?? "오경보")
               : state.kind === "security" ? SECURITY_OUTCOME_LABELS[person.outcome as "caught" | "escaped"]
               : state.kind === "construction" ? CONSTRUCTION_OUTCOME_LABELS[person.outcome as "reported" | "not_found" | "unchecked"]
               : OUTCOME_LABELS[person.outcome as "reported" | "reported_injured" | "report_missed"])
-            // Construction has no deadline mechanic — nothing to count down.
-            : state.kind === "construction" ? "미확인" : `남은 ${(remaining / 1000).toFixed(1)}초`}</p>
-          {!person.outcome && remaining === 0 && state.kind !== "construction" && <p className="mt-1 text-xs">서버 판정 대기 중</p>}
+            // Construction has no deadline mechanic; triage now shows one
+            // shared clock above instead of a per-site countdown.
+            : state.kind === "construction" ? "미확인"
+            : state.kind === "triage" ? "확인 중"
+            : `남은 ${(remaining / 1000).toFixed(1)}초`}</p>
+          {!person.outcome && remaining === 0 && state.kind !== "construction" && state.kind !== "triage" && <p className="mt-1 text-xs">서버 판정 대기 중</p>}
         </div>;
       })}
     </div>
@@ -62,7 +80,7 @@ export function MissionCountdownSummary({ state, elapsedMs, connected }: {
  * 3 report-deadline timers.
  */
 export default function FlightPathMap({ state, boarded = false, elapsedMs, connected, departing = false, markerRef,
-  voiceStatus, onMapReady, onMapError }: {
+  voiceStatus, onMapReady, onMapError, onForceNext }: {
   state: DashboardState;
   boarded?: boolean;
   elapsedMs: number;
@@ -72,6 +90,7 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
   voiceStatus?: VoiceStatus;
   onMapReady?: () => void;
   onMapError?: (message: string) => void;
+  onForceNext?: () => void;
 }) {
   const [mapReady, setMapReady] = useState(false);
   const mapCallbacks = useRef({ onMapReady, onMapError });
@@ -132,18 +151,14 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
     // instead of a full-height pr on this section — that used to reserve
     // the bubble's width across the *entire* map+cards row and squeezed
     // both the map and the cards column far smaller than needed.
-    className={`mission-workspace flex h-full min-h-0 w-full flex-col gap-3 p-3 sm:p-4 ${departing ? "mission-workspace--exiting" : ""}`}
+    className={`mission-workspace relative flex h-full min-h-0 w-full flex-col gap-3 p-3 sm:p-4 ${departing ? "mission-workspace--exiting" : ""}`}
     inert={departing} aria-hidden={departing || undefined}>
+    {onForceNext && <ForceNextButton onClick={onForceNext} />}
     <div className="mission-workspace-heading relative z-30 flex shrink-0 items-start justify-between gap-3 px-1">
       <div className="flex flex-wrap items-baseline gap-2">
         <p className="text-[0.625rem] font-bold tracking-[0.2em] text-[#091f2c]">실시간 경로 관제</p>
         <h2 className="text-lg font-semibold text-[#091f2c]">비행경로</h2>
         {voiceStatus && <VoiceTurnIndicator status={voiceStatus} />}
-      </div>
-      <div className="flex shrink-0 flex-col items-end gap-2">
-        <span className={`pixel-panel px-3 py-1.5 text-xs font-semibold text-[#091f2c] ${isConfirmed ? "bg-[#0078d4]" : "bg-white"}`}>
-          {isConfirmed ? "경로 확정" : route.length === 3 ? "확정 대기" : "경로 구성 중"}
-        </span>
       </div>
     </div>
 

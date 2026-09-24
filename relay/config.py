@@ -127,7 +127,11 @@ VISION_MAX_IMAGE_BYTES = 4 * 1024 * 1024
 #
 # 이 값이 체감 지연의 가장 큰 덩어리다. 더 줄이면 한국어 종결어미("~할까요")가
 # 잘려서 오히려 대화가 끊긴다.
-SILENCE_DURATION_MS = int(os.getenv("VOICE_LIVE_SILENCE_MS", "300"))
+#
+# 현장 피드백: 300ms는 참가자가 생각하며 잠깐(약 0.5초) 멈추는 순간에도 VAD가
+# "발화 종료"로 판단해 버려서 Gibby가 참가자 말을 끊고 먼저 대답하는 문제가
+# 있었다. 700ms로 늘려서 실제로 말이 끝날 때까지 기다리도록 한다.
+SILENCE_DURATION_MS = int(os.getenv("VOICE_LIVE_SILENCE_MS", "700"))
 
 # 실제 공급자 비교에서 semantic VAD가 누락한 짧은 응답을 acoustic VAD가 감지했습니다.
 # 의미 기반 종료 감지가 필요하면 azure_semantic_vad_multilingual로 선택할 수 있습니다.

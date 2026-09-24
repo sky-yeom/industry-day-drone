@@ -2,7 +2,7 @@
   "title": "건설 현장 안전 점검",
   "briefing": [
     "너는 산업안전보건 근로감독관이야! 건설 현장 세 구역, 위쪽 통로랑 가운데 기초 공사 구역이랑 오른쪽 플랫폼에서 안전 수칙을 어기고 있다는 익명 신고가 사진이랑 같이 문자로 왔어. 네가 오더 내려주면 내가 드론 한 대로 한 곳씩 확인해볼게!",
-    "핑크색 작업복을 입고 안전모를 쓰지 않은 사람을 찾아서 현장 안전관리자에게 위치를 신고해야 해.",
+    "안전 수칙을 어긴 사람을 찾아서 현장 안전관리자에게 위치를 신고해야 해.",
     "먼저 어떤 사람을 찾아야 하는지 말해줘. 주변 구조물이나 자재를 기준으로 위치를 알려주면 더 정확하게 신고할 수 있어."
   ],
   "travelMs": 7000,
@@ -33,7 +33,7 @@
         "headwear": "bare",
         "description": "핑크색 작업복을 입고 안전모를 쓰지 않은 사람",
         "referenceImage": "/monitors/construction-reference-worker.png",
-        "referenceAlt": "핑크색 작업복을 입고 안전모를 쓰지 않은 참고 사진"
+        "referenceAlt": "찾는 사람의 참고 사진"
       },
       "siteName": "위쪽 통로"
     },
@@ -59,7 +59,7 @@
         "headwear": "bare",
         "description": "핑크색 작업복을 입고 안전모를 쓰지 않은 사람",
         "referenceImage": "/monitors/construction-reference-worker.png",
-        "referenceAlt": "핑크색 작업복을 입고 안전모를 쓰지 않은 참고 사진"
+        "referenceAlt": "찾는 사람의 참고 사진"
       },
       "siteName": "기초 공사 구역"
     },
@@ -85,7 +85,7 @@
         "headwear": "bare",
         "description": "핑크색 작업복을 입고 안전모를 쓰지 않은 사람",
         "referenceImage": "/monitors/construction-reference-worker.png",
-        "referenceAlt": "핑크색 작업복을 입고 안전모를 쓰지 않은 참고 사진"
+        "referenceAlt": "찾는 사람의 참고 사진"
       },
       "siteName": "오른쪽 플랫폼"
     }

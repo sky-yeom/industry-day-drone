@@ -184,7 +184,7 @@ class ConfigSubprocessTests(unittest.TestCase):
         self.assertEqual(value["VAD_TYPE"], "server_vad")
         self.assertEqual(value["VAD_LANGUAGES"], ["ko"])
         self.assertEqual((value["SILENCE_DURATION_MS"], value["SPEECH_DURATION_MS"],
-            value["PREFIX_PADDING_MS"], value["VAD_THRESHOLD"]), (300, 80, 420, 0.5))
+            value["PREFIX_PADDING_MS"], value["VAD_THRESHOLD"]), (700, 80, 420, 0.5))
 
     def test_process_selection_wins_inherited_flags_and_preserves_voice(self):
         baseline = self.snapshot({})

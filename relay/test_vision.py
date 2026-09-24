@@ -220,8 +220,14 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
                 capture = await camera.capture(person["monitorId"])
                 evidence = await vision.analyze(
                     capture, search_prompt=person["targetAppearance"]["description"])
-                self.assertTrue(evidence["targetPresent"])
-                self.assertIsNotNone(evidence["box"])
+                if person.get("falseAlarm"):
+                    # False-alarm sites never contain anyone matching the
+                    # shared target description — that's the whole point.
+                    self.assertFalse(evidence["targetPresent"])
+                    self.assertIsNone(evidence["box"])
+                else:
+                    self.assertTrue(evidence["targetPresent"])
+                    self.assertIsNotNone(evidence["box"])
                 self.assertIn("모의 분석", evidence["description"])
                 self.assertIn("AI 미사용", evidence["description"])
             sleep.assert_awaited_with(SCENARIO["mockAnalysisMs"] / 1000)
@@ -269,10 +275,10 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_noncanonical_person_matching_confirmed_prompt_succeeds(self):
         with patch("relay.vision.asyncio.sleep", new_callable=AsyncMock):
-            result = await MockVision().analyze(self.capture, search_prompt="파란색 티셔츠를 입은 사람")
+            result = await MockVision().analyze(self.capture, search_prompt="회색 옷을 입은 사람")
         self.assertTrue(result["targetPresent"])
         self.assertIn("왼쪽", result["description"])
-        self.assertEqual(result["box"], [0.07, 0.24, 0.28, 0.22])
+        self.assertEqual(result["box"], [0.10, 0.62, 0.10, 0.32])
 
     async def test_each_provider_rejects_blank_prompt(self):
         for prompt in ("", " ", None, "x" * 2001):

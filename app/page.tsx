@@ -9,10 +9,10 @@ import GibbyRouteDock from "@/components/GibbyRouteDock";
 import GibbyResultsTransition from "@/components/GibbyResultsTransition";
 import PixelShell from "@/components/PixelShell";
 import ResultsPanel from "@/components/ResultsPanel";
-import { INITIAL_ROUTE_STATE } from "@/data/monitors";
-import { INITIAL_MISSION_STATE, TRIAGE_SITES } from "@/data/scenario";
-import { SECURITY_SUSPECT_SITE } from "@/data/security-scenario";
-import { CONSTRUCTION_TARGET_SITE } from "@/data/construction-scenario";
+import { INITIAL_ROUTE_STATE, MONITORS_BY_KIND } from "@/data/monitors";
+import { INITIAL_MISSION_STATE, TARGET_APPEARANCE, TRIAGE_TARGET_SITE } from "@/data/scenario";
+import { SECURITY_SUSPECT_SITE, SECURITY_TARGET_APPEARANCE } from "@/data/security-scenario";
+import { CONSTRUCTION_TARGET_APPEARANCE, CONSTRUCTION_TARGET_SITE } from "@/data/construction-scenario";
 import { SCENARIOS, type ScenarioId } from "@/data/scenarios";
 import { fetchRelayConfig, VoiceSession, type RelayConfig, type VoiceStatus } from "@/lib/voiceClient";
 import type { ChatMessage, DashboardState } from "@/lib/types";
@@ -91,6 +91,10 @@ export default function Home() {
     if (scene.generation !== generationRef.current || returnSceneRef.current !== scene || resultsReadyRef.current) return;
     resultsReadyRef.current = true;
     setStep("results");
+    // Show the result text boxes as soon as the return animation finishes -
+    // don't make the participant stare at a blank screen while a brand new
+    // voice connection spins up just to narrate the debrief out loud.
+    setResultsVisible(true);
     sessionRef.current?.markResultsReady(scene.runId);
   }, []);
 
@@ -247,6 +251,35 @@ export default function Home() {
     start();
   }, [reset, start]);
 
+  // Manual operator override for a mic/venue-audio failure: drives the
+  // exact same relay tools a real voice confirmation would, through the
+  // model-independent browser "command" channel (see run_tool in
+  // relay/server.py), so mission state stays consistent either way.
+  const forceConfirmPrompt = useCallback(() => {
+    const session = sessionRef.current;
+    if (!session || state.promptPhase === "confirmed") return;
+    const kind = SCENARIOS[scenarioId].kind;
+    const description = kind === "security" ? SECURITY_TARGET_APPEARANCE.description
+      : kind === "construction" ? CONSTRUCTION_TARGET_APPEARANCE.description
+      : TARGET_APPEARANCE.description;
+    session.sendCommand("confirm_prompt", {
+      prompt_text: description, appearance_constraints: [], unsupported_appearance: [],
+    });
+  }, [scenarioId]);
+
+  const forceConfirmRoute = useCallback(() => {
+    const session = sessionRef.current;
+    if (!session) return;
+    // Force the first two stops in scenario map order rather than a
+    // hardcoded "monitor-1"/"monitor-2" - keeps this in sync automatically
+    // if a scenario's stop ids or count ever change.
+    const [first, second] = MONITORS_BY_KIND[SCENARIOS[scenarioId].kind];
+    if (first) session.sendCommand("select_stop", { monitor: first.id });
+    if (second) session.sendCommand("select_stop", { monitor: second.id });
+    session.sendCommand("confirm_route");
+    session.sendCommand("launch_mission");
+  }, [scenarioId]);
+
   // Display interpolation only: expiration, reporting and scoring remain relay-owned.
   const elapsedMs = state.elapsedMs + (state.clockRunning ? Math.max(0, now - snapshot.receivedAt) : 0);
   const visionReady = config?.visionReady ?? false;
@@ -263,6 +296,7 @@ export default function Home() {
       state={state}
       promptConfidence={state.promptConfidence}
       promptConfidenceReason={state.promptConfidenceReason}
+      onForceNext={forceConfirmPrompt}
     />;
   }
 
@@ -272,7 +306,7 @@ export default function Home() {
       sites={
         scenario.kind === "security" ? [SECURITY_SUSPECT_SITE]
           : scenario.kind === "construction" ? [CONSTRUCTION_TARGET_SITE]
-          : TRIAGE_SITES
+          : [TRIAGE_TARGET_SITE]
       }
       state={state}
       briefing={scenario.briefing}
@@ -314,7 +348,8 @@ export default function Home() {
         <FlightPathMap state={state} boarded={boarded} elapsedMs={elapsedMs} connected={connected}
           markerRef={markerRef} departing={Boolean(returnScene)}
           voiceStatus={!missionLaunched ? status : undefined}
-          onMapReady={() => sessionRef.current?.sendRouteIntroReady()} onMapError={setSceneError} />
+          onMapReady={() => sessionRef.current?.sendRouteIntroReady()} onMapError={setSceneError}
+          onForceNext={step === "route" && !missionLaunched ? forceConfirmRoute : undefined} />
       </div>}
       {step === "results" && <div className="results-content h-full min-h-0">
         <ResultsPanel state={state} debrief={debrief} onReset={reset} visible={resultsVisible} />

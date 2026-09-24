@@ -4,9 +4,8 @@ import Image from "next/image";
 import { useEffect, useRef, useState, type Ref } from "react";
 import DroneImagePanel from "@/components/DroneImagePanel";
 import VoiceTurnIndicator from "@/components/VoiceTurnIndicator";
-import VoiceTextFallback from "@/components/VoiceTextFallback";
 import type { VoiceStatus } from "@/lib/voiceClient";
-import { MONITOR_MAP_BY_KIND, MONITORS_BY_KIND } from "@/data/monitors";
+import { MAP_IMAGE_BY_KIND, MONITOR_MAP_BY_KIND, MONITORS_BY_KIND } from "@/data/monitors";
 import { BOARDING_MIRRORED, MAP_MARKER_ENTRY, MAP_MARKER_HEIGHT, MAP_MARKER_SRC, MAP_MARKER_WIDTH } from "@/lib/gibbyDroneSprite";
 import { OUTCOME_LABELS, SECURITY_OUTCOME_LABELS, CONSTRUCTION_OUTCOME_LABELS, type DashboardState } from "@/lib/types";
 
@@ -47,12 +46,12 @@ export function MissionCountdownSummary({ state, elapsedMs, connected }: {
 }
 
 /**
- * Route step: a real map (public/gibby/map.png, matching the island art
- * Gibby unrolls during the map-finding transition) instead of the old
- * abstract dot-field/blob background. Each scenario (splash/rubble/fire)
- * gets a location-pin.png pin positioned exactly over its spot on the map
- * art (data/emergency-triage.json monitor x/y were remapped to match this
- * art); pins stay hidden until the user picks that stop into the route,
+ * Route step: a real map (MAP_IMAGE_BY_KIND — one background per scenario:
+ * the triage island, the security facility floor plan, the construction
+ * site) instead of the old abstract dot-field/blob background. Each site
+ * gets a location-pin.png pin positioned exactly over its spot on that
+ * scenario's map art (monitor x/y in data/monitors.ts were tuned to match
+ * each map); pins stay hidden until the user picks that stop into the route,
  * then pop in, and a dashed path connects picked pins in the order chosen.
  *
  * This screen now also persists through the whole mission (no separate
@@ -63,7 +62,7 @@ export function MissionCountdownSummary({ state, elapsedMs, connected }: {
  * 3 report-deadline timers.
  */
 export default function FlightPathMap({ state, boarded = false, elapsedMs, connected, departing = false, markerRef,
-  voiceStatus, onSendText, onMapReady, onMapError }: {
+  voiceStatus, onMapReady, onMapError }: {
   state: DashboardState;
   boarded?: boolean;
   elapsedMs: number;
@@ -71,7 +70,6 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
   departing?: boolean;
   markerRef?: Ref<HTMLDivElement>;
   voiceStatus?: VoiceStatus;
-  onSendText?: (text: string) => boolean;
   onMapReady?: () => void;
   onMapError?: (message: string) => void;
 }) {
@@ -146,15 +144,12 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
         <span className={`pixel-panel px-3 py-1.5 text-xs font-semibold text-[#091f2c] ${isConfirmed ? "bg-[#0078d4]" : "bg-white"}`}>
           {isConfirmed ? "경로 확정" : route.length === 3 ? "확정 대기" : "경로 구성 중"}
         </span>
-        {voiceStatus && onSendText && (
-          <div className="pixel-panel max-w-xs bg-white/95 p-2"><VoiceTextFallback onSendText={onSendText} /></div>
-        )}
       </div>
     </div>
 
     <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,0.8fr)]">
       <div className="mission-map pixel-frame pixel-rendering relative mx-auto aspect-[3/2] w-full max-w-[43.5625rem] overflow-hidden">
-        <Image src="/gibby/map.png" alt="탐색 지역 지도" fill unoptimized loading="eager"
+        <Image src={MAP_IMAGE_BY_KIND[state.kind]} alt="탐색 지역 지도" fill unoptimized loading="eager"
           className="object-contain" sizes="(max-width: 1024px) 90vw, 697px"
           onLoad={() => setMapReady(true)} onError={() => {
             mapCallbacks.current.onMapError?.("지도를 불러오지 못했어. 현장 설명을 보고 진행해 줘.");

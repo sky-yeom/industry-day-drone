@@ -4,6 +4,15 @@ import securityScenario from "@/data/security-breach.json";
 import constructionScenario from "@/data/construction-safety.json";
 import { isMonitorId } from "@/data/scenario";
 
+// Each scenario gets its own map background art (Route screen + the
+// map-unroll transition) matching its 3 monitor locations — a shared
+// island map wouldn't make sense for e.g. an indoor security breach.
+export const MAP_IMAGE_BY_KIND: Record<ScenarioKind, string> = {
+  triage: "/gibby/map.png",
+  security: "/gibby/security-map.png",
+  construction: "/gibby/construction-map.png",
+};
+
 // Location display names shown throughout the Route/Images/Results screens
 // (previously generic "현장 1/2/3" — replaced with the actual place, since
 // with the pixel map showing real locations, numbered "site" labels read as

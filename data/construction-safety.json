@@ -23,8 +23,8 @@
       "carefulRank": 3,
       "deadlineMs": 999999999,
       "image": "/monitors/construction-upper-walkway.png",
-      "x": 20,
-      "y": 40,
+      "x": 13,
+      "y": 25,
       "mockBox": [0.57, 0.22, 0.10, 0.24],
       "targetAppearance": {
         "shirtColor": "pink",
@@ -50,7 +50,7 @@
       "deadlineMs": 999999999,
       "image": "/monitors/construction-foundation-area.png",
       "x": 50,
-      "y": 35,
+      "y": 28,
       "mockBox": [0.29, 0.32, 0.06, 0.20],
       "targetAppearance": {
         "shirtColor": "pink",
@@ -75,8 +75,8 @@
       "carefulRank": 1,
       "deadlineMs": 999999999,
       "image": "/monitors/construction-side-platform.png",
-      "x": 78,
-      "y": 40,
+      "x": 79,
+      "y": 32,
       "mockBox": [0.41, 0.35, 0.11, 0.29],
       "targetAppearance": {
         "shirtColor": "pink",

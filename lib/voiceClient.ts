@@ -16,6 +16,15 @@ const SAMPLE_RATE = 24000;
 const RESULTS_START_TIMEOUT_MS = 15000;
 const TURN_TAKING = "after-playback-v1";
 const ROUTE_BUFFER_LIMIT = 4 * 1024 * 1024;
+// On speaker-based (non-headphone) setups, the room's physical audio tail
+// (speaker decay / reverb / Bluetooth-speaker latency) can keep sounding
+// for a moment after the "drained" signal fires - that's a logical "the
+// buffer is empty" signal, not a guarantee the sound has actually finished
+// reaching the mic. Without this gap the mic reopens right into that tail
+// and can transcribe Gibby's own trailing words as if the participant had
+// replied. Env-overridable so it can be tuned on-site for the venue's
+// actual speaker setup without a rebuild.
+const MIC_REOPEN_DELAY_MS = Number(process.env.NEXT_PUBLIC_MIC_REOPEN_DELAY_MS ?? 450);
 class VoiceProtocolError extends Error {}
 
 const RELAY_HTTP =
@@ -526,7 +535,16 @@ export class VoiceSession {
     this.responseActive = false;
     this.handlers.onBusy(false);
     this.ws.send(JSON.stringify({ type: "voice.input.open", runId: this.currentRunId, windowId: ready.windowId }));
-    this.setMicrophoneMuted(false);
+    // Delay the actual mic unmute slightly so any residual playback tail
+    // has time to die out first (see MIC_REOPEN_DELAY_MS above). The relay
+    // is already told the window is open above; only local audio capture
+    // is deferred.
+    const generation = this.generation;
+    const windowId = ready.windowId;
+    window.setTimeout(() => {
+      if (generation !== this.generation || this.inputWindowId !== windowId) return;
+      this.setMicrophoneMuted(false);
+    }, MIC_REOPEN_DELAY_MS);
   }
 
   private afterOutput(contextTime: number | undefined, callback: () => void) {

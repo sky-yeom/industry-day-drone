@@ -57,7 +57,6 @@ export default function GibbyIntroSequence({
   onScenarioChosen,
   agentText,
   voiceStatus,
-  onSendText,
   error,
   onRetry,
   state,
@@ -68,7 +67,6 @@ export default function GibbyIntroSequence({
   onScenarioChosen?: (id: ScenarioId) => void;
   agentText: string;
   voiceStatus?: VoiceStatus;
-  onSendText?: (text: string) => boolean;
   error?: string | null;
   onRetry?: () => void;
   state: MissionState;
@@ -225,7 +223,6 @@ export default function GibbyIntroSequence({
           state={state}
           scenarioKind={scenario.kind}
           voiceStatus={phase === "done" ? voiceStatus : undefined}
-          onSendText={onSendText}
           error={phase === "done" ? error : null}
           onRetry={onRetry}
           promptConfidence={promptConfidence}

@@ -73,23 +73,23 @@ export interface TriageSite {
   referenceImage: string;
   referenceAlt: string;
   vulnerable: boolean;
+  falseAlarm: boolean;
 }
 
-// Static per-site art/copy for the merged triage board (3 site cards),
-// keyed in scenario order (fire/sea/rubble). Live confirmation state
-// (promptConfirmed/promptText/promptConfidence) comes from the relay
-// snapshot's people[] — this only carries what never changes at runtime.
-export const TRIAGE_SITES: TriageSite[] = scenario.people.map((person) => {
-  if (!isMonitorId(person.monitorId)) {
-    throw new Error(`Invalid scenario monitor: ${person.monitorId}`);
-  }
-  return {
-    monitorId: person.monitorId,
-    label: person.label,
-    clue: person.clue,
-    image: person.image,
-    referenceImage: person.targetAppearance.referenceImage,
-    referenceAlt: person.targetAppearance.referenceAlt,
-    vulnerable: person.vulnerable,
-  };
-});
+// Single-card stand-in for the prompt/confirm phase: like the security and
+// construction scenarios, this scenario has exactly one real person (in one
+// of the 3 sites — the other two are false alarms) described once by voice.
+// Reuses monitor-1's shared promptConfirmed/promptText/promptConfidence
+// (apply_prompt_to_all keeps all 3 people[] entries identical after
+// confirmation) so TriageSiteCards' existing person-lookup-by-monitorId
+// logic works unchanged with a 1-item list.
+export const TRIAGE_TARGET_SITE: TriageSite = {
+  monitorId: "monitor-1",
+  label: "찾는 사람",
+  clue: "찾는 사람이 어떤 모습인지 말해줘.",
+  image: scenario.people[0].image,
+  referenceImage: scenario.people[0].targetAppearance.referenceImage,
+  referenceAlt: scenario.people[0].targetAppearance.referenceAlt,
+  vulnerable: false,
+  falseAlarm: false,
+};

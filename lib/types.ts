@@ -82,7 +82,7 @@ export interface PersonState {
   promptText: string;
   promptConfidence: number | null;
   promptConfidenceReason: string;
-  // Only present for the "security" scenario kind.
+  // Present for the "security" and "triage" scenario kinds.
   falseAlarm?: boolean;
   falseAlarmReveal?: string;
 }
@@ -96,6 +96,7 @@ export interface MissionScore {
   // Security Breach ("112 신고") scenario fields.
   caughtCount?: number;
   escapedCount?: number;
+  // Shared by security and triage (their false-alarm sites).
   falseAlarmCount?: number;
   // Construction Site Safety (현장 안전관리자 신고) scenario fields.
   violationsReportedCount?: number;

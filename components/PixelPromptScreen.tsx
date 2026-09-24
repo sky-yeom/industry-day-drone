@@ -1,11 +1,12 @@
 "use client";
 
 import { Press_Start_2P } from "next/font/google";
+import ForceNextButton from "@/components/ForceNextButton";
 import TriageSiteCards from "@/components/TriageSiteCards";
 import { MONITOR_MAP_BY_KIND } from "@/data/monitors";
-import type { TriageSite } from "@/data/scenario";
-import { SECURITY_SUSPECT_SITE, type SecurityZone } from "@/data/security-scenario";
-import { CONSTRUCTION_TARGET_SITE, type ConstructionZone } from "@/data/construction-scenario";
+import { TRIAGE_TARGET_SITE } from "@/data/scenario";
+import { SECURITY_SUSPECT_SITE } from "@/data/security-scenario";
+import { CONSTRUCTION_TARGET_SITE } from "@/data/construction-scenario";
 import type { BriefingBullet, MissionState, ScenarioKind } from "@/lib/types";
 import type { VoiceStatus } from "@/lib/voiceClient";
 import VoiceTurnIndicator from "@/components/VoiceTurnIndicator";
@@ -13,19 +14,20 @@ import VoiceTurnIndicator from "@/components/VoiceTurnIndicator";
 const pixelFont = Press_Start_2P({ weight: "400", subsets: ["latin"] });
 
 /**
- * The merged "triage board": 3 site cards (fire / sea / rubble — see
- * TriageSiteCards) filled in one at a time as Gibby confirms each site's
- * target description by voice, plus the general briefing list. Once all 3
- * are confirmed, this also renders the two relay-proposed visit orders
- * (raw danger order vs. the same order adjusted for a vulnerable/elderly
- * person) so the "AI proposes, human decides" choice has a visual home,
- * not just a spoken one — the participant still picks their own order by
- * voice (select_stop), this is read-only reference. Gibby himself and his
- * speech bubble are rendered by the parent (GibbyIntroSequence.tsx).
+ * The prompt/confirm board: all 3 scenario kinds (119 rescue, security
+ * breach, construction safety) now share the same "single real
+ * target + 2 false alarms" shape, so this shows one compact site card
+ * (see TriageSiteCards) confirmed by voice, plus the general briefing
+ * list. Once confirmed, this also renders the two relay-proposed visit
+ * orders (raw "sounds urgent" order vs. the order adjusted for which
+ * clue is actually more likely real) so the "AI proposes, human
+ * decides" choice has a visual home, not just a spoken one — the
+ * participant still picks their own order by voice (select_stop), this
+ * is read-only reference. Gibby himself and his speech bubble are
+ * rendered by the parent (GibbyIntroSequence.tsx).
  */
 export default function PixelPromptScreen({
   briefing,
-  sites,
   state,
   scenarioKind,
   voiceStatus,
@@ -33,9 +35,9 @@ export default function PixelPromptScreen({
   onRetry,
   promptConfidence,
   promptConfidenceReason,
+  onForceNext,
 }: {
   briefing: BriefingBullet[];
-  sites: (TriageSite | SecurityZone | ConstructionZone)[];
   state: MissionState;
   // Known synchronously as soon as the user picks a scenario, unlike
   // state.kind — which only reflects the picked scenario once the relay's
@@ -49,11 +51,13 @@ export default function PixelPromptScreen({
   onRetry?: () => void;
   promptConfidence?: number | null;
   promptConfidenceReason?: string;
+  onForceNext?: () => void;
 }) {
   const confirmed = state.promptPhase === "confirmed";
   return (
-    <div className="relative z-10 flex h-full min-h-0 w-full flex-col justify-center gap-3 pl-4 pr-[calc(6%+481px*var(--ui-scale))] pb-[8dvh] pt-4 sm:pl-6 sm:pt-6">
-      <div className="flex min-h-0 flex-1 flex-col gap-3" style={{ zoom: 0.85 }}>
+    <div className="relative z-10 flex h-full min-h-0 w-full flex-col overflow-y-auto pl-4 pr-[calc(6%+481px*var(--ui-scale))] pb-[8dvh] pt-4 sm:pl-6 sm:pt-6">
+      {!confirmed && onForceNext && <ForceNextButton onClick={onForceNext} />}
+      <div className="flex min-h-0 flex-1 flex-col justify-center gap-2" style={{ zoom: 0.85 }}>
       <div className="flex shrink-0 flex-wrap items-baseline gap-x-3 gap-y-1">
         <p className="text-sm font-bold tracking-[0.14em] text-[#091f2c] sm:text-base">임무 브리핑</p>
         <h2 className={`${pixelFont.className} text-lg font-bold text-[#091f2c] sm:text-xl`}>탐지·신고 대상</h2>
@@ -74,16 +78,14 @@ export default function PixelPromptScreen({
         </div>}
 
       <div
-        className={`flex max-w-[53.75rem] ${
-          scenarioKind === "security" || scenarioKind === "construction" ? "flex-1 flex-row items-center gap-3" : "flex-col gap-3"
-        }`}
+        className="flex max-w-[53.75rem] flex-1 flex-row items-center gap-3"
       >
-        <div className={scenarioKind === "security" || scenarioKind === "construction" ? "shrink-0" : ""}>
+        <div className="shrink-0">
           <TriageSiteCards
             sites={
               scenarioKind === "security" ? [SECURITY_SUSPECT_SITE]
                 : scenarioKind === "construction" ? [CONSTRUCTION_TARGET_SITE]
-                : sites
+                : [TRIAGE_TARGET_SITE]
             }
             people={state.people}
             activeMonitorId={state.activePromptMonitorId}
@@ -92,9 +94,7 @@ export default function PixelPromptScreen({
 
         {!confirmed && (
           <div
-            className={`pixel-panel shrink-0 max-h-full min-w-0 overflow-y-auto bg-white/90 p-3 ${
-              scenarioKind === "security" || scenarioKind === "construction" ? "max-w-[500px]" : "max-w-[53.75rem]"
-            }`}
+            className="pixel-panel shrink-0 max-h-full min-w-0 max-w-[500px] overflow-y-auto bg-white/90 p-3"
           >
             <ol aria-label="임무 브리핑" className="space-y-2 text-xs leading-snug text-[#091f2c]">
               {briefing.map((bullet, index) => (
@@ -106,41 +106,41 @@ export default function PixelPromptScreen({
             </ol>
           </div>
         )}
-      </div>
 
-      {confirmed && (
-        <div className="pixel-panel max-w-[53.75rem] shrink-0 bg-white/90 p-4">
-          <p className="text-sm font-bold text-[#091f2c]">
-            {scenarioKind === "security"
-              ? "기비의 제안 순서 · 너는 어떤 순서로 확인하고 싶어?"
-              : scenarioKind === "construction"
-              ? "기비의 제안 순서 · 너는 어떤 순서로 점검하고 싶어?"
-              : "기비의 제안 순서 · 너는 어떤 순서로 신고하고 싶어?"}
-          </p>
-          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div>
-              <p className="text-xs font-bold tracking-[0.08em] text-[#6e6575]">
-                {scenarioKind === "security" ? "다급해 보이는 순서"
-                  : scenarioKind === "construction" ? "눈에 띄는 정도"
-                  : "위험도 기준"}
-              </p>
-              <p className="mt-1 text-sm leading-relaxed text-[#091f2c]">
-                {state.dangerOrder.map((id) => MONITOR_MAP_BY_KIND[scenarioKind][id]?.label ?? id).join(" → ")}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs font-bold tracking-[0.08em] text-[#6e6575]">
-                {scenarioKind === "security" ? "단서 분석 순서"
-                  : scenarioKind === "construction" ? "실제 위험도"
-                  : "노약자·거동 취약자 고려"}
-              </p>
-              <p className="mt-1 text-sm leading-relaxed text-[#091f2c]">
-                {state.vulnerableAdjustedOrder.map((id) => MONITOR_MAP_BY_KIND[scenarioKind][id]?.label ?? id).join(" → ")}
-              </p>
+        {confirmed && (
+          <div className="pixel-panel shrink-0 min-w-0 max-w-[500px] overflow-y-auto bg-white/90 p-3">
+            <p className="text-sm font-bold text-[#091f2c]">
+              {scenarioKind === "security"
+                ? "기비의 제안 순서 · 너는 어떤 순서로 확인하고 싶어?"
+                : scenarioKind === "construction"
+                ? "기비의 제안 순서 · 너는 어떤 순서로 점검하고 싶어?"
+                : "기비의 제안 순서 · 너는 어떤 순서로 신고하고 싶어?"}
+            </p>
+            <div className="mt-2 grid grid-cols-1 gap-2">
+              <div>
+                <p className="text-xs font-bold tracking-[0.08em] text-[#6e6575]">
+                  {scenarioKind === "security" ? "다급해 보이는 순서"
+                    : scenarioKind === "construction" ? "눈에 띄는 정도"
+                    : "다급하게 들리는 순서"}
+                </p>
+                <p className="mt-1 text-sm leading-relaxed text-[#091f2c]">
+                  {state.dangerOrder.map((id) => MONITOR_MAP_BY_KIND[scenarioKind][id]?.label ?? id).join(" → ")}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-bold tracking-[0.08em] text-[#6e6575]">
+                  {scenarioKind === "security" ? "단서 분석 순서"
+                    : scenarioKind === "construction" ? "실제 위험도"
+                    : "신고 내용 분석 순서"}
+                </p>
+                <p className="mt-1 text-sm leading-relaxed text-[#091f2c]">
+                  {state.vulnerableAdjustedOrder.map((id) => MONITOR_MAP_BY_KIND[scenarioKind][id]?.label ?? id).join(" → ")}
+                </p>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
       </div>
     </div>
   );

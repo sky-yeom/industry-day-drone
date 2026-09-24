@@ -30,19 +30,31 @@ class ScenarioContractTests(unittest.TestCase):
             ["monitor-1", "monitor-2", "monitor-3"],
         )
         self.assertEqual(len({person["id"] for person in people}), 3)
+        # monitor-3 is the one real target; monitor-1/monitor-2 are false
+        # alarms that never resolve as "reported" no matter what the
+        # analysis says, so their deadlines matter only for how long the
+        # participant is kept guessing before the reveal.
         self.assertLess(people[2]["deadlineMs"], people[0]["deadlineMs"])
         self.assertLess(people[0]["deadlineMs"], people[1]["deadlineMs"])
-        self.assertIn("바다", people[0]["clue"])
-        self.assertEqual(people[0]["deadlineMs"], 28000)
+        self.assertFalse(people[2]["falseAlarm"])
+        self.assertTrue(people[0]["falseAlarm"])
+        self.assertTrue(people[1]["falseAlarm"])
+        self.assertIn("바다", SCENARIO["people"][0]["siteName"])
+        self.assertEqual(people[0]["deadlineMs"], 30000)
         self.assertEqual(SCENARIO["injuryWindowMs"], 5000)
-        self.assertEqual(people[1]["deadlineMs"], 45000)
-        self.assertFalse(people[0]["initiallyInjured"])
-        self.assertTrue(people[1]["initiallyInjured"])
+        self.assertEqual(people[1]["deadlineMs"], 40000)
+        self.assertEqual(people[2]["deadlineMs"], 24000)
         for person in people:
             with self.subTest(monitor=person["monitorId"]):
                 self.assertTrue(person["clue"].strip())
                 self.assertGreater(person["deadlineMs"], 0)
                 self.assertGreater(person["deadlineMs"], SCENARIO["injuryWindowMs"])
+                if person["falseAlarm"]:
+                    self.assertTrue(person["falseAlarmReveal"].strip())
+                    # The initial report must stay ambiguous — the reveal
+                    # belongs only in falseAlarmReveal, not in the clue the
+                    # participant hears before checking the site.
+                    self.assertNotIn(person["falseAlarmReveal"], person["clue"])
 
     def test_nominal_priority_route_fits_each_window(self):
         stop_cost = sum(
@@ -52,7 +64,10 @@ class ScenarioContractTests(unittest.TestCase):
         by_monitor = {person["monitorId"]: person for person in SCENARIO["people"]}
         for position, monitor in enumerate(("monitor-3", "monitor-1", "monitor-2"), 1):
             self.assertLess(position * stop_cost, by_monitor[monitor]["deadlineMs"])
-        self.assertGreaterEqual(2 * stop_cost, by_monitor["monitor-3"]["deadlineMs"])
+        # The real target (monitor-3) is reachable in time as the 1st or 2nd
+        # stop but not the 3rd — checking it last always misses the rescue.
+        self.assertLess(2 * stop_cost, by_monitor["monitor-3"]["deadlineMs"])
+        self.assertGreaterEqual(3 * stop_cost, by_monitor["monitor-3"]["deadlineMs"])
         self.assertGreaterEqual(3 * stop_cost, by_monitor["monitor-1"]["deadlineMs"])
 
     def test_reference_photo_is_retained_without_constraining_detection(self):

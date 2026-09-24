@@ -163,8 +163,8 @@ class MockAppearanceTests(unittest.IsolatedAsyncioTestCase):
     async def test_raw_partial_description_finds_observed_nonreference_people(self):
         with patch("relay.vision.asyncio.sleep", new_callable=AsyncMock):
             for monitor, prompt in (
-                ("monitor-1", "파란색 티셔츠를 입은 사람"),
-                ("monitor-2", "회색 티셔츠를 입은 사람"),
+                ("monitor-1", "회색 티셔츠를 입은 사람"),
+                ("monitor-2", "검은색 티셔츠를 입은 사람"),
                 ("monitor-3", "주황색 티셔츠를 입은 사람"),
             ):
                 evidence = await MockVision().analyze(
@@ -175,7 +175,7 @@ class MockAppearanceTests(unittest.IsolatedAsyncioTestCase):
         """An extra unassessable detail ("안경") alongside a real, matchable
         color condition no longer blocks analysis — only the recognizable
         color/garment/hair signal is used for matching."""
-        frame = await FixtureCamera().capture("monitor-1")
+        frame = await FixtureCamera().capture("monitor-3")
         with patch("relay.vision.asyncio.sleep", new_callable=AsyncMock):
             evidence = await MockVision().analyze(frame, search_prompt="초록색 옷과 안경을 쓴 사람",
                 appearance_constraints=[condition("shirtColor", "green")], unsupported_appearance=[])

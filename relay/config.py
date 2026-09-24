@@ -127,7 +127,11 @@ VISION_MAX_IMAGE_BYTES = 4 * 1024 * 1024
 #
 # 이 값이 체감 지연의 가장 큰 덩어리다. 더 줄이면 한국어 종결어미("~할까요")가
 # 잘려서 오히려 대화가 끊긴다.
-SILENCE_DURATION_MS = int(os.getenv("VOICE_LIVE_SILENCE_MS", "300"))
+#
+# 현장 피드백: 300ms는 참가자가 생각하며 잠깐(약 0.5초) 멈추는 순간에도 VAD가
+# "발화 종료"로 판단해 버려서 Gibby가 참가자 말을 끊고 먼저 대답하는 문제가
+# 있었다. 700ms로 늘려서 실제로 말이 끝날 때까지 기다리도록 한다.
+SILENCE_DURATION_MS = int(os.getenv("VOICE_LIVE_SILENCE_MS", "700"))
 
 # 실제 공급자 비교에서 semantic VAD가 누락한 짧은 응답을 acoustic VAD가 감지했습니다.
 # 의미 기반 종료 감지가 필요하면 azure_semantic_vad_multilingual로 선택할 수 있습니다.
@@ -148,6 +152,13 @@ PREFIX_PADDING_MS = int(os.getenv("VOICE_LIVE_PREFIX_PADDING_MS", "420"))
 # 실제 상태 변경은 별도의 발화/동의 검증을 통과해야 합니다.
 # 행사장 잡음과 실제 짧은 한국어 답변으로 확인한 뒤 환경 변수로 조정합니다.
 SPEECH_DURATION_MS = int(os.getenv("VOICE_LIVE_SPEECH_DURATION_MS", "80"))
+
+# create_response:true라서 Voice Live가 speech_stopped 직후 스스로 새 응답을
+# 만든다. 이때 실제로 잡힌 발화 길이(audio_end_ms - audio_start_ms)가 이 값보다
+# 짧으면 잡음/에코로 보고 그 응답을 브라우저로 전달하지 않는다(재생 안 함).
+# VAD_THRESHOLD/SILENCE_DURATION_MS는 짧은 "네"/"1번" 대답을 놓치지 않으려고
+# 일부러 낮춰둔 값이라 건드리지 않고, 재생 여부만 이 문턱값으로 따로 거른다.
+NATIVE_RESPONSE_MIN_SPEECH_MS = int(os.getenv("VOICE_LIVE_MIN_SPEECH_MS", "350"))
 VOICE_DIAGNOSTICS = os.getenv("VOICE_LIVE_DIAGNOSTICS", "0") == "1"
 VOICE_TRACE_DIRECTORY = os.getenv("RELAY_VOICE_TRACE_DIRECTORY", "").strip()
 

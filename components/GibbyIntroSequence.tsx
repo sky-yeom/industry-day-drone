@@ -4,9 +4,6 @@ import { Press_Start_2P } from "next/font/google";
 import { useCallback, useEffect, useState } from "react";
 import PixelGround from "@/components/PixelGround";
 import PixelPromptScreen from "@/components/PixelPromptScreen";
-import { SECURITY_ZONES } from "@/data/security-scenario";
-import { CONSTRUCTION_ZONES } from "@/data/construction-scenario";
-import { TRIAGE_SITES } from "@/data/scenario";
 import { SCENARIO_LIST, SCENARIOS, type ScenarioConfig, type ScenarioId } from "@/data/scenarios";
 import { useTypewriter } from "@/lib/useTypewriter";
 import type { MissionState } from "@/lib/types";
@@ -19,8 +16,7 @@ const pixelFont = Press_Start_2P({ weight: "400", subsets: ["latin"] });
 
 const GIBBY_TITLE = "감사관 기비";
 const GIBBY_LINE = "오늘은 내가 감사관이야! 이상한 낌새가 없는지 같이 확인해보자.";
-const CHOOSING_TITLE = "무엇을 확인할까?";
-const CHOOSING_LINE = "목록 중에서 뭘 살펴볼지 골라줘!";
+const CHOOSING_TITLE = "시나리오 골라줘!";
 
 // How long Gibby smiles (row 1, frame 2 of the sprite sheet) before he
 // resets back to a neutral idle pose and then sets off walking.
@@ -63,6 +59,7 @@ export default function GibbyIntroSequence({
   state,
   promptConfidence,
   promptConfidenceReason,
+  onForceNext,
 }: {
   onReady: () => void;
   onScenarioChosen?: (id: ScenarioId) => void;
@@ -73,6 +70,7 @@ export default function GibbyIntroSequence({
   state: MissionState;
   promptConfidence?: number | null;
   promptConfidenceReason?: string;
+  onForceNext?: () => void;
 }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [scenario, setScenario] = useState<ScenarioConfig>(SCENARIOS["saving-people"]);
@@ -193,7 +191,6 @@ export default function GibbyIntroSequence({
           <div className="pixel-bubble pixel-bubble--gibby relative w-full max-w-3xl px-8 pb-8 pt-10 sm:px-14 sm:pt-12">
             <div className="ml-[1.25rem]">
               <h2 className={`${pixelFont.className} pixel-title text-2xl text-[#463668] sm:text-3xl`}>{CHOOSING_TITLE}</h2>
-              <p className="mt-5 text-xl leading-8 text-[#091f2c] sm:text-2xl sm:leading-9">{CHOOSING_LINE}</p>
             </div>
             <div className="ml-[1.25rem] mt-8 flex flex-wrap items-stretch justify-between gap-3">
               {SCENARIO_LIST.map((option) => (
@@ -217,11 +214,6 @@ export default function GibbyIntroSequence({
       <div className={`intro-stage absolute inset-0 z-10 ${phase === "sliding" || phase === "exiting" || phase === "done" ? "intro-stage--in" : ""}`}>
         <PixelPromptScreen
           briefing={scenario.briefing}
-          sites={
-            scenario.kind === "security" ? SECURITY_ZONES
-              : scenario.kind === "construction" ? CONSTRUCTION_ZONES
-              : TRIAGE_SITES
-          }
           state={state}
           scenarioKind={scenario.kind}
           voiceStatus={phase === "done" ? voiceStatus : undefined}
@@ -229,6 +221,7 @@ export default function GibbyIntroSequence({
           onRetry={onRetry}
           promptConfidence={promptConfidence}
           promptConfidenceReason={promptConfidenceReason}
+          onForceNext={phase === "done" ? onForceNext : undefined}
         />
       </div>
     </main>

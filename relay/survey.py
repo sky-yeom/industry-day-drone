@@ -46,22 +46,15 @@ def names(ids, labels=LABELS):
     return " → ".join(labels[mid] for mid in ids)
 
 
-def site_question(monitor, site_names=SITE_NAMES):
-    """The exact opening question read for one site, reused verbatim for
-    every site (first one included in GREETING, later ones read after each
-    confirm_prompt) so the participant always hears the same phrasing:
-    '<site>에서 어떤 사람을 찾아줘야 하는지 말해줄 수 있어?'."""
-    return f"{site_names[monitor]}에서 어떤 사람을 찾아줘야 하는지 말해줄 수 있어?"
-
-
 def suggested_orders_security(people):
-    """Two deterministic, relay-owned zone-check-order suggestions for the
-    "security" scenario kind, mirroring suggested_orders() above but keyed
-    off each zone's dramaticRank/clueRank instead of deadlineMs/vulnerable.
+    """Two deterministic, relay-owned zone-check-order suggestions shared by
+    the "security" and "triage" scenario kinds, mirroring
+    suggested_orders_construction() below but keyed off each zone's
+    dramaticRank/clueRank instead of noticeableRank/carefulRank.
 
     Reuses the dangerOrder/vulnerableAdjustedOrder field names on the session
     snapshot (see confirm_prompt) so the frontend/type surface stays a single
-    shape across both scenario kinds; only the meaning differs per kind:
+    shape across all scenario kinds; only the meaning differs per kind:
     dangerOrder here holds the naive "dramatic-sounding zone first" order,
     vulnerableAdjustedOrder holds the "careful clue-analysis" order.
     """
@@ -88,28 +81,11 @@ def suggested_orders_construction(people):
     return {"dangerOrder": noticeable, "vulnerableAdjustedOrder": careful}
 
 
-def suggested_orders(people):
-    """Two deterministic, relay-owned visit-order suggestions for the voice
-    layer to read aloud verbatim (never invent an order itself).
-
-    dangerOrder: pure current-visual-severity order (tightest deadline first).
-    vulnerableAdjustedOrder: the same order, but each vulnerable/elderly
-    person is moved one slot earlier, reflecting that raw urgency alone does
-    not account for who is least able to help themselves while waiting.
-    """
-    danger = sorted((p["monitorId"] for p in people),
-                    key=lambda mid: next(p["deadlineMs"] for p in people if p["monitorId"] == mid))
-    adjusted = danger[:]
-    vulnerable_ids = {p["monitorId"] for p in people if p.get("vulnerable")}
-    for monitor in list(vulnerable_ids):
-        index = adjusted.index(monitor)
-        if index > 0:
-            adjusted[index - 1], adjusted[index] = adjusted[index], adjusted[index - 1]
-    return {"dangerOrder": danger, "vulnerableAdjustedOrder": adjusted}
-
-
-def result(ok, facts, ask=""):
-    return {"ok": ok, "facts": facts, "ask": ask}
+def result(ok, facts, ask="", silent=False):
+    outcome = {"ok": ok, "facts": facts, "ask": ask}
+    if silent:
+        outcome["silent"] = True
+    return outcome
 
 
 def validate_evidence(evidence):
@@ -190,6 +166,11 @@ class SurveySession:
             elif kind == "construction":
                 extra = {"noticeableRank": person["noticeableRank"], "carefulRank": person["carefulRank"],
                          "reportDetail": person.get("reportDetail", "")}
+            elif kind == "triage":
+                extra = {"falseAlarm": person.get("falseAlarm", False),
+                         "falseAlarmReveal": person.get("falseAlarmReveal", ""),
+                         "dramaticRank": person["dramaticRank"], "clueRank": person["clueRank"],
+                         "reportDetail": person.get("reportDetail", "")}
             self.data["people"].append({
                 key: deepcopy(person[key]) for key in
                 ("id", "monitorId", "label", "clue",
@@ -269,7 +250,7 @@ class SurveySession:
         if not self._editable():
             return result(False, "출발한 임무의 탐색 프롬프트는 바꿀 수 없습니다.")
         if self.data["promptPhase"] == "confirmed":
-            return result(False, "이미 세 장소 모두 대상자 설명을 확인했습니다.")
+            return result(False, "이미 세 장소 모두 대상자 설명을 확인했습니다.", silent=True)
         try:
             values = self._prompt_values(prompt_text, appearance_constraints, unsupported_appearance)
         except ValueError as exc:
@@ -289,7 +270,7 @@ class SurveySession:
                          promptConfidence=confidence, promptConfidenceReason=reasoning)
         self.pending_prompt = None
         self.touch()
-        if self.kind in ("security", "construction"):
+        if self.kind in ("security", "construction", "triage"):
             # One suspect/one target description, described once; it applies
             # to every zone at once instead of advancing through a 3x
             # per-site loop.
@@ -318,6 +299,21 @@ class SurveySession:
                 outcome["confidence"] = confidence
                 outcome["confidenceReason"] = reasoning
                 return outcome
+            if self.kind == "triage":
+                orders = suggested_orders_security(self.data["people"])
+                dramatic_text = names(orders["dangerOrder"], self.labels)
+                clue_text = names(orders["vulnerableAdjustedOrder"], self.labels)
+                self.data["dangerOrder"] = orders["dangerOrder"]
+                self.data["vulnerableAdjustedOrder"] = orders["vulnerableAdjustedOrder"]
+                outcome = result(True,
+                              f"세 곳의 신고 내용을 모두 확인했습니다. 장소별 신고 내용: {cases}. "
+                              f"다급하게 들리는 순서만 보면 확인 순서는 {dramatic_text}. "
+                              f"신고 내용을 분석하면 추천 순서는 {clue_text}.",
+                              "먼저 세 곳의 신고 내용을 모두 설명하고, 이어서 두 추천 순서를 각각 설명한 뒤 "
+                              "참가자에게 직접 어떤 순서로 신고하고 싶은지 물어볼 것")
+                outcome["confidence"] = confidence
+                outcome["confidenceReason"] = reasoning
+                return outcome
             orders = suggested_orders_security(self.data["people"])
             dramatic_text = names(orders["dangerOrder"], self.labels)
             clue_text = names(orders["vulnerableAdjustedOrder"], self.labels)
@@ -332,35 +328,10 @@ class SurveySession:
             outcome["confidence"] = confidence
             outcome["confidenceReason"] = reasoning
             return outcome
-        remaining = [p for p in self.data["people"] if not p["promptConfirmed"]]
-        if remaining:
-            next_monitor = remaining[0]["monitorId"]
-            self.data["activePromptMonitorId"] = next_monitor
-            outcome = result(True,
-                          f"{self.site_names[monitor]}에 있는 사람 설명 확인: {text}. "
-                          f"이제 '{site_question(next_monitor, self.site_names)}'라고 물어볼 것",
-                          f"다음으로 '{site_question(next_monitor, self.site_names)}'라고 그대로 물어볼 것")
-        else:
-            self.data["promptPhase"] = "confirmed"
-            cases = " / ".join(
-                f"{self.labels[p['monitorId']]}: {p['clue']}" for p in self.data["people"])
-            orders = suggested_orders(self.data["people"])
-            danger_text = names(orders["dangerOrder"], self.labels)
-            adjusted_text = names(orders["vulnerableAdjustedOrder"], self.labels)
-            self.data["dangerOrder"] = orders["dangerOrder"]
-            self.data["vulnerableAdjustedOrder"] = orders["vulnerableAdjustedOrder"]
-            outcome = result(True,
-                          f"세 장소의 대상자 설명을 모두 확인했습니다. 장소별 신고 내용: {cases}. "
-                          f"지금 위험도만 보면 추천 순서는 {danger_text}. "
-                          f"노약자·거동 취약자를 고려하면 추천 순서는 {adjusted_text}.",
-                          "먼저 세 장소의 신고 내용을 모두 설명하고, 이어서 두 추천 순서를 각각 설명한 뒤 "
-                          "참가자에게 직접 어떤 순서로 신고하고 싶은지 물어볼 것")
-        # Kept separate from facts/ask: the confidence explanation is spoken and
-        # shown on the prompting page, before the case briefing above (which is
-        # deferred to the route/map page via the relay's route-intro step).
-        outcome["confidence"] = confidence
-        outcome["confidenceReason"] = reasoning
-        return outcome
+        # Unreachable: SurveySession.__init__ only accepts kinds in
+        # SCENARIOS_BY_KIND ("security"/"construction"/"triage"), all of
+        # which are handled above.
+        raise AssertionError(f"알 수 없는 시나리오 종류: {self.kind}")
 
     def resolve_monitor(self, value):
         """Accept either the canonical monitor id or the zone's spoken
@@ -493,18 +464,24 @@ class SurveySession:
                 and not person.get("falseAlarm")):
             if self.kind == "security":
                 person.update(outcome="caught", resolvedAtMs=now, captureId=capture_id)
-            elif self.kind == "construction":
-                person.update(outcome="reported", resolvedAtMs=now, captureId=capture_id)
             else:
-                injured = person["initiallyInjured"] or now >= person["deteriorationMs"]
-                person.update(outcome="reported_injured" if injured else "reported",
-                              resolvedAtMs=now, captureId=capture_id)
+                person.update(outcome="reported", resolvedAtMs=now, captureId=capture_id)
         elif (self.kind == "construction" and not evidence["targetPresent"] and person["outcome"] is None
               and person["attempts"] >= self.scenario["maxDetectionAttempts"]):
             # No deadline pressure in this scenario, so a zone that ran out of
             # detection attempts without a match resolves as genuinely
             # checked-but-empty rather than staying unresolved forever.
             person.update(outcome="not_found", resolvedAtMs=now, captureId=capture_id)
+        elif (self.kind in ("security", "triage") and not evidence["targetPresent"] and person["outcome"] is None
+              and person.get("falseAlarm") and person["attempts"] >= self.scenario["maxDetectionAttempts"]):
+            # A false-alarm site that's actually been visited and checked
+            # (no match after every allowed attempt) is resolved the moment
+            # that's confirmed, instead of leaving the participant staring at
+            # an unresolved result screen until that site's own deadline
+            # timer separately runs out (which can be tens of seconds after
+            # every real site has already been checked).
+            missed_outcome = "escaped" if self.kind == "security" else "report_missed"
+            person.update(outcome=missed_outcome, resolvedAtMs=now, captureId=capture_id)
         self._active_capture = None
         self.touch()
         self._finish_if_resolved()
@@ -567,9 +544,9 @@ class SurveySession:
                 }
             else:
                 score = {
-                    "reportedCount": sum(p["outcome"] in ("reported", "reported_injured") for p in people),
-                    "injuredCount": sum(p["outcome"] == "reported_injured" for p in people),
+                    "reportedCount": sum(p["outcome"] == "reported" for p in people),
                     "reportMissedCount": sum(p["outcome"] == "report_missed" for p in people),
+                    "falseAlarmCount": sum(bool(p.get("falseAlarm")) for p in people),
                     "total": len(people),
                 }
             self.data.update(missionPhase="complete", clockRunning=False, activeMonitorId=None,
@@ -620,46 +597,38 @@ class SurveySession:
             return self._debrief_security()
         if self.kind == "construction":
             return self._debrief_construction()
+        return self._debrief_triage()
+
+    def _debrief_triage(self):
         mode = "모의 분석" if self.data["mode"] == "mock" else "Azure 이미지 분석"
         if self.phase == "aborted":
-            return f"이번 {mode} 훈련은 여기서 멈췄어. 아직 확인하지 못한 사람들의 신고 결과는 알 수 없어."
+            return f"이번 {mode} 훈련은 여기서 멈췄어. 찾는 사람을 구조했는지는 아직 알 수 없어."
         score = self.data["score"]
         if not score:
             return ""
-        observations = []
+        reveals = []
         confidence_notes = []
+        real_site = next((p for p in self.data["people"] if not p.get("falseAlarm")), None)
         for person in self.data["people"]:
             capture = next((c for c in self.data["captures"] if c["id"] == person["captureId"]), None)
-            if person["outcome"] in ("reported", "reported_injured") and capture and capture["evidence"]:
+            if person["outcome"] == "reported" and capture and capture["evidence"]:
                 confidence_notes.append(
                     f"{self.labels[person['monitorId']]}: 확신도 {capture['evidence']['confidence']}%로 위치를 119에 신고했어.")
-            if person["outcome"] != "report_missed":
-                continue
-            frames = [frame for frame in self.data["captures"]
-                      if frame["monitorId"] == person["monitorId"] and frame["evidence"] is not None]
-            detail = "119에 신고할 수 있는 시간 안에 이미지 확인을 마치지 못했어."
-            if frames:
-                evidence = frames[-1]["evidence"]
-                detail = ("찾는 사람은 확인했지만, 이미지 분석이 신고 시한 안에 끝나지 않았어."
-                          if evidence["targetPresent"] else
-                          f"시간 안에 찾는 사람을 확인하지 못했어. 마지막 사진의 관찰 내용은 이거야.\n"
-                          f"\"{evidence['description']}\"")
-            observations.append(f"{self.labels[person['monitorId']]}: {detail}")
+            if person.get("falseAlarm"):
+                reveals.append(f"{self.labels[person['monitorId']]}: {person.get('falseAlarmReveal', '오인 신고였어.')}")
         summary = ["작전이 끝났어."]
-        if score["reportedCount"]:
-            summary.append(f"우리 함께 {score['total']}명 중 {score['reportedCount']}명의 위치를 119에 제때 신고했어.")
-            summary.append(f"그중 {score['injuredCount']}명은 부상이 확인돼서 119에도 함께 전달했어."
-                           if score["injuredCount"] else "신고한 사람 중 다친 사람은 없어.")
+        if real_site and real_site["outcome"] == "reported":
+            summary.append(f"실제 사람이 있던 {self.labels[real_site['monitorId']]}에서 시간 안에 위치를 119에 신고해서 구조로 이어졌어.")
+        elif real_site and real_site["outcome"] == "report_missed":
+            summary.append(f"실제 사람이 있던 {self.labels[real_site['monitorId']]}을(를) 시간 안에 확인하지 못해서 신고 시한을 놓쳤어.")
         else:
-            summary.append(f"이번에는 {score['total']}명 중 아무도 119에 제때 신고하지 못했어.")
-        summary.append(f"{score['reportMissedCount']}명은 신고할 수 있는 시간을 넘겼어."
-                       if score["reportMissedCount"] else "신고 시한은 모두 지켰어.")
+            summary.append("실제 사람이 있던 곳의 결과가 아직 확실하지 않아.")
         return "\n\n".join([
             " ".join(summary),
-            f"우리가 고른 순서는 {names(self.state.confirmedRoute, self.labels)}였어.",
+            f"우리가 고른 확인 순서는 {names(self.state.confirmedRoute, self.labels)}였어.",
             *confidence_notes,
-            *observations,
-            "어떤 모습을 찾을지, 어디부터 갈지, 이동하고 사진을 확인하는 데 얼마나 걸렸는지가 결과에 반영됐어. "
+            *reveals,
+            "어떤 순서로 장소를 확인할지, 이동하고 사진을 확인하는 데 얼마나 걸렸는지가 결과에 반영됐어. "
             f"이건 {mode}으로 진행한 가상 훈련이야.",
         ])
 

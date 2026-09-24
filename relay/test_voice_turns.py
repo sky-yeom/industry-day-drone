@@ -43,8 +43,6 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.session.data["clockRunning"])
 
     async def test_description_requires_readback_then_separate_consent(self):
-        for _ in range(len(MONITOR_IDS) - 1):
-            self.session.confirm_prompt(**PROMPT_ARGS)
         turn = participant_turn(self.bridge, SEARCH_PROMPT)
         self.assertFalse((await self.call("confirm_prompt", {}, turn))["ok"])
         self.assertTrue((await self.call("prepare_prompt", PROMPT_ARGS, turn))["ok"])
@@ -194,6 +192,28 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue((await self.call("confirm_prompt", {}, turn))["ok"])
                 self.assertIsNone(self.session.pending_prompt)
 
+    async def test_confirmation_succeeds_before_readback_audio_is_heard(self):
+        # Regression: a normal-speed reply can reach the relay before the
+        # readback's first TTS audio byte does (hear_response() hasn't fired
+        # yet). Consent must not depend on winning that race -- only on the
+        # readback response already having been created.
+        for text in ("응", "어", "맞아", "네", "해줘"):
+            with self.subTest(text=text):
+                self.session.data["promptPhase"] = "briefing"
+                self.session.data["activePromptMonitorId"] = MONITOR_IDS[0]
+                for person in self.session.data["people"]:
+                    person["promptConfirmed"] = False
+                self.session.prepare_prompt(**PROMPT_ARGS)
+                self.bridge.voice_turns.prepare_prompt()
+                revision = self.session.pending_prompt_revision
+                self.bridge.voice_turns.begin_prompt_readback("speaking", revision)
+                # No hear_response("speaking") here: the participant answers
+                # before any audio delta has arrived at the relay.
+                turn = participant_turn(self.bridge, text)
+                self.assertEqual(turn.prompt_revision, revision)
+                self.assertTrue((await self.call("confirm_prompt", {}, turn))["ok"])
+                self.assertIsNone(self.session.pending_prompt)
+
     async def test_native_reply_without_tool_still_confirms_once_with_early_or_late_transcript(self):
         for late in (False, True):
             with self.subTest(late=late):
@@ -201,8 +221,6 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
                 self.session.data["activePromptMonitorId"] = MONITOR_IDS[0]
                 for person in self.session.data["people"]:
                     person["promptConfirmed"] = False
-                for _ in range(len(MONITOR_IDS) - 1):
-                    self.session.confirm_prompt(**PROMPT_ARGS)
                 self.session.prepare_prompt(**PROMPT_ARGS)
                 self.bridge.voice_turns.prepare_prompt()
                 spoken_reply(self.bridge)
@@ -490,6 +508,18 @@ class DepartureInterpretationTests(unittest.TestCase):
         for text in ("음 맞아", "어 진짜 맞아요", "그러니까 맞아", "저기 좋아요"):
             self.assertTrue(is_affirmative(text), text)
         for text in ("음", "음 흠", "저기 그러니까", "음 아니야", "그러니까 아니야"):
+            self.assertFalse(is_affirmative(text), text)
+
+    def test_affirmative_recognizes_more_natural_phrasing(self):
+        # These are ordinary ways to say "yes" that previously fell through
+        # the hardcoded word list and were rejected as not_consent, forcing
+        # the model to re-ask the same question forever.
+        for text in ("아 네 맞아요", "네 그거 맞아요", "그럼 그렇게 하자",
+                     "네 그렇게 해주세요", "응 그렇게 해줘 고마워", "아 응 맞아 고마워"):
+            self.assertTrue(is_affirmative(text), text)
+        # Negatives and hesitations must still be rejected after the same change.
+        for text in ("그건 아니고", "아니 그게 아니라", "음... 잠깐만", "뭐라고요",
+                     "네 근데", "그건 아닌 것 같아"):
             self.assertFalse(is_affirmative(text), text)
 
 

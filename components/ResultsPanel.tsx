@@ -121,7 +121,10 @@ export default function ResultsPanel({ state, debrief, onReset, visible = true }
           ? `${score.total}곳 중 ${score.caughtCount ?? 0}곳 확인`
           : state.kind === "construction"
           ? `${score.total}곳 중 ${score.violationsReportedCount ?? 0}곳 신고`
-          : `${score.total}명 중 ${score.reportedCount}명 신고`) : "결과 확인 중"}</p>
+          // Triage now has exactly one real target hidden among false-alarm sites,
+          // so a "X명 중 Y명 신고" count reads as a fraction of many people rather
+          // than the single rescue this scenario actually is - report it as pass/fail.
+          : (score.reportedCount ?? 0) > 0 ? "구조 성공" : "구조 실패") : "결과 확인 중"}</p>
       </div>
       <div className="grid shrink-0 grid-cols-3 items-start gap-2">
         {state.people.map((person) => <article key={person.id} className={`pixel-panel min-w-0 [overflow-wrap:anywhere] ${compactSummary ? "p-1" : "p-1.5"}`}>
@@ -131,7 +134,8 @@ export default function ResultsPanel({ state, debrief, onReset, visible = true }
           </div>
           <p className={`${compactSummary ? "mt-0.5" : "mt-1"} text-xs font-semibold text-[#091f2c]`}>
             {person.outcome
-              ? (state.kind === "security" && person.falseAlarm && person.outcome === "escaped"
+              ? (person.falseAlarm && ((state.kind === "security" && person.outcome === "escaped")
+                  || (state.kind === "triage" && person.outcome === "report_missed"))
                 ? (person.falseAlarmReveal ?? "오경보")
                 : state.kind === "security" ? SECURITY_OUTCOME_LABELS[person.outcome as "caught" | "escaped"]
                 : state.kind === "construction" ? CONSTRUCTION_OUTCOME_LABELS[person.outcome as "reported" | "not_found" | "unchecked"]

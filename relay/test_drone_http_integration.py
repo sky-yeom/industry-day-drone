@@ -96,7 +96,8 @@ class HttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.client = DroneClient("relay-http-test", token=self.http.api_token, expected_mode="live")
         # Production remains fixed to :8766. Only this local test owns a random port.
         self.client.base_url = f"http://127.0.0.1:{self.http.server_port}"
-        self.session = SurveySession(clock=Clock(), mode="azure", drone_control_mode="live")
+        self.fake_clock = Clock()
+        self.session = SurveySession(clock=self.fake_clock, mode="azure", drone_control_mode="live")
         ready(self.session)
         self.vision, self.events = FakeVision(), []
         async def publish(event):
@@ -129,6 +130,12 @@ class HttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.vision.calls, [])
         self.assertEqual(self.session.data["captures"], [])
         self.adapter.arrive.set()
+        await self.wait_for(lambda: len(self.session.data["captures"]) == 3)
+        # False-alarm sites only ever resolve via their deadline (never via
+        # detection). This test uses a real, non-advancing clock, so nudge
+        # it forward past both false-alarm deadlines once all 3 sites have
+        # actually been physically visited/captured.
+        self.fake_clock.advance(max(p["deadlineMs"] for p in self.session.data["people"]) + 1000)
         await self.wait_for(lambda: self.session.phase == "complete")
         self.assertEqual(self.count("drone_execute_route"), 1)
         self.assertEqual([c["monitorId"] for c in self.session.data["captures"]],

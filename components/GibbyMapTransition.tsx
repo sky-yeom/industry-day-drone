@@ -5,6 +5,7 @@ import { preload } from "react-dom";
 import PixelGround from "@/components/PixelGround";
 import TriageSiteCards from "@/components/TriageSiteCards";
 import { ANCHOR_W, LAST_FRAME, gibbyFrameStyle } from "@/lib/gibbyMapSprite";
+import { MAP_IMAGE_BY_KIND } from "@/data/monitors";
 import type { TriageSite } from "@/data/scenario";
 import type { SecurityZone } from "@/data/security-scenario";
 import type { ConstructionZone } from "@/data/construction-scenario";
@@ -27,7 +28,7 @@ const READY_DELAY_MS = 150;
  * in his pocket and unrolls a map while the old prompt content (photo +
  * briefing) fades out and the title swaps to "비행경로". The moment he
  * reaches the last frame, `onDone` fires so the parent can swap into the live
- * Route step (real map.png + info cards) — there's no separate smaller
+ * Route step (real per-scenario map art + info cards) — there's no separate smaller
  * map preview shown here first.
  */
 export default function GibbyMapTransition({
@@ -41,7 +42,7 @@ export default function GibbyMapTransition({
   briefing: BriefingBullet[];
   onDone: () => void;
 }) {
-  preload("/gibby/map.png", { as: "image" });
+  preload(MAP_IMAGE_BY_KIND[state.kind], { as: "image" });
   const [frame, setFrame] = useState(0);
   const done = useRef(onDone);
   useEffect(() => { done.current = onDone; }, [onDone]);
@@ -93,7 +94,7 @@ export default function GibbyMapTransition({
         </div>
 
         {/* No map preview here anymore — the real Route screen (full
-            map.png + info cards) swaps in directly right after Gibby's
+            per-scenario map art + info cards) swaps in directly right after Gibby's
             last frame, at the same moment the voice cue fires (see the
             combined timeout above), instead of showing a smaller map
             here first and then the full one a moment later. */}

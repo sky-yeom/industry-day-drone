@@ -62,7 +62,7 @@ for (const visible of [undefined, true, false]) {
   const html = renderResults(visible);
   const reveal = html.indexOf('transition-opacity');
   assert.ok(reveal > html.indexOf("처음으로"), "reset remains outside reveal");
-  for (const text of ["3명 중 2명 신고", "사람 1", "사람 2", "사람 3",
+  for (const text of ["구조 성공", "사람 1", "사람 2", "사람 3",
                       "최종 작전 설명", "확정한 탐지 프롬프트"]) {
     assert.ok(html.indexOf(text) > reveal, `${text} belongs to the shared reveal`);
   }
@@ -119,7 +119,7 @@ const banner = find(panelTree, element => element.type === "div"
   && element.props.children?.[0]?.props?.children === "119 신고 작전 종료");
 assert.match(banner.props.className, /w-full.*flex-col/,
   "the summary stays a full-width, two-line banner even in short wide regions");
-assert.equal(banner.props.children[1].props.children, "3명 중 2명 신고");
+assert.equal(banner.props.children[1].props.children, "구조 성공");
 assert.ok(find(panelTree, element => element.props?.className === "grid shrink-0 grid-cols-3 items-start gap-2"),
   "the three people stay in their own row below the summary");
 assert.doesNotMatch(panelTree.props.className, /sm:p-3/);

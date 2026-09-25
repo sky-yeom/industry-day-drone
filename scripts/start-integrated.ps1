@@ -89,11 +89,23 @@ if ($real) {
     # The committed scenario deadlines are tuned to the mock timeline and all
     # expire at 45s, which completes the run and stops the hardware while a real
     # flight is still 30-55s from home. Real mode therefore defaults to the live
-    # scenario. Setting this by hand before the launcher cannot work: the loop
+    # scenarios. Setting these by hand before the launcher cannot work: the loop
     # below clears every RELAY_* process variable, so only the settings file or
-    # this line survives.
-    if (-not $connection.ContainsKey('RELAY_SCENARIO_FILE')) {
-        $connection['RELAY_SCENARIO_FILE'] = Join-Path $root 'data\emergency-triage-live.json'
+    # these lines survive.
+    # Each scenario kind reads its own file, so redirecting only the triage one
+    # would leave Security Breach on mock deadlines of 24-40s against a 77-100s
+    # flight - every zone expires as too_late before the aircraft reaches the
+    # second monitor. Construction has no deadline mechanic but is redirected
+    # too, so all three stay switchable from one live stack without a second rule.
+    $liveScenarios = @{
+        'RELAY_SCENARIO_FILE'              = 'data\emergency-triage-live.json'
+        'RELAY_SECURITY_SCENARIO_FILE'     = 'data\security-breach-live.json'
+        'RELAY_CONSTRUCTION_SCENARIO_FILE' = 'data\construction-safety-live.json'
+    }
+    foreach ($name in $liveScenarios.Keys) {
+        if (-not $connection.ContainsKey($name)) {
+            $connection[$name] = Join-Path $root $liveScenarios[$name]
+        }
     }
 }
 $logRoot = Join-Path $env:LOCALAPPDATA ('IndustryDayDrone\logs\integrated\' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))

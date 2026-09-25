@@ -52,6 +52,10 @@ export interface DetectionEvidence {
   description: string;
   confidence: number | null;
   box: [number, number, number, number] | null;
+  // Present only for the "construction" scenario kind: count of distinct
+  // people confirmed matching the prompt with a hard-hat violation in this
+  // capture (can be 2+ when a zone holds multiple violators).
+  violatorCount?: number;
 }
 
 export interface CapturedImage {
@@ -100,6 +104,9 @@ export interface MissionScore {
   falseAlarmCount?: number;
   // Construction Site Safety (현장 안전관리자 신고) scenario fields.
   violationsReportedCount?: number;
+  // Distinct people count, not zones: can exceed violationsReportedCount
+  // when a reported zone held 2+ confirmed violators.
+  violatorsFoundCount?: number;
   notFoundCount?: number;
   uncheckedCount?: number;
 }

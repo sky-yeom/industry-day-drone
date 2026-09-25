@@ -1,6 +1,5 @@
 "use client";
 
-import { Press_Start_2P } from "next/font/google";
 import ForceNextButton from "@/components/ForceNextButton";
 import TriageSiteCards from "@/components/TriageSiteCards";
 import { MONITOR_MAP_BY_KIND } from "@/data/monitors";
@@ -10,8 +9,6 @@ import { CONSTRUCTION_TARGET_SITE } from "@/data/construction-scenario";
 import type { BriefingBullet, MissionState, ScenarioKind } from "@/lib/types";
 import type { VoiceStatus } from "@/lib/voiceClient";
 import VoiceTurnIndicator from "@/components/VoiceTurnIndicator";
-
-const pixelFont = Press_Start_2P({ weight: "400", subsets: ["latin"] });
 
 /**
  * The prompt/confirm board: all 3 scenario kinds (119 rescue, security
@@ -60,7 +57,7 @@ export default function PixelPromptScreen({
       <div className="flex min-h-0 flex-1 flex-col justify-center gap-2" style={{ zoom: 0.85 }}>
       <div className="flex shrink-0 flex-wrap items-baseline gap-x-3 gap-y-1">
         <p className="text-sm font-bold tracking-[0.14em] text-[#091f2c] sm:text-base">임무 브리핑</p>
-        <h2 className={`${pixelFont.className} text-lg font-bold text-[#091f2c] sm:text-xl`}>탐지·신고 대상</h2>
+        <h2 className="text-lg font-bold tracking-[0.05em] text-[#091f2c] sm:text-xl">탐지·신고 대상</h2>
         {voiceStatus && <VoiceTurnIndicator status={voiceStatus} />}
       </div>
       {error && <div role="alert" className="shrink-0 text-sm text-[#091f2c]">

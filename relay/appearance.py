@@ -39,6 +39,21 @@ _COLORS = {
     "흰색": "white", "하얀색": "white", "하얀": "white", "하양": "white", "하양색": "white",
     "핑크색": "pink", "핑크": "pink", "분홍색": "pink", "분홍": "pink",
     "형광 핑크색": "pink", "형광핑크색": "pink", "형광핑크": "pink",
+    # Additional colors so more of what a participant actually says gets
+    # recognized as a real shirtColor/hairColor signal instead of silently
+    # falling to unsupported_appearance just because the word wasn't in this
+    # dictionary yet. These may not match any current fixture's ground
+    # truth value (mock detection then correctly reports "no match"), but
+    # the description itself is still understood and used for matching.
+    "은색": "silver", "은빛": "silver", "실버색": "silver",
+    "보라색": "purple", "보라": "purple", "자주색": "purple", "자주": "purple",
+    "남색": "navy", "네이비": "navy", "감청색": "navy",
+    "민트색": "mint", "민트": "mint",
+    "베이지색": "beige", "베이지": "beige",
+    "카키색": "khaki", "카키": "khaki",
+    "청록색": "teal", "청록": "teal", "터키석색": "turquoise",
+    "올리브색": "olive", "올리브": "olive",
+    "와인색": "maroon", "와인": "maroon", "마룬색": "maroon",
 }
 # Sorted longest-first so overlapping spellings (e.g. "검정색" vs "검정") never
 # get shadowed by a shorter alternative matching first and leaving a
@@ -53,10 +68,10 @@ _HEADWEAR_ITEM = "안전모|헬멧"
 _FEATURE = re.compile(
     rf"(?P<colors>{_COLOR}(?:\s*(?:또는|혹은|이나)\s*{_COLOR})*)"
     r"\s*(?P<neg>(?:이|가)?\s*아닌)?\s*"
-    r"(?P<item>티셔츠|상의|옷|머리카락|머리)"
+    r"(?P<item>티셔츠|티|상의|옷|머리카락|머리)"
     r"(?P<postneg>\s*(?:을|를)?\s*(?:입지\s*않은|입지\s*않는|안\s*입은|안\s*입는|아닌))?"
     r"|(?P<blond>금발)|"
-    r"(?P<garment>티셔츠|재킷|자켓)|"
+    r"(?P<garment>티셔츠|티|재킷|자켓)|"
     rf"(?P<hw_item>{_HEADWEAR_ITEM})(?:을|를)?\s*"
     r"(?P<hw_neg>안\s*쓴|안\s*쓰고|미착용|착용\s*안\s*한|쓰지\s*않은|쓰지\s*않는|없는)?"
     r"\s*(?P<hw_pos>쓴|착용한|착용|쓰고)?"
@@ -75,28 +90,44 @@ def fixture_prompt_constraints(text):
     text = validate_search_prompt(text)
     conditions = []
 
+    def add_condition(attribute, operator, values):
+        # A single garment word can legitimately be matched twice by two
+        # different branches of this regex on the same sentence (e.g. "검정
+        # 티를 입고 ... 티에 무늬가 없어" — once via the color+item branch, once
+        # via the standalone garment mention later in the sentence). Both
+        # describe the same one shirt, so skip re-adding an identical
+        # condition instead of reporting a duplicate garment/attribute twice.
+        new_condition = dict(attribute=attribute, operator=operator, values=values)
+        if new_condition not in conditions:
+            conditions.append(new_condition)
+
     def feature(match):
         if match["hw_item"]:
             negated = bool(match["hw_neg"])
-            conditions.append(dict(attribute="headwear", operator="include",
-                                   values=["bare" if negated else "hardhat"]))
+            add_condition("headwear", "include", ["bare" if negated else "hardhat"])
         elif match["blond"]:
-            conditions.append(dict(attribute="hairColor", operator="include", values=["blond"]))
+            add_condition("hairColor", "include", ["blond"])
         elif match["garment"]:
-            value = "t-shirt" if match["garment"] == "티셔츠" else "jacket"
-            conditions.append(dict(attribute="garment", operator="include", values=[value]))
+            value = "t-shirt" if match["garment"] in ("티셔츠", "티") else "jacket"
+            add_condition("garment", "include", [value])
         else:
             attribute = "hairColor" if match["item"] in ("머리", "머리카락") else "shirtColor"
             colors = [_COLORS[color] for color in re.findall(_COLOR, match["colors"])]
             negated = bool(match["neg"]) or bool(match["postneg"])
-            conditions.append(dict(attribute=attribute,
-                                   operator="exclude" if negated else "include", values=colors))
-            if match["item"] == "티셔츠" and not negated:
-                conditions.append(dict(attribute="garment", operator="include", values=["t-shirt"]))
+            add_condition(attribute, "exclude" if negated else "include", colors)
+            if match["item"] in ("티셔츠", "티") and not negated:
+                add_condition("garment", "include", ["t-shirt"])
         return " "
 
     _FEATURE.sub(feature, text)
-    if not conditions and re.search(r"사람|인물", text) is None:
+    # A gender/generic-person mention alone ("남자", "여자", "사람", "인물")
+    # is not itself a matchable attribute, but it does mean the participant
+    # is describing an actual person to look for, not gibberish — so it
+    # should count the same as "사람"/"인물" for the "is there anything at
+    # all to go on" gate below, rather than raising REVISION_REQUEST just
+    # because their sentence happened to lead with "남자가 ..." instead of
+    # "사람이 ...".
+    if not conditions and re.search(r"사람|인물|남자|여자|남성|여성|아저씨|아줌마|아이|아기", text) is None:
         raise ValueError(REVISION_REQUEST)
     return conditions
 
@@ -144,7 +175,12 @@ def prompt_confidence(constraints, unsupported):
     else:
         reasoning = "이미지로 구별할 수 있는 외형 조건이 없어서 확신도가 낮아."
     if unsupported:
-        reasoning += f" '{unsupported[0]}'처럼 이미지로 확인 못 하는 조건은 참고만 할 거야."
+        # Name every unsupported detail the participant actually said, not
+        # just the first — otherwise a description with 2+ non-matchable
+        # clauses (e.g. "은색 테두리가 있고 안경도 썼어") silently drops all but
+        # one from what Gibby ever acknowledges back to the participant.
+        quoted = ", ".join(f"'{value}'" for value in unsupported)
+        reasoning += f" {quoted}처럼 이미지로 확인 못 하는 조건은 참고만 할 거야."
     return confidence, reasoning
 
 

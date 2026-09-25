@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from relay.appearance import (REVISION_REQUEST, fixture_prompt_constraints, matches_appearance,
-                              validate_constraints, validate_search_prompt)
+                              prompt_confidence, validate_constraints, validate_search_prompt)
 from relay.camera import FixtureCamera
 from relay.vision import MockVision, VisionError, validate_analysis
 
@@ -72,6 +72,52 @@ class AppearanceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             matches_appearance({}, [condition("hairColor", "brown")], [])
 
+    def test_bare_ti_abbreviation_and_gender_words_are_not_rejected(self):
+        """'티' (colloquial short form of 티셔츠) must be recognized as the
+        same garment/color signal as '티셔츠', and a bare gender word like
+        '남자'/'여자' must count as a real person reference for the "at least
+        one usable signal" gate — same as '사람'/'인물' already do. Regression
+        for a real participant prompt ("남자가 검정티를 입고있고, 티에 아무
+        무늬가 없어") that was wrongly rejected as having no usable signal."""
+        self.assertEqual(
+            fixture_prompt_constraints("남자가 검정티를 입고있고, 티에 아무 무늬가 없어"),
+            [condition("shirtColor", "black"), condition("garment", "t-shirt")])
+        self.assertEqual(fixture_prompt_constraints("검정티를 입은 남자"),
+                         [condition("shirtColor", "black"), condition("garment", "t-shirt")])
+        # A gender word alone still isn't a matchable attribute by itself,
+        # but it must not raise — it's treated like the existing "사람" case.
+        self.assertEqual(fixture_prompt_constraints("남자"), [])
+        # The same garment mentioned twice in one sentence (once via a
+        # color+item clause, once standalone) must not produce a duplicate
+        # condition.
+        self.assertEqual(fixture_prompt_constraints("빨간 티셔츠에 재킷을 입은 사람"),
+                         [condition("shirtColor", "red"), condition("garment", "t-shirt"),
+                          condition("garment", "jacket")])
+
+    def test_pure_gibberish_with_no_person_reference_is_still_rejected(self):
+        """Unlike a genuine (if incomplete) description, text with zero
+        recognizable signal AND no person/gender word at all still asks the
+        participant to try again — this is the one case that must keep
+        being rejected."""
+        for prompt in ("ㅁㄴㅇㄹ 아무말이나 던짐 asdkjaslkdj", "asdf1234", "   "):
+            with self.subTest(prompt=prompt), self.assertRaises(ValueError):
+                fixture_prompt_constraints(prompt)
+
+    def test_person_reference_is_accepted_in_every_scenario_kind(self):
+        """A description with at least a person/gender reference (even with
+        no other assessable feature) is accepted end-to-end in all 3
+        scenario kinds (triage, security, construction) — this gate is
+        shared, unbranched code, not per-scenario."""
+        from relay.survey import SurveySession
+        for kind in ("triage", "security", "construction"):
+            with self.subTest(kind=kind):
+                session = SurveySession(kind=kind)
+                outcome = session.confirm_prompt(
+                    prompt_text="키 큰 남자를 찾아줘",
+                    appearance_constraints=[], unsupported_appearance=[])
+                self.assertTrue(outcome["ok"], outcome)
+                self.assertEqual(session.data["promptPhase"], "confirmed")
+
     def test_validation_does_not_fill_omitted_features(self):
         actual, unsupported = validate_constraints([condition("hairColor", " BROWN ")], [])
         self.assertEqual(actual, [condition("hairColor", "brown")])
@@ -136,17 +182,80 @@ class AppearanceTests(unittest.TestCase):
         for present in (False, True):
             evidence = validate_analysis({
                 "matchesPrompt": present, "assessable": True, "policyViolation": present, "confidence": 80,
+                "violatorCount": 1 if present else 0,
                 "description": ("핑크색 작업복을 입고 안전모를 쓰지 않은 사람이 통로에 있습니다." if present
                                 else "요청한 조건에 맞는 사람이 보이지 않습니다."),
                 "box": None,
             }, kind="construction")
             self.assertEqual(evidence["targetPresent"], present)
+            self.assertEqual(evidence["violatorCount"], 1 if present else 0)
         # A "needsRescue"-shaped payload is rejected under kind="construction"
         # (wrong field name), and vice versa — the two kinds' schemas are
         # not interchangeable even though they share the same six-field shape.
         with self.assertRaises(VisionError):
             validate_analysis({"matchesPrompt": True, "assessable": True, "needsRescue": True,
                                "confidence": 80, "description": "사람", "box": None}, kind="construction")
+
+    def test_construction_kind_counts_every_violator_not_just_one(self):
+        """When the vision model reports 2 confirmed violators in one image,
+        that count must survive validation and normalization intact, not
+        collapse to a single boolean match."""
+        evidence = validate_analysis({
+            "matchesPrompt": True, "assessable": True, "policyViolation": True, "confidence": 88,
+            "violatorCount": 2,
+            "description": "핑크색 작업복을 입고 안전모를 쓰지 않은 사람 2명이 통로 양쪽에 있습니다.",
+            "box": None,
+        }, kind="construction")
+        self.assertEqual(evidence["violatorCount"], 2)
+        # A confirmed violation with violatorCount=0 (model forgot to count)
+        # still reports at least the one matched candidate, never zero.
+        under_counted = validate_analysis({
+            "matchesPrompt": True, "assessable": True, "policyViolation": True, "confidence": 88,
+            "violatorCount": 0,
+            "description": "핑크색 작업복을 입고 안전모를 쓰지 않은 사람이 통로에 있습니다.",
+            "box": None,
+        }, kind="construction")
+        self.assertEqual(under_counted["violatorCount"], 1)
+        # A non-violation with a nonzero violatorCount is self-contradictory
+        # and rejected rather than silently accepted.
+        with self.assertRaises(VisionError):
+            validate_analysis({
+                "matchesPrompt": False, "assessable": True, "policyViolation": False, "confidence": 20,
+                "violatorCount": 1,
+                "description": "요청한 조건에 맞는 사람이 보이지 않습니다.",
+                "box": None,
+            }, kind="construction")
+
+    def test_expanded_color_vocabulary_is_recognized(self):
+        """Colors beyond the original set (silver/purple/navy/mint/beige/
+        khaki/teal/olive/maroon) are structured into real conditions instead
+        of being silently dropped just because the word wasn't recognized —
+        even when no current fixture's ground truth happens to use them."""
+        for prompt, expected_color in (
+            ("은색 옷을 입은 사람", "silver"),
+            ("보라색 머리를 한 사람", "purple"),
+            ("남색 옷을 입은 사람", "navy"),
+            ("민트색 옷을 입은 사람", "mint"),
+            ("베이지색 옷을 입은 사람", "beige"),
+            ("카키색 옷을 입은 사람", "khaki"),
+            ("청록색 옷을 입은 사람", "teal"),
+            ("올리브색 옷을 입은 사람", "olive"),
+            ("와인색 옷을 입은 사람", "maroon"),
+        ):
+            with self.subTest(prompt=prompt):
+                conditions = fixture_prompt_constraints(prompt)
+                self.assertTrue(any(expected_color in condition["values"] for condition in conditions),
+                               conditions)
+
+    def test_prompt_confidence_names_every_unsupported_detail(self):
+        """A description mixing 2+ non-matchable clauses (e.g. accessory
+        color plus glasses) must have every one of them named back in the
+        spoken reasoning, not just the first — otherwise the participant
+        never hears confirmation that the rest of what they said was heard."""
+        _, reasoning = prompt_confidence(
+            [condition("shirtColor", "pink")], ["은색 테두리가 있음", "안경을 씀"])
+        self.assertIn("은색 테두리가 있음", reasoning)
+        self.assertIn("안경을 씀", reasoning)
 
 
 class MockAppearanceTests(unittest.IsolatedAsyncioTestCase):

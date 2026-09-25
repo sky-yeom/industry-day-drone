@@ -1,13 +1,10 @@
 "use client";
 
 import Image from "next/image";
-import { Press_Start_2P } from "next/font/google";
 import type { TriageSite } from "@/data/scenario";
 import type { SecurityZone } from "@/data/security-scenario";
 import type { ConstructionZone } from "@/data/construction-scenario";
 import type { MonitorId, PersonState } from "@/lib/types";
-
-const pixelFont = Press_Start_2P({ weight: "400", subsets: ["latin"] });
 
 /**
  * The 3 site cards at the heart of the merged triage board: one card per
@@ -76,7 +73,7 @@ export default function TriageSiteCards({
             key={site.monitorId}
             className={`pixel-panel pixel-rendering relative flex flex-col gap-2 bg-white/95 p-3 transition-colors ${active ? "ring-2 ring-[#ffd23f]" : ""}`}
           >
-            <span className={`${pixelFont.className} pixel-frame-header--danger text-[0.5625rem]`}>
+            <span className="pixel-frame-header--danger text-[0.5625rem] font-bold tracking-[0.03em]">
               {site.label}
             </span>
             {isSingle ? (

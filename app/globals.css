@@ -259,18 +259,6 @@ input {
   border-color: transparent transparent transparent #fff;
 }
 
-/* Speech bubble title (components/GibbyOpeningScreen.tsx): Press Start 2P
-   only ships a single regular weight, so "bold" is faked by stacking a
-   1px-offset text-shadow in every direction to thicken the pixel strokes
-   instead of relying on font-weight (which that font ignores). */
-.pixel-title {
-  text-shadow:
-    0.0625rem 0 0 currentColor,
-    -0.0625rem 0 0 currentColor,
-    0 0.0625rem 0 currentColor,
-    0 -0.0625rem 0 currentColor;
-}
-
 /* Chunky pixel-game button: flat colors, hard drop shadow, no rounding,
    "presses" down on click by canceling the shadow offset. */
 .pixel-button {

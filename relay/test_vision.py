@@ -54,6 +54,7 @@ def construction_completion(evidence=AZURE_POSITIVE, *, finish_reason="stop", re
     observation = {
         "matchesPrompt": evidence["targetPresent"], "assessable": True,
         "policyViolation": evidence["targetPresent"], "confidence": evidence["confidence"],
+        "violatorCount": 2 if evidence["targetPresent"] else 0,
         "description": evidence["description"], "box": evidence["box"],
     }
     return {
@@ -384,14 +385,15 @@ class AzureTests(unittest.IsolatedAsyncioTestCase):
                 with patch("relay.vision.aiohttp.ClientSession", return_value=session):
                     result = await self.vision.analyze(
                         self.capture, search_prompt=self.target, kind="construction")
-                self.assertEqual(result, observation)
+                expected = dict(observation, violatorCount=2 if observation["targetPresent"] else 0)
+                self.assertEqual(result, expected)
                 payload = session.post.call_args.kwargs["json"]
                 self.assertEqual(payload["messages"][0]["content"], CONSTRUCTION_SYSTEM_PROMPT)
                 self.assertNotEqual(payload["messages"][0]["content"], SYSTEM_PROMPT)
                 schema = payload["response_format"]["json_schema"]["schema"]
                 self.assertEqual(set(schema["required"]),
                                  {"matchesPrompt", "assessable", "policyViolation", "confidence",
-                                  "description", "box"})
+                                  "violatorCount", "description", "box"})
         # Omitting kind (or passing "triage"/"security") keeps using the
         # original rescue-framed prompt/schema — no behavior change for the
         # two existing scenario kinds.

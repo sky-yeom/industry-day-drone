@@ -89,8 +89,9 @@ def result(ok, facts, ask="", silent=False):
 
 
 def validate_evidence(evidence):
+    base_keys = {"targetPresent", "description", "confidence", "box"}
     if (not isinstance(evidence, dict)
-            or set(evidence) != {"targetPresent", "description", "confidence", "box"}
+            or set(evidence) not in (base_keys, base_keys | {"violatorCount"})
             or type(evidence.get("targetPresent")) is not bool):
         raise ValueError("이미지 분석 결과의 대상 확인 값이 올바르지 않습니다.")
     description = evidence.get("description")
@@ -100,6 +101,11 @@ def validate_evidence(evidence):
         raise ValueError("이미지 분석 결과에 시각적 근거가 없습니다.")
     if type(confidence) is bool or not isinstance(confidence, int) or not 0 <= confidence <= 100:
         raise ValueError("이미지 분석 결과의 확신도(confidence)는 0~100 정수여야 합니다.")
+    violator_count = evidence.get("violatorCount")
+    if "violatorCount" in evidence and (
+        type(violator_count) is bool or not isinstance(violator_count, int) or violator_count < 0
+    ):
+        raise ValueError("이미지 분석 결과의 위반자 인원수(violatorCount)는 0 이상 정수여야 합니다.")
     if box is not None:
         if (not isinstance(box, (list, tuple)) or len(box) != 4
                 or any(type(v) not in (int, float) or not math.isfinite(v) for v in box)):
@@ -109,9 +115,12 @@ def validate_evidence(evidence):
             raise ValueError("이미지 분석 영역이 이미지 밖에 있습니다.")
         if not evidence["targetPresent"]:
             raise ValueError("대상이 없다는 분석 결과에 탐지 영역이 포함되어 있습니다.")
-    return {"targetPresent": evidence["targetPresent"],
-            "description": description.strip(), "confidence": confidence,
-            "box": list(box) if box is not None else None}
+    result = {"targetPresent": evidence["targetPresent"],
+             "description": description.strip(), "confidence": confidence,
+             "box": list(box) if box is not None else None}
+    if "violatorCount" in evidence:
+        result["violatorCount"] = violator_count
+    return result
 
 
 @dataclass
@@ -536,8 +545,16 @@ class SurveySession:
                     "total": len(people),
                 }
             elif self.kind == "construction":
+                captures_by_id = {c["id"]: c for c in self.data["captures"]}
                 score = {
                     "violationsReportedCount": sum(p["outcome"] == "reported" for p in people),
+                    # Distinct people count, not zones: a single reported zone can
+                    # hold 2+ confirmed violators (see violatorCount evidence),
+                    # and every one of them should show up in the final score.
+                    "violatorsFoundCount": sum(
+                        (captures_by_id.get(p["captureId"]) or {}).get("evidence", {}).get("violatorCount", 1)
+                        for p in people if p["outcome"] == "reported"
+                    ),
                     "notFoundCount": sum(p["outcome"] == "not_found" for p in people),
                     "uncheckedCount": sum(p["outcome"] == "unchecked" for p in people),
                     "total": len(people),
@@ -677,17 +694,21 @@ class SurveySession:
         for person in self.data["people"]:
             capture = next((c for c in self.data["captures"] if c["id"] == person["captureId"]), None)
             if person["outcome"] == "reported" and capture and capture["evidence"]:
+                violator_count = capture["evidence"].get("violatorCount", 1)
+                count_note = f" (위반자 {violator_count}명)" if violator_count > 1 else ""
                 confidence_notes.append(
                     f"{self.labels[person['monitorId']]}: 확신도 {capture['evidence']['confidence']}%로 "
-                    f"{person.get('reportDetail', '위반 사항')}을(를) 현장 안전관리자에게 전달했어.")
+                    f"{person.get('reportDetail', '위반 사항')}을(를) 현장 안전관리자에게 전달했어{count_note}.")
             elif person["outcome"] == "not_found":
                 observations.append(f"{self.labels[person['monitorId']]}: 확인했지만 안전모 미착용자를 찾지 못했어.")
             elif person["outcome"] == "unchecked":
                 observations.append(f"{self.labels[person['monitorId']]}: 확인하지 못한 구역이야.")
         summary = ["점검이 끝났어."]
         if score["violationsReportedCount"]:
+            people_note = (f" (총 {score['violatorsFoundCount']}명)"
+                          if score["violatorsFoundCount"] > score["violationsReportedCount"] else "")
             summary.append(f"세 구역 중 {score['violationsReportedCount']}곳에서 안전모 미착용자를 찾아 "
-                           "현장 안전관리자에게 전달했어.")
+                           f"현장 안전관리자에게 전달했어{people_note}.")
         else:
             summary.append("이번에는 안전모 미착용자를 찾아 전달하지 못했어.")
         if score["uncheckedCount"]:

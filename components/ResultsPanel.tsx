@@ -121,13 +121,20 @@ export default function ResultsPanel({ state, debrief, onReset, visible = true }
           ? `${score.total}곳 중 ${score.caughtCount ?? 0}곳 확인`
           : state.kind === "construction"
           ? `${score.total}곳 중 ${score.violationsReportedCount ?? 0}곳 신고`
+            + ((score.violatorsFoundCount ?? 0) > (score.violationsReportedCount ?? 0)
+              ? ` (위반자 ${score.violatorsFoundCount}명)` : "")
           // Triage now has exactly one real target hidden among false-alarm sites,
           // so a "X명 중 Y명 신고" count reads as a fraction of many people rather
           // than the single rescue this scenario actually is - report it as pass/fail.
           : (score.reportedCount ?? 0) > 0 ? "구조 성공" : "구조 실패") : "결과 확인 중"}</p>
       </div>
       <div className="grid shrink-0 grid-cols-3 items-start gap-2">
-        {state.people.map((person) => <article key={person.id} className={`pixel-panel min-w-0 [overflow-wrap:anywhere] ${compactSummary ? "p-1" : "p-1.5"}`}>
+        {state.people.map((person) => {
+          const capture = person.captureId
+            ? state.captures.find((c) => c.id === person.captureId)
+            : undefined;
+          const violatorCount = capture?.evidence?.violatorCount;
+          return <article key={person.id} className={`pixel-panel min-w-0 [overflow-wrap:anywhere] ${compactSummary ? "p-1" : "p-1.5"}`}>
           <div className={compactSummary ? "flex flex-wrap items-baseline gap-x-2" : undefined}>
           <h3 className="text-xs font-semibold text-[#091f2c]">{MONITOR_MAP_BY_KIND[state.kind][person.monitorId].label}</h3>
           <p className={`${compactSummary ? "" : "mt-1"} text-[0.6875rem] text-[#091f2c]`}>{person.label}</p>
@@ -139,10 +146,12 @@ export default function ResultsPanel({ state, debrief, onReset, visible = true }
                 ? (person.falseAlarmReveal ?? "오경보")
                 : state.kind === "security" ? SECURITY_OUTCOME_LABELS[person.outcome as "caught" | "escaped"]
                 : state.kind === "construction" ? CONSTRUCTION_OUTCOME_LABELS[person.outcome as "reported" | "not_found" | "unchecked"]
+                  + (person.outcome === "reported" && violatorCount && violatorCount > 1 ? ` (${violatorCount}명)` : "")
                 : OUTCOME_LABELS[person.outcome as "reported" | "reported_injured" | "report_missed"])
               : "미해결 · 작전 중단"}
           </p>
-        </article>)}
+          </article>;
+        })}
       </div>
       </div>
       <div className={`grid min-h-0 flex-1 items-start gap-2 ${state.userPromptText

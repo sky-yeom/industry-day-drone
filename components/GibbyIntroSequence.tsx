@@ -172,7 +172,7 @@ export default function GibbyIntroSequence({
         <div className="relative z-10 flex flex-1 items-center justify-center p-5">
           <div className="pixel-bubble pixel-bubble--gibby relative w-full max-w-3xl px-8 pb-20 pt-10 sm:px-14 sm:pb-24 sm:pt-12">
             <div className="ml-[1.25rem]">
-              <h2 className={`${pixelFont.className} pixel-title text-2xl text-[#463668] sm:text-3xl`}>{GIBBY_TITLE}</h2>
+              <h2 className="text-2xl font-bold tracking-[0.05em] text-[#463668] sm:text-3xl">{GIBBY_TITLE}</h2>
               <p className="mt-5 whitespace-pre-line text-xl leading-8 text-[#091f2c] sm:text-2xl sm:leading-9">{GIBBY_LINE}</p>
             </div>
             <button
@@ -190,7 +190,7 @@ export default function GibbyIntroSequence({
         <div className="relative z-10 flex flex-1 items-center justify-center p-5">
           <div className="pixel-bubble pixel-bubble--gibby relative w-full max-w-3xl px-8 pb-8 pt-10 sm:px-14 sm:pt-12">
             <div className="ml-[1.25rem]">
-              <h2 className={`${pixelFont.className} pixel-title text-2xl text-[#463668] sm:text-3xl`}>{CHOOSING_TITLE}</h2>
+              <h2 className="text-2xl font-bold tracking-[0.05em] text-[#463668] sm:text-3xl">{CHOOSING_TITLE}</h2>
             </div>
             <div className="ml-[1.25rem] mt-8 flex flex-wrap items-stretch justify-between gap-3">
               {SCENARIO_LIST.map((option) => (
@@ -198,7 +198,7 @@ export default function GibbyIntroSequence({
                   key={option.id}
                   type="button"
                   onClick={() => handlePickScenario(option.id)}
-                  className={`${pixelFont.className} pixel-button flex-1 basis-0 whitespace-nowrap bg-[#ffd23f] px-5 py-3 text-xs text-[#091f2c] sm:text-sm`}
+                  className="pixel-button flex-1 basis-0 whitespace-nowrap bg-[#ffd23f] px-5 py-3 text-xs font-bold tracking-[0.03em] text-[#091f2c] sm:text-sm"
                 >
                   {option.buttonLabel}
                 </button>

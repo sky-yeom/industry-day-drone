@@ -89,13 +89,21 @@ CONSTRUCTION_EVIDENCE_SCHEMA = {
             "description": "0-100 confidence that the selected candidate is the same person matching the "
                           "participant's confirmed search prompt, based only on visible evidence.",
         },
+        "violatorCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Count of distinct people in the image who both match the participant's "
+                          "appearance conditions and are visibly not wearing a hard hat. 0 when "
+                          "policyViolation is false. Every matching person must be counted, not just one.",
+        },
         "description": {"type": "string"},
         "box": {
             "type": "null",
             "description": "Always null. Search the entire image without generating coordinates.",
         },
     },
-    "required": ["matchesPrompt", "assessable", "policyViolation", "confidence", "description", "box"],
+    "required": ["matchesPrompt", "assessable", "policyViolation", "confidence", "violatorCount",
+                "description", "box"],
     "additionalProperties": False,
 }
 
@@ -192,10 +200,12 @@ confidence: matchesPrompt 판단에 대한 0~100 정수 확신도. 이 사람이
 확신의 정도만 나타내며, 위반 여부나 판정 가능 여부와는 별개입니다. 시각적 근거가 뚜렷할수록 높게,
 조건이 모호하거나 부분적으로만 일치할수록 낮게 매깁니다. assessable=false이거나 후보가 없으면 confidence는
 낮은 값(0~20)으로 반환하세요. 임의의 반올림된 값(예: 항상 50, 90)을 습관적으로 반환하지 마세요.
+violatorCount: 조건에 맞으면서 안전모를 쓰지 않은 사람의 인원수(정수, 0 이상). policyViolation=false이면
+반드시 0입니다. 같은 구역에 위반자가 2명 이상이면 전부 세어 반영하세요. 한 명만 세고 나머지를 빠뜨리지 마세요.
 조건 불일치 또는 근거 부족은 matchesPrompt와 policyViolation을 false로 반환하세요.
 assessable은 이미지를 실제로 판정했는지를 뜻하며, 무엇을 찾았는지와는 무관합니다.
 사람이 보이지 않거나 조건에 맞는 사람이 없는 이미지도 판정이 끝난 이미지입니다.
-이 경우 assessable=true, matchesPrompt=false, policyViolation=false로 반환하세요.
+이 경우 assessable=true, matchesPrompt=false, policyViolation=false, violatorCount=0으로 반환하세요.
 assessable=false는 이미지 자체가 판정을 가로막을 때만 쓰세요. 화면이 가려지거나 흐려 사람의 조건을
 확인할 수 없는 경우, 특히 머리 부분이 보이지 않는 경우가 이에 해당합니다.
 policyViolation=false는 안전 판정이 아니라 이번 이미지에서 미착용 근거가 확인되지 않았다는 뜻입니다.
@@ -211,11 +221,12 @@ description은 한국어 1~3문장으로 작성하세요.
 장면 전체를 나열하기보다 조건에 맞는 사람들의 위반 근거에 집중하세요.
 
 [출력]
-여섯 필드만 가진 JSON 객체를 반환하세요.
+일곱 필드만 가진 JSON 객체를 반환하세요.
 matchesPrompt: boolean
 assessable: boolean
 policyViolation: boolean
 confidence: 0~100 정수
+violatorCount: 0 이상 정수
 description: 한국어 문자열
 box: null
 
@@ -253,7 +264,8 @@ def _parse_json(content: str | bytes | bytearray) -> object:
 
 
 def validate_evidence(value: object, *, structured_verdict: bool = False) -> dict:
-    if not isinstance(value, dict) or set(value) != {"targetPresent", "description", "confidence", "box"}:
+    base_keys = {"targetPresent", "description", "confidence", "box"}
+    if not isinstance(value, dict) or set(value) not in (base_keys, base_keys | {"violatorCount"}):
         raise VisionError("이미지 분석 응답의 필수 항목이나 형식이 잘못되었습니다.")
     present, description, box = value["targetPresent"], value["description"], value["box"]
     confidence = value["confidence"]
@@ -261,6 +273,10 @@ def validate_evidence(value: object, *, structured_verdict: bool = False) -> dic
         raise VisionError("이미지 분석의 대상 발견 여부는 참 또는 거짓이어야 합니다.")
     if type(confidence) is bool or not isinstance(confidence, int) or not 0 <= confidence <= 100:
         raise VisionError("이미지 분석의 확신도(confidence)는 0~100 정수여야 합니다.")
+    violator_count = value.get("violatorCount")
+    if "violatorCount" in value and (type(violator_count) is bool or not isinstance(violator_count, int)
+                                     or violator_count < 0):
+        raise VisionError("위반자 인원수(violatorCount)는 0 이상 정수여야 합니다.")
     if (
         not isinstance(description, str)
         or not 8 <= len(description.strip()) <= 2000
@@ -299,13 +315,19 @@ def validate_evidence(value: object, *, structured_verdict: bool = False) -> dic
             and x + width <= 1 and y + height <= 1
         ):
             raise VisionError("탐지 영역이 이미지 범위를 벗어났거나 크기가 잘못되었습니다.")
-    return {"targetPresent": present, "description": description.strip(), "confidence": confidence, "box": box}
+    evidence = {"targetPresent": present, "description": description.strip(), "confidence": confidence, "box": box}
+    if "violatorCount" in value:
+        evidence["violatorCount"] = violator_count
+    return evidence
 
 
 def validate_analysis(value: object, *, kind: str = "triage") -> dict:
     verdict_field = "policyViolation" if kind == "construction" else "needsRescue"
+    required_keys = {"matchesPrompt", "assessable", verdict_field, "confidence", "description", "box"}
+    if kind == "construction":
+        required_keys |= {"violatorCount"}
     if (not isinstance(value, dict)
-            or set(value) != {"matchesPrompt", "assessable", verdict_field, "confidence", "description", "box"}
+            or set(value) != required_keys
             or type(value["matchesPrompt"]) is not bool
             or type(value["assessable"]) is not bool
             or type(value[verdict_field]) is not bool
@@ -313,10 +335,15 @@ def validate_analysis(value: object, *, kind: str = "triage") -> dict:
             or not isinstance(value["confidence"], int)
             or not 0 <= value["confidence"] <= 100):
         raise VisionError("참가자 조건·판정 가능 여부·위반(구조 필요) 여부·확신도가 올바르게 반환되지 않았습니다.")
+    if kind == "construction" and (
+        type(value["violatorCount"]) is bool or not isinstance(value["violatorCount"], int)
+        or value["violatorCount"] < 0
+    ):
+        raise VisionError("안전모 미착용자 인원수(violatorCount)가 0 이상 정수로 반환되지 않았습니다.")
     if value["box"] is not None:
         raise VisionError("이미지 전체 탐지에서는 박스 좌표 없이 box=null을 반환해야 합니다.")
     if not value["assessable"]:
-        if value["matchesPrompt"] or value[verdict_field]:
+        if value["matchesPrompt"] or value[verdict_field] or (kind == "construction" and value["violatorCount"]):
             raise VisionError("판정할 수 없는 분석에 탐지 결과가 포함되어 있습니다.")
         if (not isinstance(value["description"], str)
                 or not 8 <= len(value["description"].strip()) <= 2000
@@ -328,12 +355,21 @@ def validate_analysis(value: object, *, kind: str = "triage") -> dict:
         unjudged = PromptRevisionRequired(REVISION_REQUEST)
         unjudged.model_reason = value["description"].strip()
         raise unjudged
-    return validate_evidence({
-        "targetPresent": value["matchesPrompt"] and value[verdict_field],
+    target_present = value["matchesPrompt"] and value[verdict_field]
+    if kind == "construction" and not target_present and value["violatorCount"]:
+        raise VisionError("위반이 없다는 분석에 위반자 인원수(violatorCount)가 포함되어 있습니다.")
+    evidence = {
+        "targetPresent": target_present,
         "description": value["description"],
         "confidence": value["confidence"],
         "box": value["box"],
-    }, structured_verdict=True)
+    }
+    if kind == "construction":
+        # A confirmed violation always reports at least the matched candidate,
+        # even if the model's own count came back as 0 for that resolved case —
+        # otherwise a resolved violation could downstream-report 0 violators.
+        evidence["violatorCount"] = value["violatorCount"] if not target_present else max(1, value["violatorCount"])
+    return validate_evidence(evidence, structured_verdict=True)
 
 
 def _validate_input(capture: Capture, search_prompt: str,
@@ -413,18 +449,24 @@ class MockVision:
             else:
                 description = (f"모의 분석 · AI 미사용: 조건에 맞는 사람 {len(matches)}명을 발견했습니다. "
                               + " ".join(match["description"] for match in matches))
-            return validate_evidence({
+            evidence = {
                 "targetPresent": True,
                 "description": description,
                 "confidence": 92,
                 "box": list(matches[0]["box"]),
-            })
-        return validate_evidence({
+            }
+            if kind == "construction":
+                evidence["violatorCount"] = len(matches)
+            return validate_evidence(evidence)
+        evidence = {
             "targetPresent": False,
             "description": "모의 분석 · AI 미사용: 이 이미지의 관찰 기록에서 요청한 외형 조건에 맞는 사람을 찾지 못했습니다.",
             "confidence": 15,
             "box": None,
-        })
+        }
+        if kind == "construction":
+            evidence["violatorCount"] = 0
+        return validate_evidence(evidence)
 
 
 class AzureVision:
@@ -483,6 +525,14 @@ class AzureVision:
             except ValueError as exc:
                 raise VisionError(str(exc)) from exc
         search_data = {"confirmedSearchPrompt": search_prompt}
+        # search_prompt is the participant's full raw sentence (see
+        # SurveySession._prompt_values), not just whatever got parsed into
+        # appearance_constraints — so any detail the relay's structured
+        # 4-attribute schema couldn't categorize (kept in
+        # unsupported_appearance for mock-mode bookkeeping) still reaches
+        # the real model here and gets a genuine best-effort visual check.
+        # Only MockVision's fixture-lookup matching is structurally limited
+        # to shirtColor/hairColor/garment/headwear; this azure path is not.
         if scene_context is not None:
             search_data["sceneContext"] = scene_context
         system_prompt = SYSTEM_PROMPT_BY_KIND.get(kind, SYSTEM_PROMPT)

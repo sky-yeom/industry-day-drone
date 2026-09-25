@@ -20,6 +20,12 @@ POSITIVE = {"targetPresent": True, "description": "핑크색 작업복을 입고
            "box": [0.1, 0.1, 0.2, 0.3], "confidence": 88}
 NEGATIVE = {"targetPresent": False, "description": "요청한 조건에 맞는 사람이 보이지 않습니다.",
            "box": None, "confidence": 12}
+# A zone can hold 2+ confirmed violators matching the same shared prompt
+# (e.g. two bareheaded hot-pink workers) — the vision evidence then carries
+# an explicit violatorCount alongside targetPresent.
+TWO_VIOLATORS = {"targetPresent": True,
+                "description": "핑크색 작업복을 입고 안전모를 쓰지 않은 사람 2명이 통로 양쪽에 있습니다.",
+                "box": [0.1, 0.1, 0.2, 0.3], "confidence": 90, "violatorCount": 2}
 
 
 def capture(monitor="monitor-1", id="frame-1", image_bytes=b"pixels"):
@@ -117,3 +123,30 @@ class ConstructionScenarioTests(unittest.TestCase):
         debrief = s.debrief()
         self.assertIn("안전관리자", debrief)
         self.assertIn("찾지 못했", debrief)
+
+    def test_multiple_violators_in_one_zone_are_all_counted_in_score_and_debrief(self):
+        """A single zone matching 2 confirmed violators must show up as 2 in
+        the final score's violatorsFoundCount (not silently collapsed to 1
+        just because it's one resolved zone), and the debrief must mention
+        the person count, not just say the zone was reported."""
+        s = self.session
+        s.confirm_prompt(**PROMPT_ARGS)
+        s.select_stop("monitor-1")
+        s.select_stop("monitor-2")
+        s.select_stop("monitor-3")
+        s.confirm_route()
+        s.launch_mission()
+        detect(s, "monitor-1", TWO_VIOLATORS)
+        detect(s, "monitor-2", POSITIVE, frame_id="frame-m2")
+        detect(s, "monitor-3", NEGATIVE, frame_id="frame-m3-0")
+        for attempt in range(1, s.scenario["maxDetectionAttempts"]):
+            detect(s, "monitor-3", NEGATIVE, frame_id=f"frame-m3-{attempt}")
+        self.assertEqual(s.phase, "complete")
+        score = s.data["score"]
+        self.assertEqual(score["violationsReportedCount"], 2)
+        # 2 (monitor-1) + 1 (monitor-2, plain POSITIVE with no violatorCount
+        # field defaults to 1 matched candidate) = 3 total people.
+        self.assertEqual(score["violatorsFoundCount"], 3)
+        debrief = s.debrief()
+        self.assertIn("2명", debrief)
+        self.assertIn("총 3명", debrief)

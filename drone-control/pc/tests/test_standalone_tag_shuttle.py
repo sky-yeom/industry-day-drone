@@ -313,6 +313,38 @@ class HorizontalGateTests(StandaloneTestCase):
             self.assertLessEqual(abs(right), 1.5)
         self.assertIn("zero", client.calls)
 
+    def test_return_leg_caps_cruise_and_brakes_on_arrival(self):
+        """2026-09-28 14:48: 0.6 deg for 21 s reached 0.3 m/s and coasted past ID6."""
+        clock, client, logger = [100.], FakeClient(), MagicMock()
+        client.arm("offline")
+        client.raw["is_flying"] = True
+        speeds = iter((0., .1, .2, .3, .2, .1, .1, .3, .3, .3, .3, .2, .1, .0, .0, .0))
+        frames = iter(([],) * 7 + ([tag(6, 1150.)],) + ([tag(6)],) * 8)
+        stream = SimpleNamespace(last_detection_snapshot=None)
+        def detect(_detector, _age):
+            frame_id = 1 if stream.last_detection_snapshot is None else stream.last_detection_snapshot.key[1] + 1
+            stream.last_detection_snapshot = SimpleNamespace(key=(1, frame_id), frame=SimpleNamespace(shape=(720, 1280, 3)))
+            return next(frames), .01
+        stream.detect_latest = detect
+        def status(state):
+            FakeClient.status(client, state)
+            client.last_telemetry.velocity_north_mps = next(speeds, 0.)
+        client.status = status
+        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .11))
+        cfg = replace(config(), camera=replace(config().camera, cx=640.))
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                patch.object(shuttle.time, "perf_counter", lambda: clock[0]), \
+                redirect_stdout(io.StringIO()):
+            found = shuttle.traverse_horizontal(client, limiter, stream, None, logger, cfg, profile(),
+                                                3, 6, shuttle.PatrolPhase.RETURN,
+                                                external_route=[6, 1, 2, 3, 6])
+        self.assertEqual(found.tag_id, 6)
+        samples = [data for event, data in client.events if event == "standalone_horizontal_sample"]
+        self.assertIn("cruise_cap_coast", [s["speed_control"] for s in samples])
+        self.assertTrue(all(s["right_tilt_deg"] <= 0. for s in samples if (s["horizontal_speed_mps"] or 0.) >= .2))
+        rights = [call[1][1] for call in client.calls if isinstance(call, tuple) and call[0] == "attitude"]
+        self.assertIn(-shuttle.RETURN_BRAKE_DEG, rights)
+
     def test_recorded_id1_overshoot_positions_complete_without_right_correction(self):
         # Actual logged positions from 20260910T135321. This is an offline
         # controller regression using those positions, not a new flight result.

@@ -45,6 +45,14 @@ ROUTE_IDS = [6, 1, 2, 3, 2, 1, 6]
 CONFIRM_S = .3
 CENTER_TOLERANCE_PX = 80.
 FRESH_S = .5
+GIMBAL_LEVEL_RETRY_S = 2.
+GIMBAL_LEVEL_MAX_RETRIES = 3
+# Wall legs outside pair framing (the 3->6 return). Telemetry speed is
+# quantized to 0.1 m/s, so 0.2 is the first reading clearly above a creep.
+RETURN_CRUISE_CAP_MPS = .2
+RETURN_STILL_MPS = .1
+RETURN_BRAKE_DEG = .6
+RETURN_ARRIVAL_BRAKE_MAX_S = 1.5
 # The phone polls IsFlying about every 0.54 s, so a 0.5 s freshness gate on it
 # trips at random (15:23 flight: age 517 ms while armed/MSDK/height were all
 # fine). Three missed polls is the stale threshold for the flight flag only.
@@ -1396,6 +1404,7 @@ def acquire_wall_home(client, limiter, stream, detector, logger, config):
     gate = HorizontalGate(6, "left", config.camera.cx, config.patrol.angle_deg,
                           config.patrol, stationary_home=True)
     deadline = time.monotonic() + config.patrol.acquire_timeout_s
+    floor_since, level_retries = None, 0
     while time.monotonic() < deadline:
         limiter.wait()
         client.zero()
@@ -1404,6 +1413,22 @@ def acquire_wall_home(client, limiter, stream, detector, logger, config):
         now = time.monotonic()
         if now >= deadline:
             break
+        # 2026-09-28 14:17: gimbal(0) was ACKed as DJI_ACTION_SUCCEEDED yet the
+        # camera kept looking straight down at ID0 for 13 s. A floor tag seen from
+        # the wall phase proves the gimbal is still down, so the level command is
+        # re-sent (bounded) instead of timing out in the air.
+        if any(getattr(tag, "tag_id", None) == 0 for tag in tags):
+            floor_since = now if floor_since is None else floor_since
+            if now-floor_since >= GIMBAL_LEVEL_RETRY_S and level_retries < GIMBAL_LEVEL_MAX_RETRIES:
+                level_retries += 1
+                client.log_event("standalone_gimbal_level_retry", {
+                    "attempt": level_retries, "floor_visible_s": now-floor_since})
+                client.gimbal(0.)
+                floor_since = None
+                deadline = max(deadline, now + GIMBAL_LEVEL_RETRY_S*2)
+                continue
+        else:
+            floor_since = None
         snapshot = stream.last_detection_snapshot
         frame_shape = () if snapshot is None else snapshot.frame.shape
         _, confirmed = gate.update(tags, now, age, _snapshot_key(stream), frame_shape)
@@ -1423,6 +1448,7 @@ def traverse_horizontal(client, limiter, stream, detector, logger, config, profi
                  else external_direction(external_route, departure, expected))
     gate = HorizontalGate(expected, direction, config.camera.cx, profile["max_tilt_deg"], config.patrol)
     deadline = time.monotonic() + profile["leg_timeout_s"]
+    seen_since, cruise_coast = None, False
     client.log_event("standalone_leg", {"from": departure, "to": expected, "direction": direction})
     print(f"ID{departure} -> ID{expected}: {direction}", flush=True)
     while time.monotonic() < deadline:
@@ -1440,11 +1466,32 @@ def traverse_horizontal(client, limiter, stream, detector, logger, config, profi
         except (RuntimeError, InterruptedError):
             client.zero()
             raise
+        speed, velocity_age = _horizontal_motion_evidence(client)
+        speed_known = speed is not None and _number(velocity_age, 0., FLIGHT_STATE_FRESH_S)
+        travel = 1. if direction == "right" else -1.
+        speed_control = None
+        if gate.target_seen and speed_known and speed > RETURN_STILL_MPS:
+            if seen_since is None:
+                seen_since = now
+            if now - seen_since <= RETURN_ARRIVAL_BRAKE_MAX_S:
+                # 14:48 return: 0.6 deg held for 21 s reached 0.3 m/s, zero tilt
+                # at ID6 coasted past it and ID0 was never under the aircraft.
+                right, speed_control = -travel * RETURN_BRAKE_DEG, "arrival_brake"
+        elif gate.target_seen and seen_since is None:
+            seen_since = now
+        if right * travel > 0. and speed_known:
+            if speed >= RETURN_CRUISE_CAP_MPS:
+                cruise_coast = True
+            elif speed <= RETURN_STILL_MPS:
+                cruise_coast = False
+            if cruise_coast:
+                right, speed_control = 0., "cruise_cap_coast"
         up = client.hold_up(height_hold_up_mps(client, profile))
         client.log_event("standalone_horizontal_sample", {
             "expected_id": expected, "visible_ids": [tag.tag_id for tag in tags],
             "frame_age_s": age, "frame_key": _snapshot_key(stream),
             "target_seen": gate.target_seen, "right_tilt_deg": right,
+            "horizontal_speed_mps": speed, "speed_control": speed_control,
             "expected_center_px": gate.expected_center_px, "framing_action": gate.framing_action,
             "view_bounds_fraction": wall_view_bounds(config.patrol),
             "frame_size_px": [frame_shape[1], frame_shape[0]] if len(frame_shape) >= 2 else None,
@@ -1471,8 +1518,34 @@ def traverse_horizontal(client, limiter, stream, detector, logger, config, profi
                 phase=phase, expected_id=expected, frame_age_s=age,
                 telemetry=client.last_telemetry, direction=direction))
             logger.save_confirmation_photo(stream, confirmed, phase=phase)
+            _finish_arrival_brake(client, limiter, profile, direction,
+                                  now if seen_since is None else seen_since)
             return confirmed
     raise TimeoutError(f"ID{expected} not confirmed within {profile['leg_timeout_s']:g}s")
+
+
+def _finish_arrival_brake(client, limiter, profile, direction, seen_since):
+    """Keep opposing travel after a wall confirmation until telemetry is still.
+
+    Bounded by the same window that started when the tag was first seen, so
+    a slow or already-still arrival returns at once.
+    """
+    travel = 1. if direction == "right" else -1.
+    braked = False
+    while time.monotonic() - seen_since <= RETURN_ARRIVAL_BRAKE_MAX_S:
+        speed, velocity_age = _horizontal_motion_evidence(client)
+        if speed is None or not _number(velocity_age, 0., FLIGHT_STATE_FRESH_S) or speed <= RETURN_STILL_MPS:
+            break
+        braked = True
+        up = client.hold_up(height_hold_up_mps(client, profile))
+        client.attitude(0., -travel * RETURN_BRAKE_DEG, up, 0.)
+        client.log_event("standalone_arrival_brake", {"horizontal_speed_mps": speed,
+                                                      "right_tilt_deg": -travel * RETURN_BRAKE_DEG})
+        limiter.wait()
+        client.status("standalone_arrival_brake")
+        _require_flight(client)
+    if braked:
+        client.zero()
 
 
 def _horizontal_motion_evidence(client):

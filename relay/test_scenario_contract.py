@@ -16,10 +16,11 @@ ROOT = Path(__file__).resolve().parents[1]
 SCENARIO = json.loads((ROOT / "data" / "emergency-triage.json").read_text("utf-8"))
 LIVE_SCENARIO = json.loads((ROOT / "data" / "emergency-triage-live.json").read_text("utf-8"))
 # One real stop measured in the field: fly the leg, hold the pair gate, shoot the
-# proof pair, then wait on Azure. The full three-stop route ran 77-100s, so this
-# is the worst observed stop rounded up. The mock timeline is a third of it,
-# which is why the two scenarios cannot share one set of deadlines.
-LIVE_STOP_MS = 34000
+# proof pair, then wait on Azure. The full three-stop route ran 77-100s on 0917,
+# but on 0928 a stop took 52-57s (45s of flight plus ~12s of Azure per image),
+# so this is that worst observed stop rounded up. The mock timeline is a
+# fraction of it, which is why the two scenarios cannot share one set of deadlines.
+LIVE_STOP_MS = 60000
 
 
 class ScenarioContractTests(unittest.TestCase):

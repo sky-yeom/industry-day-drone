@@ -8,7 +8,7 @@
   "travelMs": 7000,
   "captureMs": 1000,
   "mockAnalysisMs": 2000,
-  "maxDetectionAttempts": 2,
+  "maxDetectionAttempts": 1,
   "injuryWindowMs": 5000,
   "people": [
     {

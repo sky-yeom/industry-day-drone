@@ -481,14 +481,17 @@ class SurveySession:
             # detection attempts without a match resolves as genuinely
             # checked-but-empty rather than staying unresolved forever.
             person.update(outcome="not_found", resolvedAtMs=now, captureId=capture_id)
-        elif (self.kind in ("security", "triage") and not evidence["targetPresent"] and person["outcome"] is None
-              and person.get("falseAlarm") and person["attempts"] >= self.scenario["maxDetectionAttempts"]):
-            # A false-alarm site that's actually been visited and checked
-            # (no match after every allowed attempt) is resolved the moment
-            # that's confirmed, instead of leaving the participant staring at
-            # an unresolved result screen until that site's own deadline
-            # timer separately runs out (which can be tens of seconds after
-            # every real site has already been checked).
+        elif (self.kind in ("security", "triage") and person["outcome"] is None and person.get("falseAlarm")
+              and (evidence["targetPresent"] or person["attempts"] >= self.scenario["maxDetectionAttempts"])):
+            # A false-alarm site can never become "reported"/"caught" (see the
+            # guard above), so once this visit's detection is actually done —
+            # either a (mismatched) positive, which ends the automatic
+            # recapture loop in mission_runner.py right away, or a negative
+            # that has used every allowed attempt — there is nothing left to
+            # wait for. Resolving only on a negative-and-exhausted result (the
+            # old condition) left a falsely-matched false-alarm site
+            # unresolved until its own deadline timer separately ran out,
+            # well after every site had already been visited and evaluated.
             missed_outcome = "escaped" if self.kind == "security" else "report_missed"
             person.update(outcome=missed_outcome, resolvedAtMs=now, captureId=capture_id)
         self._active_capture = None

@@ -116,15 +116,14 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         first, second = await asyncio.gather(self.runner.launch(), self.runner.launch())
         self.assertTrue(first["ok"] and second["ok"])
         # monitor-3 (the real target) resolves immediately on its first
-        # positive detection; monitor-1/monitor-2 are false alarms and never
-        # resolve as "reported" no matter what the image analysis returns —
-        # they only settle once their own deadline passes. Wait for every
-        # site to actually be visited before advancing the clock, so the
-        # background deadline watcher can't mark a still-unvisited false
-        # alarm site "missed" before the runner ever gets to capture it.
+        # positive detection; monitor-1/monitor-2 are false alarms and can
+        # never resolve as "reported" no matter what the image analysis
+        # returns, but a (mismatched) positive detection on them still
+        # resolves their outcome immediately as soon as they're evaluated —
+        # the mission ends right after every site has been visited, with no
+        # need to wait out anyone's individual deadline.
         await settle(lambda: {"monitor-1", "monitor-2", "monitor-3"} <= set(self.camera.calls))
         self.assertEqual(self.session.person("monitor-3")["outcome"], "reported")
-        await self.advance(max(p["deadlineMs"] for p in self.session.data["people"]) + 1000)
         await settle(lambda: self.session.phase == "complete")
         self.assertIn("monitor-1", self.camera.calls)
         self.assertIn("monitor-2", self.camera.calls)
@@ -149,7 +148,14 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         await self.runner.launch()
         await settle(lambda: self.runner._work.done())
         self.assertEqual(self.camera.calls, ["monitor-3", "monitor-3", "monitor-1", "monitor-2"])
+        # monitor-3 (the real target) came back negative both times, so it
+        # stays genuinely unresolved until its own deadline passes; the
+        # false-alarm monitor-1/monitor-2 already resolved as report_missed
+        # the moment their (mismatched) positive came back, which is why the
+        # mission still isn't complete yet — only monitor-3 is left.
         self.assertIsNone(self.session.person("monitor-3")["outcome"])
+        self.assertEqual(self.session.person("monitor-1")["outcome"], "report_missed")
+        self.assertEqual(self.session.person("monitor-2")["outcome"], "report_missed")
         self.assertNotEqual(self.session.phase, "complete")
         await self.advance(max(p["deadlineMs"] for p in self.session.data["people"]) + 1000)
         await settle(lambda: self.session.phase == "complete")
@@ -264,12 +270,11 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.elapsed_ms(), 33000)
         self.assertEqual(self.session.person("monitor-3")["resolvedAtMs"], 13000)
         self.assertEqual(self.session.person("monitor-3")["outcome"], "reported")
-        self.assertEqual(self.session.person("monitor-1")["resolvedAtMs"], 30000)
+        self.assertEqual(self.session.person("monitor-1")["resolvedAtMs"], 23000)
         self.assertEqual(self.session.person("monitor-1")["outcome"], "report_missed")
-        self.assertIsNone(self.session.person("monitor-2")["outcome"])
-        await self.advance(self.session.person("monitor-2")["deadlineMs"] - 33000 + 1000)
-        await settle(lambda: self.session.phase == "complete")
+        self.assertEqual(self.session.person("monitor-2")["resolvedAtMs"], 33000)
         self.assertEqual(self.session.person("monitor-2")["outcome"], "report_missed")
+        self.assertEqual(self.session.phase, "complete")
 
     async def test_expiry_independent_of_blocked_inference_and_cleanup(self):
         self.vision.block = asyncio.Event()

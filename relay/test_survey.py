@@ -283,8 +283,13 @@ class SurveyTests(unittest.TestCase):
         for monitor, ms, outcome in (
             ("monitor-3", 23999, "reported"),
             ("monitor-3", 24000, "report_missed"),
-            ("monitor-1", 29999, None),
-            ("monitor-2", 39999, None),
+            # False-alarm sites can never become "reported" no matter what a
+            # (mismatched) positive detection claims — a positive here
+            # resolves them as report_missed immediately instead of waiting
+            # on their own deadline, since the automatic recapture loop
+            # would not check them again anyway.
+            ("monitor-1", 29999, "report_missed"),
+            ("monitor-2", 39999, "report_missed"),
         ):
             with self.subTest(monitor=monitor, ms=ms):
                 clock = Clock()

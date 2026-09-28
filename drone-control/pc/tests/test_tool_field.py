@@ -19,7 +19,8 @@ import cv2
 import numpy as np
 
 from drone_nav.tool_control.camera import VideoBroker
-from drone_nav.tool_control.field import FieldAdapter, FieldVideoStream, PairFramingGate, shuttle
+from drone_nav.tool_control.field import (CAPTURE_PUBLICATION_FRAME_AGE_S, FieldAdapter,
+                                          FieldVideoStream, PairFramingGate, shuttle)
 from drone_nav.tool_control.live import FreshVideoStream, LiveAdapter
 from drone_nav.tool_control.server import Handler, adapter_from_environment
 from drone_nav.tool_control.service import CaptureMockAdapter, MissionService, MockAdapter, ToolError
@@ -456,7 +457,7 @@ class FieldTests(unittest.TestCase):
                     def stale_encoder(*args):
                         data = encode(*args)
                         if fault == "encoding_age":
-                            clock[0] += .501
+                            clock[0] += CAPTURE_PUBLICATION_FRAME_AGE_S + .01
                         elif fault == "encoding_size":
                             return True, np.zeros(4 * 1024 * 1024 + 1, np.uint8)
                         else:
@@ -468,6 +469,30 @@ class FieldTests(unittest.TestCase):
                 self.assertEqual(len([e for e in events if "capture" in e]), 1 if fault == "repeated_pixels" else 0)
                 self.assertEqual(clients[0].calls.count("takeoff"), 1)
                 self.assertEqual(clients[0].calls.count("arm"), 1)
+                self.assertTrue(stream.closed)
+
+    def test_full_frame_encoding_time_does_not_refuse_every_capture(self):
+        """2026-09-28 13:35: ~0.45 s of PNG encoding aged ID1's frame past 0.5 s three times.
+
+        15:10: a ~0.8 s encode at ID3 left the last status older than FRESH_S
+        and aborted a healthy flight as "Fresh airborne state lost".
+        """
+        for encode_s in (.45, .8, 1.8):
+            with self.subTest(encode_s=encode_s), ExitStack() as stack:
+                adapter, cancel, events = self.adapter(), threading.Event(), []
+                clock, clients, stream, _ = self.harness(stack, adapter, cancel)
+                encode = cv2.imencode
+                def field_encoder(*args):
+                    data = encode(*args)
+                    clock[0] += encode_s
+                    return data
+                stack.enter_context(patch("cv2.imencode", side_effect=field_encoder))
+                result = adapter.run(self.mission(), cancel, lambda **event: events.append(event))
+                self.assertTrue(result["route_completed"], result)
+                captures = [e["capture"] for e in events if "capture" in e]
+                self.assertEqual(len(captures), 6)
+                self.assertTrue(all(.4 < c["capture_evidence"]["frame_age_s"] <= CAPTURE_PUBLICATION_FRAME_AGE_S
+                                    for c in captures))
                 self.assertTrue(stream.closed)
 
     def test_shared_preview_survives_mission_and_preview_stop_cannot_close_owned_stream(self):

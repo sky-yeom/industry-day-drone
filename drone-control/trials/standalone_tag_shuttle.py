@@ -47,9 +47,11 @@ CENTER_TOLERANCE_PX = 80.
 FRESH_S = .5
 GIMBAL_LEVEL_RETRY_S = 2.
 GIMBAL_LEVEL_MAX_RETRIES = 3
-# Wall legs outside pair framing (the 3->6 return). Telemetry speed is
-# quantized to 0.1 m/s, so 0.2 is the first reading clearly above a creep.
-RETURN_CRUISE_CAP_MPS = .2
+# Wall legs outside pair framing (the ->6 return). Telemetry speed is
+# quantized to 0.1 m/s.
+RETURN_CRUISE_MPS = .2
+RETURN_CRUISE_TILT_DEG = .3
+RETURN_COAST_MPS = .3
 RETURN_STILL_MPS = .1
 RETURN_BRAKE_DEG = .6
 RETURN_ARRIVAL_BRAKE_MAX_S = 1.5
@@ -1448,7 +1450,7 @@ def traverse_horizontal(client, limiter, stream, detector, logger, config, profi
                  else external_direction(external_route, departure, expected))
     gate = HorizontalGate(expected, direction, config.camera.cx, profile["max_tilt_deg"], config.patrol)
     deadline = time.monotonic() + profile["leg_timeout_s"]
-    seen_since, cruise_coast = None, False
+    seen_since = None
     client.log_event("standalone_leg", {"from": departure, "to": expected, "direction": direction})
     print(f"ID{departure} -> ID{expected}: {direction}", flush=True)
     while time.monotonic() < deadline:
@@ -1481,12 +1483,13 @@ def traverse_horizontal(client, limiter, stream, detector, logger, config, profi
             # at ID6 coasted past it and ID0 was never under the aircraft.
             right, speed_control = -travel * RETURN_BRAKE_DEG, "arrival_brake"
         if right * travel > 0. and speed_known:
-            if speed >= RETURN_CRUISE_CAP_MPS:
-                cruise_coast = True
-            elif speed <= RETURN_STILL_MPS:
-                cruise_coast = False
-            if cruise_coast:
+            # 15:25 return: a 0.2 m/s cap with a zero-tilt coast stopped the
+            # aircraft 7 times in 21 s. Keep pushing gently at 0.2 m/s and only
+            # coast at 0.3 m/s, the speed that overshot ID6 at 14:48.
+            if speed >= RETURN_COAST_MPS:
                 right, speed_control = 0., "cruise_cap_coast"
+            elif speed >= RETURN_CRUISE_MPS and abs(right) > RETURN_CRUISE_TILT_DEG:
+                right, speed_control = travel * RETURN_CRUISE_TILT_DEG, "cruise_hold"
         up = client.hold_up(height_hold_up_mps(client, profile))
         client.log_event("standalone_horizontal_sample", {
             "expected_id": expected, "visible_ids": [tag.tag_id for tag in tags],

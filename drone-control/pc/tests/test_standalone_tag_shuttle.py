@@ -357,9 +357,21 @@ class HorizontalGateTests(StandaloneTestCase):
             with self.subTest(departure=departure):
                 client = self._fly_return_leg(departure, route, frames, speeds)
                 samples = [data for event, data in client.events if event == "standalone_horizontal_sample"]
-                self.assertIn("cruise_cap_coast", [s["speed_control"] for s in samples])
-                self.assertTrue(all(s["right_tilt_deg"] <= 0. for s in samples
-                                    if (s["horizontal_speed_mps"] or 0.) >= .2))
+                cruising = [s for s in samples if s["speed_control"] != "arrival_brake"]
+                controls = [s["speed_control"] for s in cruising]
+                self.assertIn("cruise_hold", controls)
+                if any((s["horizontal_speed_mps"] or 0.) >= .3 for s in cruising):
+                    self.assertIn("cruise_cap_coast", controls)
+                for s in cruising:
+                    speed = s["horizontal_speed_mps"] or 0.
+                    if speed >= shuttle.RETURN_COAST_MPS:
+                        self.assertEqual(s["right_tilt_deg"], 0.)
+                    elif speed >= shuttle.RETURN_CRUISE_MPS:
+                        self.assertTrue(0. < s["right_tilt_deg"] <= shuttle.RETURN_CRUISE_TILT_DEG)
+                    elif not s["target_seen"]:
+                        # 15:25: a cap at 0.2 m/s left 0 tilt down to 0.1 m/s
+                        # and stopped the return 7 times; below 0.2 it pushes.
+                        self.assertGreater(s["right_tilt_deg"], 0.)
                 brakes = [s for s in samples if s["speed_control"] == "arrival_brake"]
                 self.assertTrue(brakes)
                 self.assertTrue(all(s["framing_action"] == inside and

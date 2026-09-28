@@ -153,7 +153,7 @@
     "landing_confirm_s": 0.5,
     "landing_gain": 0.0005,
     "landing_max_speed_mps": 0.08,
-    "landing_timeout_s": 35.0
+    "landing_timeout_s": 50.0
   },
   "actual_measurements_confirmed": false
 }

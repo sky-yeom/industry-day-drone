@@ -113,8 +113,10 @@ MAX_CENTER_RECOVERIES = 3
 SEARCH_NUDGE_DEG = .3
 SEARCH_NUDGE_AFTER_S = 1.
 SEARCH_NUDGE_PULSE_S = .6
-SEARCH_NUDGE_GAP_S = .6
-MAX_SEARCH_NUDGES = 8
+# 15:51 landing: the gimbal took 6-9 s to face the floor, so 1.2 s cycles spent
+# six nudges blind. 2 s per nudge (0.6 s pulse + 1.4 s look), at most 10.
+SEARCH_NUDGE_GAP_S = 1.4
+MAX_SEARCH_NUDGES = 10
 # The drift is not always backwards. The 21:54 flight finished its wall route
 # 423 px to one side of ID6 and then spent all eight searches tilting forward,
 # which cannot undo a sideways offset, so it gave the aircraft back to the pilot

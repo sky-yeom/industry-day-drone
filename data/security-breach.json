@@ -24,7 +24,7 @@
       "dramaticRank": 2,
       "clueRank": 3,
       "deadlineMs": 30000,
-      "image": "/monitors/security-vault.png",
+      "image": "/monitors/scenario3_monitor1.png",
       "x": 15,
       "y": 25,
       "mockBox": [
@@ -55,7 +55,7 @@
       "dramaticRank": 3,
       "clueRank": 1,
       "deadlineMs": 24000,
-      "image": "/monitors/security-server-room.png",
+      "image": "/monitors/scenario3_monitor2.png",
       "x": 50,
       "y": 18,
       "mockBox": [
@@ -87,7 +87,7 @@
       "dramaticRank": 1,
       "clueRank": 2,
       "deadlineMs": 40000,
-      "image": "/monitors/security-exec-office.png",
+      "image": "/monitors/scenario3_monitor3.png",
       "x": 80,
       "y": 28,
       "mockBox": [

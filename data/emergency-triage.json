@@ -24,7 +24,7 @@
       "dramaticRank": 2,
       "clueRank": 3,
       "deadlineMs": 30000,
-      "image": "/monitors/monitor-1.png",
+      "image": "/monitors/scenario1_monitor1.png",
       "x": 17.5,
       "y": 43,
       "mockBox": [
@@ -56,7 +56,7 @@
       "dramaticRank": 3,
       "clueRank": 2,
       "deadlineMs": 40000,
-      "image": "/monitors/monitor-2.png",
+      "image": "/monitors/scenario1_monitor2.png",
       "x": 71,
       "y": 43,
       "mockBox": [
@@ -87,7 +87,7 @@
       "dramaticRank": 1,
       "clueRank": 1,
       "deadlineMs": 24000,
-      "image": "/monitors/monitor-3.png",
+      "image": "/monitors/scenario1_monitor3.png",
       "x": 46,
       "y": 29,
       "mockBox": [

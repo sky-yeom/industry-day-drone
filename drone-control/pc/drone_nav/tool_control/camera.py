@@ -16,7 +16,7 @@ MAX_EDGE = 960
 MAX_BYTES = 512 * 1024
 MAX_AGE_S = .5
 ENCODE_INTERVAL_S = .2
-MOCK_MESSAGE = "MOCK preview: public/monitors/monitor-1.png fixture; not a live camera."
+MOCK_MESSAGE = "MOCK preview: public/monitors/scenario1_monitor1.png fixture; not a live camera."
 
 
 class PreviewUnavailable(RuntimeError):
@@ -98,7 +98,7 @@ class VideoBroker:
     @classmethod
     def mock(cls, **kwargs):
         clock = kwargs.get("clock", time.monotonic)
-        fixture = Path(__file__).resolve().parents[4] / "public" / "monitors" / "monitor-1.png"
+        fixture = Path(__file__).resolve().parents[4] / "public" / "monitors" / "scenario1_monitor1.png"
         return cls(lambda: FixtureStream(fixture, clock), simulated=True,
                    encoder=lambda data: ("image/png", data), **kwargs)
 

@@ -65,7 +65,7 @@ class CameraTests(unittest.IsolatedAsyncioTestCase):
             )
 
     def test_invalid_image_format_size_and_structure(self):
-        image = (PUBLIC_ROOT / "monitors" / "monitor-1.png").read_bytes()
+        image = (PUBLIC_ROOT / "monitors" / "scenario1_monitor1.png").read_bytes()
         for data, content_type in (
             (b"", "image/png"),
             (image, "image/jpeg"),

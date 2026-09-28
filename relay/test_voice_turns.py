@@ -495,6 +495,32 @@ class StopInterpretationTests(unittest.TestCase):
             for monitor in ("monitor-1", "monitor-2", "monitor-3"):
                 self.assertFalse(names_stop(text, monitor), text)
 
+    def test_destination_names_across_all_scenario_kinds_tolerate_filler(self):
+        # Regression coverage for a bug reported live: naming a real site
+        # ("서버실", "금고", ...) with ordinary hesitation filler or a verb
+        # ending outside the old fixed vocabulary got rejected as
+        # stop_mismatch forever, so the mission never advanced past the
+        # first destination for any of the 3 scenario kinds.
+        for text, expected in (
+            # security (금고=1, 서버실=2, 임원실=3)
+            ("음 서버실이요", "monitor-2"), ("저기 금고 갈래", "monitor-1"),
+            ("어 임원실 확인할래", "monitor-3"), ("금고부터 가볼게", "monitor-1"),
+            ("일단 서버실 확인해볼게", "monitor-2"),
+            # construction (위쪽통로=1, 기초공사구역=2, 오른쪽플랫폼=3)
+            ("음 위쪽통로요", "monitor-1"), ("저기 기초공사구역 갈래", "monitor-2"),
+            ("어 플랫폼 점검할래", "monitor-3"),
+            # triage (바다=1, 잔해=2, 불난집=3)
+            ("음 바다요", "monitor-1"), ("저기 잔해 갈래", "monitor-2"),
+            ("어 불난 집 확인할래", "monitor-3"),
+        ):
+            for monitor in ("monitor-1", "monitor-2", "monitor-3"):
+                with self.subTest(text=text, monitor=monitor):
+                    self.assertEqual(names_stop(text, monitor), monitor == expected)
+        # Filler must not turn a negation/ambiguous turn into a false accept.
+        for text in ("음 서버실은 아니야", "저기 금고 말고 서버실", "어 아무 데나"):
+            for monitor in ("monitor-1", "monitor-2", "monitor-3"):
+                self.assertFalse(names_stop(text, monitor), text)
+
 
 class DepartureInterpretationTests(unittest.TestCase):
     def test_polite_departure_requires_unconditional_affirmation(self):

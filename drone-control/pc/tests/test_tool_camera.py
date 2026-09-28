@@ -397,7 +397,7 @@ class MockCameraServiceTest(unittest.TestCase):
                 self.assertEqual(camera["message"], MOCK_MESSAGE)
                 self.assertEqual(camera["content_type"], "image/png")
                 raw = base64.b64decode(camera["image_base64"], validate=True)
-                fixture = Path(__file__).resolve().parents[3] / "public" / "monitors" / "monitor-1.png"
+                fixture = Path(__file__).resolve().parents[3] / "public" / "monitors" / "scenario1_monitor1.png"
                 self.assertLessEqual(len(raw), MAX_BYTES)
                 width, height = struct.unpack(">II", raw[16:24])
                 original_width, original_height = struct.unpack(">II", fixture.read_bytes()[16:24])

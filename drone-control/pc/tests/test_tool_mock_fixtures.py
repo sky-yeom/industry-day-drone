@@ -60,7 +60,7 @@ class CaptureFixtureTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[3]
         for index, tag in enumerate((3, 1, 2)):
             first, second = captures[2 * index:2 * index + 2]
-            original = (root / "public" / "monitors" / f"monitor-{tag}.png").read_bytes()
+            original = (root / "public" / "monitors" / f"scenario1_monitor{tag}.png").read_bytes()
             self.assertEqual(base64.b64decode(first["image_base64"]), original)
             self.assertNotEqual(first["image_base64"], second["image_base64"])
             self.assertNotEqual(first["capture_id"], second["capture_id"])
@@ -73,7 +73,7 @@ class CaptureFixtureTests(unittest.TestCase):
     def test_fixture_crc_failure_is_not_a_capture(self):
         import io
         root = Path(__file__).resolve().parents[3]
-        data = bytearray((root / "public" / "monitors" / "monitor-1.png").read_bytes())
+        data = bytearray((root / "public" / "monitors" / "scenario1_monitor1.png").read_bytes())
         data[20] ^= 1
         with patch.object(Path, "open", return_value=io.BytesIO(data)), self.assertRaises(RuntimeError):
             fixture_frames("not-opened.png")

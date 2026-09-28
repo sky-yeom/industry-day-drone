@@ -54,7 +54,7 @@ export default function PixelPromptScreen({
   return (
     <div className="relative z-10 flex h-full min-h-0 w-full flex-col overflow-y-auto pl-4 pr-[calc(6%+481px*var(--ui-scale))] pb-[8dvh] pt-4 sm:pl-6 sm:pt-6">
       {!confirmed && onForceNext && <ForceNextButton onClick={onForceNext} />}
-      <div className="flex min-h-0 flex-1 flex-col justify-center gap-2" style={{ zoom: 0.85 }}>
+      <div className="flex min-h-0 flex-1 flex-col justify-center gap-2" style={{ zoom: 1.0 }}>
       <div className="flex shrink-0 flex-wrap items-baseline gap-x-3 gap-y-1">
         <p className="text-sm font-bold tracking-[0.14em] text-[#091f2c] sm:text-base">임무 브리핑</p>
         <h2 className="text-lg font-bold tracking-[0.05em] text-[#091f2c] sm:text-xl">탐지·신고 대상</h2>
@@ -77,7 +77,7 @@ export default function PixelPromptScreen({
       <div
         className="flex max-w-[53.75rem] flex-1 flex-row items-center gap-3"
       >
-        <div className="shrink-0">
+        <div className="min-w-0 shrink">
           <TriageSiteCards
             sites={
               scenarioKind === "security" ? [SECURITY_SUSPECT_SITE]
@@ -91,9 +91,9 @@ export default function PixelPromptScreen({
 
         {!confirmed && (
           <div
-            className="pixel-panel shrink-0 max-h-full min-w-0 max-w-[500px] overflow-y-auto bg-white/90 p-3"
+            className="pixel-panel shrink max-h-full min-w-0 max-w-[500px] overflow-y-auto bg-white/90 px-3 py-[37px]"
           >
-            <ol aria-label="임무 브리핑" className="space-y-2 text-xs leading-snug text-[#091f2c]">
+            <ol aria-label="임무 브리핑" className="space-y-2 text-sm leading-relaxed text-[#091f2c]">
               {briefing.map((bullet, index) => (
                 <li key={bullet.id} className="flex gap-2">
                   <span className="shrink-0 font-bold text-[#d63447]">{index + 1}.</span>
@@ -105,7 +105,7 @@ export default function PixelPromptScreen({
         )}
 
         {confirmed && (
-          <div className="pixel-panel shrink-0 min-w-0 max-w-[500px] overflow-y-auto bg-white/90 p-3">
+          <div className="pixel-panel shrink min-w-0 max-w-[500px] overflow-y-auto bg-white/90 px-3 py-[37px]">
             <p className="text-sm font-bold text-[#091f2c]">
               {scenarioKind === "security"
                 ? "기비의 제안 순서 · 너는 어떤 순서로 확인하고 싶어?"
@@ -115,22 +115,22 @@ export default function PixelPromptScreen({
             </p>
             <div className="mt-2 grid grid-cols-1 gap-2">
               <div>
-                <p className="text-xs font-bold tracking-[0.08em] text-[#6e6575]">
+                <p className="text-sm font-bold tracking-[0.08em] text-[#6e6575]">
                   {scenarioKind === "security" ? "다급해 보이는 순서"
                     : scenarioKind === "construction" ? "눈에 띄는 정도"
                     : "다급하게 들리는 순서"}
                 </p>
-                <p className="mt-1 text-sm leading-relaxed text-[#091f2c]">
+                <p className="mt-1 text-base leading-relaxed text-[#091f2c]">
                   {state.dangerOrder.map((id) => MONITOR_MAP_BY_KIND[scenarioKind][id]?.label ?? id).join(" → ")}
                 </p>
               </div>
               <div>
-                <p className="text-xs font-bold tracking-[0.08em] text-[#6e6575]">
+                <p className="text-sm font-bold tracking-[0.08em] text-[#6e6575]">
                   {scenarioKind === "security" ? "단서 분석 순서"
                     : scenarioKind === "construction" ? "실제 위험도"
                     : "신고 내용 분석 순서"}
                 </p>
-                <p className="mt-1 text-sm leading-relaxed text-[#091f2c]">
+                <p className="mt-1 text-base leading-relaxed text-[#091f2c]">
                   {state.vulnerableAdjustedOrder.map((id) => MONITOR_MAP_BY_KIND[scenarioKind][id]?.label ?? id).join(" → ")}
                 </p>
               </div>

@@ -80,14 +80,30 @@ STOP_ALIASES = {
 }
 
 
+# Same failure mode as the old is_affirmative bug: a real destination name
+# ("서버실", "금고", ...) surrounded by harmless discourse filler ("음
+# 서버실이요", "저기 금고 갈래") or a natural verb ending missing from the
+# old fixed suffix vocabulary ("확인할래", "가볼게") used to fall through
+# the exact fullmatch and get rejected as stop_mismatch forever, leaving the
+# model stuck re-asking the same question instead of ever calling
+# select_stop successfully. Reuse AFFIRMATIVE_FILLERS (already vetted to
+# never smuggle in a "no"/negation) and broaden the verb-ending vocabulary
+# the same tolerant way, instead of only ever adding one more literal
+# string per newly-observed phrasing.
+_STOP_FILLERS = "|".join(sorted(AFFIRMATIVE_FILLERS, key=len, reverse=True))
+
+
 def names_stop(text, monitor):
     aliases = STOP_ALIASES.get(monitor, ())
     if not aliases:
         return False
-    prefix = r"(?:(?:네|응|그럼|그러면|먼저|우선|첫번째는|두번째는|다음은|다음으로는|다음으로)){0,3}"
+    prefix = (r"(?:(?:네|응|그럼|그러면|먼저|우선|첫번째는|두번째는|다음은|다음으로는|다음으로"
+              rf"|{_STOP_FILLERS})){{0,4}}")
     suffix = (r"(?:부터|쪽으로|쪽|으로|로|을|를|에)?(?:먼저|우선)?"
-              r"(?:가자|가줘|가주세요|갈래|갈게|가고싶어|구하자|구해줘|구해주세요|구하고싶어|구조하자|선택할게|할게|할래|하자)?"
-              r"(?:이요|이에요|예요|입니다|요)?")
+              r"(?:가자|가줘|가주세요|갈래|갈게|가고싶어|가볼래|가볼게|가볼까|"
+              r"확인하자|확인할래|확인해볼게|확인해줄게|점검하자|점검할래|점검해볼게|"
+              r"구하자|구해줘|구해주세요|구하고싶어|구조하자|선택할게|할게|할래|하자)?"
+              rf"(?:이요|이에요|예요|입니다|요|{_STOP_FILLERS}){{0,3}}")
     return re.fullmatch(prefix + "(?:" + "|".join(aliases) + ")" + suffix, normalize(text)) is not None
 
 

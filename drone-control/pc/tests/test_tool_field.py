@@ -602,7 +602,7 @@ class FieldTests(unittest.TestCase):
                 if enabled:
                     for index, tag in enumerate((3, 1, 2)):
                         first, second = captures[index * 2:index * 2 + 2]
-                        fixture = ROOT.parent / "public" / "monitors" / f"monitor-{tag}.png"
+                        fixture = ROOT.parent / "public" / "monitors" / f"scenario1_monitor{tag}.png"
                         self.assertEqual(base64.b64decode(first["image_base64"]), fixture.read_bytes())
                         self.assertNotEqual(first["sha256"], second["sha256"])
                         pixels = [cv2.imdecode(np.frombuffer(base64.b64decode(item["image_base64"]),

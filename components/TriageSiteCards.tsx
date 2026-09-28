@@ -37,7 +37,7 @@ export default function TriageSiteCards({
         const active = activeMonitorId === site.monitorId;
         const statusBadge = (
           <span
-            className={`self-start rounded-full px-2 py-0.5 text-[0.625rem] font-bold ${
+            className={`self-start rounded-full px-2 py-0.5 text-xs font-bold ${
               confirmed ? "bg-emerald-500 text-white" : active ? "bg-[#ffd23f] text-[#091f2c]" : "bg-[#e6e1ee] text-[#6e6575]"
             }`}
           >
@@ -45,12 +45,12 @@ export default function TriageSiteCards({
           </span>
         );
         const confidenceBadge = confirmed && person?.promptConfidence !== null && person?.promptConfidence !== undefined && (
-          <span className="text-[0.625rem] font-bold tabular-nums text-[#091f2c]">
+          <span className="text-xs font-bold tabular-nums text-[#091f2c]">
             확신도 {person.promptConfidence}%
           </span>
         );
         const textBody = (
-          <div className={`overflow-y-auto pr-1 text-xs leading-snug text-[#091f2c] ${isSingle ? "max-h-32" : "max-h-16"}`}>
+          <div className={`overflow-y-auto pr-1 text-sm leading-snug text-[#091f2c] ${isSingle ? "max-h-40" : "max-h-20"}`}>
             {confirmed ? (
               <p>{person?.promptText}</p>
             ) : (
@@ -64,16 +64,16 @@ export default function TriageSiteCards({
             alt={site.referenceAlt}
             width={1536}
             height={1536}
-            sizes={isSingle ? "224px" : "184px"}
-            className={isSingle ? "block h-auto w-32 shrink-0 sm:w-40" : "block h-auto w-full"}
+            sizes={isSingle ? "256px" : "216px"}
+            className={isSingle ? "block h-auto w-40 shrink-0 sm:w-48" : "block h-auto w-full"}
           />
         );
         return (
           <div
             key={site.monitorId}
-            className={`pixel-panel pixel-rendering relative flex flex-col gap-2 bg-white/95 p-3 transition-colors ${active ? "ring-2 ring-[#ffd23f]" : ""}`}
+            className={`pixel-panel pixel-rendering relative flex flex-col gap-2 bg-white/95 px-3 py-[37px] transition-colors ${active ? "ring-2 ring-[#ffd23f]" : ""}`}
           >
-            <span className="pixel-frame-header--danger text-[0.5625rem] font-bold tracking-[0.03em]">
+            <span className="pixel-frame-header--danger text-xs font-bold tracking-[0.03em]">
               {site.label}
             </span>
             {isSingle ? (

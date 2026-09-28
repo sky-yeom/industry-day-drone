@@ -84,7 +84,8 @@ class CaptureMockAdapter(MockAdapter):
             if cancel.wait(.05):
                 return self.stop()
             emit(visit_index=index, visit_state="moving")
-            name = "monitor-" + visit["destination_id"].split("-")[-1] + ".png"
+            monitor_id = "monitor-" + visit["destination_id"].split("-")[-1]
+            name = "scenario1_" + monitor_id.replace("-", "") + ".png"
             path = Path(__file__).resolve().parents[4] / "public" / "monitors" / name
             raw, second = fixture_frames(path)
             fixture_hash = hashlib.sha256(raw).hexdigest()
@@ -95,7 +96,7 @@ class CaptureMockAdapter(MockAdapter):
                 emit(visit_index=index, visit_state="captured", capture={
                     "capture_id": uuid.uuid4().hex, "arrival_confirmed": True,
                     "mission_id": mission["mission_id"], "visit_index": index,
-                    "destination_id": visit["destination_id"], "monitor_id": name[:-4],
+                    "destination_id": visit["destination_id"], "monitor_id": monitor_id,
                     "image_base64": base64.b64encode(data).decode("ascii"),
                     "captured_at_unix_ms": int(time.time() * 1000), "simulated": True,
                     "capture_source": "synthetic_fixture", "fixture_path": "public/monitors/" + name,

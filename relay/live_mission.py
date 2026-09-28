@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from uuid import uuid4
 
 try:
@@ -423,6 +424,9 @@ class LiveMissionRunner(MissionRunner):
                         raise DroneError("CAPTURE_REJECTED")
                     self.session.analyzing(frame.id, run_id)
                     await self._notify()
+                    analysis_started = time.perf_counter()
+                    log.info("vlm_start monitor=%s capture=%s attempt=%d bytes=%d",
+                             monitor, frame.id, person["attempts"], len(frame.image_bytes))
                     try:
                         evidence = await self.vision.analyze(frame,
                             search_prompt=person["promptText"],
@@ -437,18 +441,25 @@ class LiveMissionRunner(MissionRunner):
                         # own landing pad at the end of the route. Keep the photo
                         # unjudged, tell the operator, and fly on. The report deadline
                         # is untouched, so an unjudged person still times out honestly.
-                        log.warning("analysis reached no verdict for %s (%s: %s); continuing the route",
-                                    monitor, type(exc).__name__,
-                                    getattr(exc, "model_reason", None) or exc)
+                        log.warning("analysis reached no verdict for %s after %dms (%s: %s); continuing the route",
+                                    monitor, int((time.perf_counter() - analysis_started) * 1000),
+                                    type(exc).__name__, getattr(exc, "model_reason", None) or exc)
                         self.session.unjudged_capture(run_id, frame.id, str(exc))
                         await self._notify(f"모니터 {monitor[-1]} 사진은 판정하지 못했습니다. "
                                            f"경로를 끝내고 결과를 보고합니다. {exc}")
                         break
-                    if not self.session.apply_detection(run_id, frame.id, evidence):
+                    applied = self.session.apply_detection(run_id, frame.id, evidence)
+                    log.info("vlm_done monitor=%s capture=%s ms=%d targetPresent=%s applied=%s outcome=%s",
+                             monitor, frame.id, int((time.perf_counter() - analysis_started) * 1000),
+                             evidence.get("targetPresent"), applied, person.get("outcome"))
+                    if not applied:
                         break
                     await self._notify()
                     if evidence["targetPresent"]:
                         break
+            log.info("vlm_summary kind=%s phase=%s captures=%d outcomes=%s",
+                     self.session.kind, self.session.phase, len(self.session.data["captures"]),
+                     {p["monitorId"]: p["outcome"] for p in self.session.data["people"]})
             # Scoring can finish before the aircraft returns or lands. Publish both states.
             while not self._closing and self.session.phase != "aborted":
                 mission = await self._read_mission()

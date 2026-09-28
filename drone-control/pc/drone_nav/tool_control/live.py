@@ -224,8 +224,15 @@ class MissionClient(NDJSONClient):
         # 0.5s later; the run died at 1.4m mid-climb and needed an RC landing.
         # A slow answer cannot smuggle in stale telemetry - fresh() rejects any
         # age over 500ms on its own - so the wait only costs time, not safety.
+        # ZERO has the same shape: it is the stop command, cleanup is allowed to
+        # send it, and it never counts as an attempted flight action. Its write
+        # has already left when the wait starts, so a longer wait cannot delay
+        # the stop - it only decides whether a late ACK ends the run. On 0928 a
+        # zero overran 0.4s during a visit pause (max 204ms over 6956 answered
+        # zeros); the transport then refused every cleanup command and the run
+        # needed an RC landing.
         budget = {"takeoff": 3., "arm": 3., "gimbal": 2., "stick_mode": 3., "disarm": 1.,
-                  "land": 3., "ground_ack": 6., "status": 2.}.get(kind, .4)
+                  "land": 3., "ground_ack": 6., "status": 2., "zero": 2.}.get(kind, .4)
         self._socket.deadline = time.perf_counter() + budget
         prior_raw, prior_received = copy.deepcopy(self.raw), self.received
         self.last_telemetry = None

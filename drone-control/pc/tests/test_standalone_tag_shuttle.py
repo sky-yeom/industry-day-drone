@@ -313,13 +313,11 @@ class HorizontalGateTests(StandaloneTestCase):
             self.assertLessEqual(abs(right), 1.5)
         self.assertIn("zero", client.calls)
 
-    def test_return_leg_caps_cruise_and_brakes_on_arrival(self):
-        """2026-09-28 14:48: 0.6 deg for 21 s reached 0.3 m/s and coasted past ID6."""
+    def _fly_return_leg(self, departure, route, frames, speeds):
         clock, client, logger = [100.], FakeClient(), MagicMock()
         client.arm("offline")
         client.raw["is_flying"] = True
-        speeds = iter((0., .1, .2, .3, .2, .1, .1, .3, .3, .3, .3, .2, .1, .0, .0, .0))
-        frames = iter(([],) * 7 + ([tag(6, 1150.)],) + ([tag(6)],) * 8)
+        frames, speeds = iter(frames), iter(speeds)
         stream = SimpleNamespace(last_detection_snapshot=None)
         def detect(_detector, _age):
             frame_id = 1 if stream.last_detection_snapshot is None else stream.last_detection_snapshot.key[1] + 1
@@ -336,14 +334,39 @@ class HorizontalGateTests(StandaloneTestCase):
                 patch.object(shuttle.time, "perf_counter", lambda: clock[0]), \
                 redirect_stdout(io.StringIO()):
             found = shuttle.traverse_horizontal(client, limiter, stream, None, logger, cfg, profile(),
-                                                3, 6, shuttle.PatrolPhase.RETURN,
-                                                external_route=[6, 1, 2, 3, 6])
+                                                departure, 6, shuttle.PatrolPhase.RETURN,
+                                                external_route=route)
         self.assertEqual(found.tag_id, 6)
-        samples = [data for event, data in client.events if event == "standalone_horizontal_sample"]
-        self.assertIn("cruise_cap_coast", [s["speed_control"] for s in samples])
-        self.assertTrue(all(s["right_tilt_deg"] <= 0. for s in samples if (s["horizontal_speed_mps"] or 0.) >= .2))
-        rights = [call[1][1] for call in client.calls if isinstance(call, tuple) and call[0] == "attitude"]
-        self.assertIn(-shuttle.RETURN_BRAKE_DEG, rights)
+        return client
+
+    def test_every_return_leg_caps_cruise_and_brakes_on_arrival(self):
+        """2026-09-28 14:48: 0.6 deg for 21 s reached 0.3 m/s and coasted past ID6.
+
+        The return may start from ID1, ID2 or ID3. From ID1 the home tag can
+        already sit at the frame edge on departure, so the brake must key on
+        entering the view band rather than on first sighting.
+        """
+        inside = shuttle.WallViewAction.INSIDE.value
+        unseen = (([],) * 7 + ([tag(6, 1150.)],) + ([tag(6)],) * 8,
+                  (0., .1, .2, .3, .2, .1, .1, .3, .3, .3, .3, .2, .1, .0, .0, .0))
+        edge_from_start = (([tag(6, 1250.)],) * 20 + ([tag(6)],) * 10,
+                           (.1, .2) * 10 + (.2, .2, .2, .1, 0.))
+        for departure, route, (frames, speeds) in ((3, [6, 1, 2, 3, 6], unseen),
+                                                   (2, [6, 1, 3, 2, 6], unseen),
+                                                   (1, [6, 2, 3, 1, 6], edge_from_start)):
+            with self.subTest(departure=departure):
+                client = self._fly_return_leg(departure, route, frames, speeds)
+                samples = [data for event, data in client.events if event == "standalone_horizontal_sample"]
+                self.assertIn("cruise_cap_coast", [s["speed_control"] for s in samples])
+                self.assertTrue(all(s["right_tilt_deg"] <= 0. for s in samples
+                                    if (s["horizontal_speed_mps"] or 0.) >= .2))
+                brakes = [s for s in samples if s["speed_control"] == "arrival_brake"]
+                self.assertTrue(brakes)
+                self.assertTrue(all(s["framing_action"] == inside and
+                                    s["right_tilt_deg"] == -shuttle.RETURN_BRAKE_DEG for s in brakes))
+                rights = [call[1][1] for call in client.calls if isinstance(call, tuple) and call[0] == "attitude"]
+                self.assertTrue(all(abs(right) <= max(profile()["max_tilt_deg"], shuttle.RETURN_BRAKE_DEG)
+                                    for right in rights))
 
     def test_recorded_id1_overshoot_positions_complete_without_right_correction(self):
         # Actual logged positions from 20260910T135321. This is an offline

@@ -1470,15 +1470,16 @@ def traverse_horizontal(client, limiter, stream, detector, logger, config, profi
         speed_known = speed is not None and _number(velocity_age, 0., FLIGHT_STATE_FRESH_S)
         travel = 1. if direction == "right" else -1.
         speed_control = None
-        if gate.target_seen and speed_known and speed > RETURN_STILL_MPS:
-            if seen_since is None:
-                seen_since = now
-            if now - seen_since <= RETURN_ARRIVAL_BRAKE_MAX_S:
-                # 14:48 return: 0.6 deg held for 21 s reached 0.3 m/s, zero tilt
-                # at ID6 coasted past it and ID0 was never under the aircraft.
-                right, speed_control = -travel * RETURN_BRAKE_DEG, "arrival_brake"
-        elif gate.target_seen and seen_since is None:
+        # The window opens when the tag enters the view band, not at first
+        # sighting: on short legs (1->6) ID6 can already be visible at the edge
+        # at departure, and a window opened then would expire before arrival.
+        if seen_since is None and gate.framing_action == WallViewAction.INSIDE.value:
             seen_since = now
+        if (seen_since is not None and speed_known and speed > RETURN_STILL_MPS
+                and now - seen_since <= RETURN_ARRIVAL_BRAKE_MAX_S):
+            # 14:48 return: 0.6 deg held for 21 s reached 0.3 m/s, zero tilt
+            # at ID6 coasted past it and ID0 was never under the aircraft.
+            right, speed_control = -travel * RETURN_BRAKE_DEG, "arrival_brake"
         if right * travel > 0. and speed_known:
             if speed >= RETURN_CRUISE_CAP_MPS:
                 cruise_coast = True
@@ -1527,8 +1528,8 @@ def traverse_horizontal(client, limiter, stream, detector, logger, config, profi
 def _finish_arrival_brake(client, limiter, profile, direction, seen_since):
     """Keep opposing travel after a wall confirmation until telemetry is still.
 
-    Bounded by the same window that started when the tag was first seen, so
-    a slow or already-still arrival returns at once.
+    Bounded by the same window that opened when the tag entered the view
+    band, so a slow or already-still arrival returns at once.
     """
     travel = 1. if direction == "right" else -1.
     braked = False

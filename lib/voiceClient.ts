@@ -93,6 +93,8 @@ export interface VoiceHandlers {
   onResultsReveal?: () => void;
   /** The caption for the response actually playing, not a queued future reply. */
   onSpeechText?: (text: string) => void;
+  /** Fires once the spoken confidence narration response has fully finished playing. */
+  onConfidenceNarrationDone?: () => void;
 }
 
 export interface RelayConfig {
@@ -145,6 +147,11 @@ export class VoiceSession {
   private launchRunId: string | null = null;
   private launchResponseId: string | null = null;
   private launchDrainRequested = false;
+  private confidenceResponseId: string | null = null;
+  private confidenceNarrationSignaled = false;
+  // The playback queue can transiently empty between deltas of a still-generating response.
+  private confidenceGenerationDone = false;
+  private confidencePlaybackEnded = false;
   private voiceStopped = false;
   private missionEnded = false;
   private resultsRequested = false;
@@ -186,6 +193,10 @@ export class VoiceSession {
     this.launchRunId = null;
     this.launchResponseId = null;
     this.launchDrainRequested = false;
+    this.confidenceResponseId = null;
+    this.confidenceNarrationSignaled = false;
+    this.confidenceGenerationDone = false;
+    this.confidencePlaybackEnded = false;
     this.voiceStopped = false;
     this.missionEnded = false;
     this.resultsRequested = false;
@@ -285,6 +296,13 @@ export class VoiceSession {
         }
         if (msg.type === "started" && this.narratingResults && msg.id && this.resultsResponseIds.has(msg.id)) {
           this.revealResults();
+        }
+        if (msg.type === "ended" && msg.id === this.confidenceResponseId && !this.confidenceNarrationSignaled) {
+          this.confidencePlaybackEnded = true;
+          if (this.confidenceGenerationDone) {
+            this.confidenceNarrationSignaled = true;
+            this.handlers.onConfidenceNarrationDone?.();
+          }
         }
         if (msg.type !== "drained" || !msg.id) return;
         this.afterOutput(msg.contextTime, () => {
@@ -593,6 +611,11 @@ export class VoiceSession {
     this.routeIntro = null;
   }
 
+  private isRouteIntroHeld(id: string): boolean {
+    const intro = this.routeIntro;
+    return !!intro && !intro.ready && intro.responseIds.has(id);
+  }
+
   sendText(text: string): boolean {
     if (this.ws?.readyState !== WebSocket.OPEN) return false;
     // Voice Live rejects a second response while one is generating with
@@ -615,10 +638,18 @@ export class VoiceSession {
   // force-next button press never lets stale narration bleed into the next
   // screen. Pure client-side playback stop - no server message needed.
   interruptCurrentSpeech(): void {
-    if (this.responseId) {
-      this.playbackNode?.port.postMessage({ type: "discard", ids: [this.responseId] });
-      this.interruptedResponses.add(this.responseId);
-      this.speech.delete(this.responseId);
+    const ids = new Set<string>();
+    if (this.responseId) ids.add(this.responseId);
+    if (this.confidenceResponseId) ids.add(this.confidenceResponseId);
+    for (const id of this.routeIntro?.responseIds ?? []) ids.add(id);
+    if (ids.size) {
+      this.playbackNode?.port.postMessage({ type: "discard", ids: [...ids] });
+      for (const id of ids) {
+        this.interruptedResponses.add(id);
+        this.speech.delete(id);
+        // Discarded replies never drain, but voice.input.ready waits for them to settle.
+        this.settleResponse(id);
+      }
     }
     this.retireRouteIntro();
   }
@@ -628,7 +659,15 @@ export class VoiceSession {
     this.routeVisible = true;
     if (this.ws?.readyState !== WebSocket.OPEN || !this.routeIntro) return false;
     if (this.routeIntro.ready) return true;
+    const heldIds = [...this.routeIntro.responseIds];
     this.routeIntro.ready = true;
+    for (const id of heldIds) {
+      const speech = this.speech.get(id);
+      if (!speech) continue;
+      const text = [...speech.parts.values()].join("");
+      if (text.trim()) this.handlers.onTranscript("agent", text, speech.terminal);
+      if (this.audibleResponseId === id) this.publishSpeechCaption(id);
+    }
     this.ws.send(JSON.stringify({ type: "route_intro.ready", runId: this.currentRunId, introId: this.routeIntro.introId }));
     for (const id of this.routeIntro.responseIds) {
       this.tracePlayback("route_ready", id);
@@ -722,6 +761,21 @@ export class VoiceSession {
         if (msg.runId !== this.currentRunId) return;
         this.handlers.onError(typeof msg.message === "string" && msg.message
           ? msg.message : "말을 알아듣지 못했어. 지금 말해줘 표시가 나오면 다시 말해 줘.");
+        return;
+      }
+      case "confidence_narration.done": {
+        if (msg.runId !== this.currentRunId) return;
+        const speech = this.confidenceResponseId ? this.speech.get(this.confidenceResponseId) : undefined;
+        if (!speech?.hasAudio) {
+          this.confidenceNarrationSignaled = true;
+          this.handlers.onConfidenceNarrationDone?.();
+        } else {
+          this.confidenceGenerationDone = true;
+          if (this.confidencePlaybackEnded && !this.confidenceNarrationSignaled) {
+            this.confidenceNarrationSignaled = true;
+            this.handlers.onConfidenceNarrationDone?.();
+          }
+        }
         return;
       }
       case "route_intro.pending": {
@@ -821,9 +875,15 @@ export class VoiceSession {
       case "response.created": {
         const response = msg.response as {
           id?: string;
-          metadata?: { missionDebrief?: boolean | string; missionLaunch?: boolean | string; runId?: string };
+          metadata?: { missionDebrief?: boolean | string; missionLaunch?: boolean | string; runId?: string;
+            confidenceNarration?: string };
         } | undefined;
         const metadata = response?.metadata;
+        if (response?.id && metadata?.confidenceNarration && metadata.runId === this.currentRunId) {
+          this.confidenceResponseId = response.id;
+          this.confidenceGenerationDone = false;
+          this.confidencePlaybackEnded = false;
+        }
         if (response?.id && this.launchRunId !== null &&
             (metadata?.missionLaunch === true || metadata?.missionLaunch === "true") &&
             metadata.runId === this.launchRunId) {
@@ -948,7 +1008,9 @@ export class VoiceSession {
           ? String(msg.transcript ?? speech.parts.get(part) ?? "")
           : (speech.parts.get(part) ?? "") + String(msg.delta ?? "");
         speech.parts.set(part, text);
-        if (id === this.responseId) this.handlers.onTranscript("agent", [...speech.parts.values()].join(""), false);
+        if (id === this.responseId && !this.isRouteIntroHeld(id)) {
+          this.handlers.onTranscript("agent", [...speech.parts.values()].join(""), false);
+        }
         this.publishSpeechCaption(id);
         return;
       }
@@ -975,7 +1037,7 @@ export class VoiceSession {
         }
         if (this.responseId && response?.id !== this.responseId) return;
         const text = speech ? [...speech.parts.values()].join("") : "";
-        if (text.trim()) {
+        if (text.trim() && response?.id && !this.isRouteIntroHeld(response.id)) {
           this.handlers.onTranscript("agent", text, true);
         }
         if (this.toolCallPending) {

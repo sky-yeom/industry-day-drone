@@ -157,7 +157,7 @@ class SurveyTests(unittest.TestCase):
         from relay import tools
 
         self.assertEqual(tools.GREETING,
-                         "안녕! 난 Gibby야! 너는 119 종합상황실 소속 상황요원이고, 방금 익명 문자로 사진이랑 같이 위급 신고가 "
+                         "안녕! 난 Gibby야! 너는 일일구 종합상황실 소속 상황요원이고, 방금 익명 문자로 사진이랑 같이 위급 신고가 "
                          "들어왔어. 바다, 잔해 아래, 불이 난 집, 이렇게 세 곳에서 신고가 들어왔는데 드론은 한 대뿐이라 한 곳씩만 "
                          "확인할 수 있어. 그중 두 곳은 오인 신고고 한 곳에만 실제로 사람이 있어. 네가 오더만 내려주면 내가 드론 "
                          "보낼게! 먼저 찾는 사람이 어떤 모습인지 말해줄 수 있어?")
@@ -230,7 +230,7 @@ class SurveyTests(unittest.TestCase):
                     text = session.debrief()
                     real_label = session.labels["monitor-3"]
                     if rescued:
-                        self.assertIn(f"실제 사람이 있던 {real_label}에서 시간 안에 위치를 119에 신고해서 구조로 이어졌어.", text)
+                        self.assertIn(f"실제 사람이 있던 {real_label}에서 시간 안에 위치를 일일구에 신고해서 구조로 이어졌어.", text)
                         self.assertIn("확신도", text)
                     else:
                         self.assertIn(f"실제 사람이 있던 {real_label}을(를) 시간 안에 확인하지 못해서 신고 시한을 놓쳤어.", text)
@@ -241,6 +241,41 @@ class SurveyTests(unittest.TestCase):
                     self.assertIn("가상 훈련이야.", text)
                     self.assertIn("우리가 고른 확인 순서는", text)
                     self.assertNotRegex(text, r"했습니다|입니다|되었습니다")
+
+    def test_finish_route_scores_open_sites_at_once_and_names_unjudged_photos(self):
+        clock = Clock()
+        session = SurveySession(mode="azure", clock=clock)
+        ready(session)
+        session.launch_mission()
+        detect(session, "monitor-1", NEGATIVE)
+        session.set_operation("capturing", "monitor-3", session.run_id)
+        session.add_capture(capture("monitor-3", "frame-3"), session.run_id)
+        session.analyzing("frame-3", session.run_id)
+        self.assertTrue(session.unjudged_capture(session.run_id, "frame-3", "Azure timeout"))
+        self.assertIsNone(session.data["score"])
+        self.assertFalse(session.finish_route("stale-run"))
+        self.assertTrue(session.finish_route(session.run_id))
+        self.assertEqual(session.phase, "complete")
+        self.assertEqual({p["outcome"] for p in session.data["people"]}, {"report_missed"})
+        self.assertTrue(all(p["resolvedAtMs"] <= p["deadlineMs"] for p in session.data["people"]))
+        text = session.debrief()
+        real_label = session.labels["monitor-3"]
+        self.assertIn(f"실제 사람이 있던 {real_label}은(는) 사진 판정을 끝내지 못해서 일일구에 신고하지 못했어.", text)
+        self.assertNotIn(f"{real_label}: 사진은 찍었지만", text)
+        self.assertNotIn(f"{session.labels['monitor-1']}: 사진은 찍었지만", text)
+        self.assertNotIn("119", text)
+        self.assertFalse(session.finish_route(session.run_id))
+
+    def test_finish_route_keeps_reported_outcomes(self):
+        clock = Clock()
+        session = SurveySession(clock=clock)
+        ready(session)
+        session.launch_mission()
+        detect(session, "monitor-3", POSITIVE)
+        self.assertTrue(session.finish_route(session.run_id))
+        outcomes = {p["monitorId"]: p["outcome"] for p in session.data["people"]}
+        self.assertEqual(outcomes["monitor-3"], "reported")
+        self.assertEqual(session.phase, "complete")
 
     def test_aborted_debrief_stays_friendly_without_inventing_outcomes(self):
         session = SurveySession()

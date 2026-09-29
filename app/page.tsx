@@ -56,6 +56,10 @@ export default function Home() {
   const advancedToCapturesRef = useRef(false);
   const advancedToRouteRef = useRef(false);
   const advancedToResultsRef = useRef(false);
+  const promptConfirmedRef = useRef(false);
+  const confidenceNarrationDoneRef = useRef(false);
+  const mapIntroFallbackTimerRef = useRef<number | null>(null);
+  const routeIntroEarlyTriggeredRef = useRef(false);
   const forcePromptPendingRef = useRef(false);
   const forceRoutePendingRef = useRef(false);
   const streamingRef = useRef<{ user: string | null; agent: string | null }>({ user: null, agent: null });
@@ -125,6 +129,10 @@ export default function Home() {
     void sessionRef.current?.stop();
   }, []);
 
+  useEffect(() => {
+    if (step !== "map-intro") routeIntroEarlyTriggeredRef.current = false;
+  }, [step]);
+
   const reset = useCallback(() => {
     ++generationRef.current;
     const previous = sessionRef.current;
@@ -135,6 +143,13 @@ export default function Home() {
     advancedToCapturesRef.current = false;
     advancedToRouteRef.current = false;
     advancedToResultsRef.current = false;
+    promptConfirmedRef.current = false;
+    confidenceNarrationDoneRef.current = false;
+    routeIntroEarlyTriggeredRef.current = false;
+    if (mapIntroFallbackTimerRef.current !== null) {
+      window.clearTimeout(mapIntroFallbackTimerRef.current);
+      mapIntroFallbackTimerRef.current = null;
+    }
     forcePromptPendingRef.current = false;
     forceRoutePendingRef.current = false;
     setStep("opening");
@@ -163,6 +178,16 @@ export default function Home() {
     if (sessionRef.current) return;
     const generation = ++generationRef.current;
     const current = () => generationRef.current === generation;
+    const tryAdvanceToMapIntro = () => {
+      if (!current() || advancedToRouteRef.current) return;
+      if (!promptConfirmedRef.current || !confidenceNarrationDoneRef.current) return;
+      advancedToRouteRef.current = true;
+      if (mapIntroFallbackTimerRef.current !== null) {
+        window.clearTimeout(mapIntroFallbackTimerRef.current);
+        mapIntroFallbackTimerRef.current = null;
+      }
+      setStep("map-intro");
+    };
     setStatus("connecting");
     setSpeechText("");
     void fetchRelayConfig().then((value) => { if (current()) setConfig(value); });
@@ -181,6 +206,11 @@ export default function Home() {
       onLevel: () => {},
       onDebrief: (text) => { if (current()) setDebrief(text); },
       onResultsReveal: () => { if (current()) setResultsVisible(true); },
+      onConfidenceNarrationDone: () => {
+        if (!current() || confidenceNarrationDoneRef.current) return;
+        confidenceNarrationDoneRef.current = true;
+        tryAdvanceToMapIntro();
+      },
       onSpeechText: (text) => { if (current()) setSpeechText(text); },
       onRouteState: (next) => {
         if (!current()) return;
@@ -188,16 +218,16 @@ export default function Home() {
         if (previous.runId && (previous.runId !== next.runId || next.revision < previous.revision)) return;
         latestStateRef.current = next;
         const terminal = next.missionPhase === "complete" || next.missionPhase === "aborted";
-        if (!advancedToRouteRef.current && !terminal && next.promptPhase === "confirmed") {
-          advancedToRouteRef.current = true;
-          // Give the confidence/reasoning banner (just set on this same
-          // state update) a beat to actually render and be read/heard on
-          // the prompt screen before we swap it out for the map transition.
-          // Without this delay the two updates land in the same React
-          // commit and the banner is never visible at all.
-          window.setTimeout(() => {
-            if (current()) setStep("map-intro");
-          }, 4000);
+        if (!advancedToRouteRef.current && !terminal && next.promptPhase === "confirmed" && !promptConfirmedRef.current) {
+          promptConfirmedRef.current = true;
+          if (mapIntroFallbackTimerRef.current === null) {
+            mapIntroFallbackTimerRef.current = window.setTimeout(() => {
+              mapIntroFallbackTimerRef.current = null;
+              confidenceNarrationDoneRef.current = true;
+              tryAdvanceToMapIntro();
+            }, 12000);
+          }
+          tryAdvanceToMapIntro();
         }
         if (!advancedToResultsRef.current &&
             terminal) {
@@ -265,6 +295,7 @@ export default function Home() {
     forcePromptPendingRef.current = true;
     window.setTimeout(() => { forcePromptPendingRef.current = false; }, 500);
     session.interruptCurrentSpeech();
+    setSpeechText("");
     const kind = SCENARIOS[scenarioId].kind;
     const appearance = kind === "security" ? SECURITY_TARGET_APPEARANCE
       : kind === "construction" ? CONSTRUCTION_TARGET_APPEARANCE
@@ -290,6 +321,7 @@ export default function Home() {
     if (!session || forceRoutePendingRef.current) return;
     forceRoutePendingRef.current = true;
     session.interruptCurrentSpeech();
+    setSpeechText("");
     // Prefer the relay-computed "careful clue-analysis" recommended order
     // (state.vulnerableAdjustedOrder - the same order Gibby would recommend
     // out loud) over raw scenario declaration order, so forcing the route
@@ -336,6 +368,11 @@ export default function Home() {
       }
       state={state}
       briefing={scenario.briefing}
+      onWalkingStart={() => {
+        if (routeIntroEarlyTriggeredRef.current) return;
+        routeIntroEarlyTriggeredRef.current = true;
+        sessionRef.current?.sendRouteIntroReady();
+      }}
       onDone={() => {
         if (!returnSceneRef.current && latestStateRef.current.runId === state.runId) setStep("route");
       }}

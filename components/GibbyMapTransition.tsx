@@ -35,23 +35,33 @@ export default function GibbyMapTransition({
   sites,
   state,
   briefing,
+  onWalkingStart,
   onDone,
 }: {
   sites: (TriageSite | SecurityZone | ConstructionZone)[];
   state: MissionState;
   briefing: BriefingBullet[];
+  onWalkingStart?: () => void;
   onDone: () => void;
 }) {
   preload(MAP_IMAGE_BY_KIND[state.kind], { as: "image" });
   const [frame, setFrame] = useState(0);
   const done = useRef(onDone);
   useEffect(() => { done.current = onDone; }, [onDone]);
+  const walkingStart = useRef(onWalkingStart);
+  useEffect(() => { walkingStart.current = onWalkingStart; }, [onWalkingStart]);
   // Old photo/briefing content starts fading out as soon as Gibby actually
   // pulls the scroll out of his pocket (frame 2), instead of waiting for
   // the whole animation to finish — so the "content leaves" beat is synced
   // with the "map comes out" beat rather than happening all at once at the
   // very end.
   const fadingOut = frame >= 2;
+  const walking = frame >= 1;
+
+  useEffect(() => {
+    if (!walking) return;
+    walkingStart.current?.();
+  }, [walking]);
 
   useEffect(() => {
     if (frame >= LAST_FRAME) return;

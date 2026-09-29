@@ -464,6 +464,10 @@ class LiveMissionRunner(MissionRunner):
                     await self._notify()
                     if evidence["targetPresent"]:
                         break
+            # Every stop is visited, so nobody still open can be reported any more.
+            # Settle them now so the debrief is ready before the aircraft lands.
+            if self.session.finish_route(run_id):
+                await self._notify()
             log.info("vlm_summary kind=%s phase=%s captures=%d outcomes=%s",
                      self.session.kind, self.session.phase, len(self.session.data["captures"]),
                      {p["monitorId"]: p["outcome"] for p in self.session.data["people"]})

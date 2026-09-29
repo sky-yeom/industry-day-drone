@@ -8,7 +8,9 @@
  * voice confirmation would (see the `onForceNext` callers in
  * PixelPromptScreen/FlightPathMap for the tool sequence), so it can't
  * desync mission state — it only substitutes *how* the confirmation
- * arrives, not what gets confirmed.
+ * arrives, not what gets confirmed. Pressing it also stops whatever
+ * Gibby is currently saying (see `interruptCurrentSpeech` in
+ * voiceClient.ts) so old narration never bleeds into the next screen.
  */
 export default function ForceNextButton({
   onClick,

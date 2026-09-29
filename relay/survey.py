@@ -517,6 +517,43 @@ class SurveySession:
         self.expire()
         return True
 
+    def finish_route(self, run_id):
+        """Close scoring once every stop of the route has been visited.
+
+        With no stop left, nobody still open can be reported any more, so each
+        resolves now exactly as its report deadline would later resolve it.
+        Waiting for that deadline only held the debrief (and its voice) past the
+        landing, until the results screen gave up on it.
+        """
+        if run_id != self.run_id or self.phase not in ACTIVE:
+            return False
+        self.expire()
+        if self.phase not in ACTIVE:
+            return True
+        now = self.elapsed_ms()
+        missed_outcome = ("escaped" if self.kind == "security"
+                          else "unchecked" if self.kind == "construction" else "report_missed")
+        for person in self.data["people"]:
+            if person["outcome"] is None:
+                person.update(outcome=missed_outcome, resolvedAtMs=min(now, person["deadlineMs"]))
+        self.touch()
+        self._finish_if_resolved()
+        return True
+
+    def _unjudged_monitors(self):
+        """Monitors whose photos were taken but none of them ever got a verdict."""
+        unjudged = []
+        for person in self.data["people"]:
+            captures = [c for c in self.data["captures"] if c["monitorId"] == person["monitorId"]]
+            if (captures and all(c["evidence"] is None for c in captures)
+                    and any(c.get("analysisNote") for c in captures)):
+                unjudged.append(person["monitorId"])
+        return unjudged
+
+    def _unjudged_notes(self, skip=None):
+        return [f"{self.labels[monitor]}: 사진은 찍었지만 이미지 분석이 결론을 내지 못해서 판정하지 못했어."
+                for monitor in self._unjudged_monitors() if monitor != skip]
+
     def expire(self):
         if self.phase not in ACTIVE:
             return False
@@ -630,12 +667,16 @@ class SurveySession:
             capture = next((c for c in self.data["captures"] if c["id"] == person["captureId"]), None)
             if person["outcome"] == "reported" and capture and capture["evidence"]:
                 confidence_notes.append(
-                    f"{self.labels[person['monitorId']]}: 확신도 {capture['evidence']['confidence']}%로 위치를 119에 신고했어.")
+                    f"{self.labels[person['monitorId']]}: 확신도 {capture['evidence']['confidence']}%로 위치를 일일구에 신고했어.")
             if person.get("falseAlarm"):
                 reveals.append(f"{self.labels[person['monitorId']]}: {person.get('falseAlarmReveal', '오인 신고였어.')}")
+        unjudged = self._unjudged_monitors()
         summary = ["작전이 끝났어."]
         if real_site and real_site["outcome"] == "reported":
-            summary.append(f"실제 사람이 있던 {self.labels[real_site['monitorId']]}에서 시간 안에 위치를 119에 신고해서 구조로 이어졌어.")
+            summary.append(f"실제 사람이 있던 {self.labels[real_site['monitorId']]}에서 시간 안에 위치를 일일구에 신고해서 구조로 이어졌어.")
+        elif real_site and real_site["outcome"] == "report_missed" and real_site["monitorId"] in unjudged:
+            summary.append(f"실제 사람이 있던 {self.labels[real_site['monitorId']]}은(는) 사진 판정을 끝내지 못해서 "
+                           "일일구에 신고하지 못했어.")
         elif real_site and real_site["outcome"] == "report_missed":
             summary.append(f"실제 사람이 있던 {self.labels[real_site['monitorId']]}을(를) 시간 안에 확인하지 못해서 신고 시한을 놓쳤어.")
         else:
@@ -644,6 +685,7 @@ class SurveySession:
             " ".join(summary),
             f"우리가 고른 확인 순서는 {names(self.state.confirmedRoute, self.labels)}였어.",
             *confidence_notes,
+            *self._unjudged_notes(skip=real_site["monitorId"] if real_site else None),
             *reveals,
             "어떤 순서로 장소를 확인할지, 이동하고 사진을 확인하는 데 얼마나 걸렸는지가 결과에 반영됐어. "
             f"이건 {mode}으로 진행한 가상 훈련이야.",
@@ -677,6 +719,7 @@ class SurveySession:
             " ".join(summary),
             f"우리가 고른 확인 순서는 {names(self.state.confirmedRoute, self.labels)}였어.",
             *confidence_notes,
+            *self._unjudged_notes(),
             *reveals,
             "어떤 순서로 구역을 확인할지, 이동하고 사진을 확인하는 데 얼마나 걸렸는지가 결과에 반영됐어. "
             f"이건 {mode}으로 진행한 가상 훈련이야.",
@@ -718,6 +761,7 @@ class SurveySession:
             f"우리가 고른 확인 순서는 {names(self.state.confirmedRoute, self.labels)}였어.",
             *confidence_notes,
             *observations,
+            *self._unjudged_notes(),
             "어떤 순서로 구역을 확인할지, 이동하고 사진을 확인하는 데 얼마나 걸렸는지가 결과에 반영됐어. "
             f"이건 {mode}으로 진행한 가상 훈련이야.",
         ])

@@ -234,8 +234,27 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([capture["status"] for capture in captures], ["captured"] * 3)
         self.assertTrue(all(capture["evidence"] is None for capture in captures))
         self.assertTrue(all(REVISION_REQUEST in capture["analysisNote"] for capture in captures))
-        # No verdict means no outcome: nobody is claimed found and nobody written off.
-        self.assertTrue(all(person["outcome"] is None for person in self.session.data["people"]))
+        # No verdict never claims anyone found. Once the last stop is behind the
+        # aircraft nobody can be reported any more, so scoring closes right away
+        # (no clock advance) and the debrief is ready before the aircraft lands.
+        await settle(lambda: self.session.phase == "complete")
+        self.assertEqual({p["outcome"] for p in self.session.data["people"]}, {"report_missed"})
+        self.assertEqual(self.backend.mission["state"], "running")
+        await settle(lambda: any(e.get("type") == "mission.debrief" for e in self.events))
+        debrief = next(e for e in self.events if e.get("type") == "mission.debrief")
+        self.assertEqual(debrief["text"], self.session.debrief())
+        self.assertIn("사진 판정을 끝내지 못해서 일일구에 신고하지 못했어.", debrief["text"])
+        self.assertIn("사진은 찍었지만 이미지 분석이 결론을 내지 못해서 판정하지 못했어.", debrief["text"])
+
+    async def test_last_stop_negative_finishes_scoring_without_waiting_for_deadlines(self):
+        self.backend.arrived = True
+        self.vision.results = [NEGATIVE for _ in range(6)]
+        self.assertTrue((await self.runner.launch())["ok"])
+        await settle(lambda: self.session.phase == "complete")
+        self.assertLess(self.session.elapsed_ms(), min(p["deadlineMs"] for p in self.session.data["people"]))
+        self.assertEqual({p["outcome"] for p in self.session.data["people"]}, {"report_missed"})
+        await settle(lambda: any(e.get("type") == "mission.debrief" for e in self.events))
+        self.assertEqual(self.commands("drone_stop_mission"), [])
 
     async def test_whole_route_once_waits_for_actual_arrival_and_matching_frames(self):
         self.vision.results = [

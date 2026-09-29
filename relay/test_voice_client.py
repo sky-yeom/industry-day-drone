@@ -57,7 +57,7 @@ send({type:"drain",id:"single-block"});
 assert.equal(playback.port.messages.filter(m=>m.id==="single-block").length,0,
              "queued PCM must not report playback");
 playback.process([], [[new Float32Array(128)]]);
-assert.deepEqual(playback.port.messages.filter(m=>m.id==="single-block").map(m=>m.type), ["started","drained"]);
+assert.deepEqual(playback.port.messages.filter(m=>m.id==="single-block").map(m=>m.type), ["started","ended","drained"]);
 
 const held = new processors["playback-processor"]();
 const hold = data=>held.port.onmessage({data});
@@ -110,7 +110,7 @@ const afterMap=new Float32Array(960);
 prefetched.process([],[[afterMap]]);
 assert.deepEqual([...afterMap],Array.from(briefing,sample=>sample/32768),
   "the first eligible render emits the full retained PCM without another delay");
-assert.deepEqual(prefetched.port.messages.filter(m=>m.id==="briefing").map(m=>m.type),["started","drained"]);
+assert.deepEqual(prefetched.port.messages.filter(m=>m.id==="briefing").map(m=>m.type),["started","ended","drained"]);
 prefetch({type:"hold",id:"obsolete"});
 prefetch({type:"push",id:"obsolete",pcm:new Int16Array([9000])});
 prefetch({type:"discard",ids:["obsolete"]});
@@ -193,6 +193,10 @@ vm.runInNewContext(code, {
   btoa, atob, crypto, Int16Array, Uint8Array,
   setTimeout:(fn)=>{const id=++timerId;timers.set(id,()=>{timers.delete(id);fn();});return id;},
   clearTimeout:id=>timers.delete(id),
+  window:{
+    setTimeout:(fn)=>{const id=++timerId;timers.set(id,()=>{timers.delete(id);fn();});return id;},
+    clearTimeout:id=>timers.delete(id),
+  },
 });
 async function exercise({early=false,fail=false}={}) {
   nodes.length=sockets.length=contexts.length=connections.length=states.length=0;
@@ -445,6 +449,8 @@ async function exerciseCompleteReplies() {
   assert.deepEqual(socket.sent.filter(m=>m.type==="voice.reply_drained"),[
     {type:"voice.reply_drained",responseId:"welcome",runId:"run"},
   ]);
+  assert.equal(muted(),true,"mic reopen waits for the configured tail delay");
+  [...timers.values()][0]();
   assert.equal(muted(),false);
   await Promise.resolve();
   assert.equal(statuses.at(-1),"listening","cue follows the capture worklet acknowledgement");
@@ -503,6 +509,7 @@ async function exerciseCompleteReplies() {
   assert.equal(timers.size,1);
   contexts[0].currentTime=10.11;
   [...timers.values()][0]();
+  [...timers.values()][0]();
   await Promise.resolve();
   assert.equal(muted(),false);
   assert.equal(statuses.at(-1),"listening");
@@ -523,7 +530,9 @@ async function exerciseCompleteReplies() {
   playback.port.onmessage({data:{type:"drained",id:"confirmation"}});
   assert.equal(muted(),true,"drain-before-ready waits for the relay's continuation barrier");
   ready("third",["confirmation"]);
-  assert.equal(muted(),false,"ready-after-drain opens without another timeout");
+  assert.equal(muted(),true,"ready-after-drain still waits for the configured tail delay");
+  [...timers.values()][0]();
+  assert.equal(muted(),false);
   assert.equal(session.sendText("next turn"),true);
   socket.emit({type:"response.created",response:{id:"reset-during-speech"}});
   socket.emit({type:"response.audio.delta",response_id:"reset-during-speech",delta:btoa("\0\0")});
@@ -534,6 +543,34 @@ async function exerciseCompleteReplies() {
   assert.equal(timers.size,0);
   oldTimeout();
   assert.equal(session.inputWindowId,null,"stale output callback cannot reopen a stopped session");
+}
+
+async function exerciseInterruptSettlesRouteIntroReady() {
+  nodes.length=sockets.length=contexts.length=0;
+  timers.clear();
+  const noop=()=>{};
+  const session=new exportsObject.VoiceSession({
+    onStatus:noop,onLevel:noop,onBusy:noop,onTranscript:noop,onTool:noop,
+    onTtfa:noop,onDebrief:noop,onError:noop,onRouteState:noop,
+  });
+  await session.start();
+  const socket=sockets[0], capture=nodes.find(n=>n.name==="capture-processor");
+  const playback=nodes.find(n=>n.name==="playback-processor");
+  socket.emit({type:"route_intro.pending",runId:"run",introId:"intro"});
+  socket.emit({type:"route_intro.response",runId:"run",introId:"intro",responseId:"intro-reply"});
+  socket.emit({type:"response.created",response:{id:"intro-reply"}});
+  socket.emit({type:"response.audio.delta",response_id:"intro-reply",delta:btoa("\0\0")});
+  assert.equal(playback.port.messages.find(m=>m.type==="hold").id,"intro-reply");
+  session.interruptCurrentSpeech();
+  assert.ok(playback.port.messages.some(m=>m.type==="discard" && m.ids.includes("intro-reply")));
+  assert.equal(session.routeIntro,null,"interrupt retires held route intro state");
+  socket.emit({type:"voice.input.ready",runId:"run",windowId:"after-interrupt",responseIds:["intro-reply"]});
+  assert.ok(socket.sent.some(m=>m.type==="voice.input.open" && m.windowId==="after-interrupt"),
+    "settled discarded route-intro ids let readiness open input");
+  assert.equal(session.microphoneMuted,true);
+  [...timers.values()][0]();
+  assert.equal(capture.port.messages.at(-1).value,false);
+  await session.stop();
 }
 async function exercisePrefetchEdges() {
   for(const scenario of ["ready-first","failure","overflow","text-only"]) {
@@ -578,7 +615,9 @@ async function exercisePrefetchEdges() {
       socket.emit({type:"voice.input.ready",runId:"run",windowId:"text-window",responseIds:["intro-reply"]});
       assert.equal(session.microphoneMuted,true);
       session.sendRouteIntroReady();
-      assert.equal(session.microphoneMuted,false,"no-audio recovery still honors the visual gate");
+      assert.equal(session.microphoneMuted,true,"no-audio recovery still honors the visual gate and tail delay");
+      [...timers.values()][0]();
+      assert.equal(session.microphoneMuted,false);
     }
     await session.stop();
     assert.equal(timers.size,0);
@@ -601,6 +640,7 @@ async function exerciseProtocolMismatch() {
 }
 (async()=>{
   await exerciseCompleteReplies();
+  await exerciseInterruptSettlesRouteIntroReady();
   await exercisePrefetchEdges();
   await exercise();
   await exercise({early:true});

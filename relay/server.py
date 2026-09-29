@@ -774,7 +774,10 @@ class Bridge:
                     "instructions": tools.voice_context(self.session)["instructions"]
                     + "\n이번 응답에서는 아래 세 현장의 신고 내용을 모두 설명한 뒤 첫 목적지만 물어보세요. "
                     "참가자의 외형 설명을 다시 읽거나 특징 힌트, 우선순위, 추천 경로를 덧붙이지 마세요. "
-                    "목적지를 대신 고르거나 도구를 호출하지 말고 답변을 기다리세요.\n"
+                    "목적지를 대신 고르거나 도구를 호출하지 말고 답변을 기다리세요. "
+                    "이 응답은 질문으로 끝나야 하며, '출발한다', '출발할게', '가서 살펴볼게', '신고할게' 같은 "
+                    "출발·비행 안내는 절대 포함하지 마세요. 참가자가 아직 답하지 않았으므로 출발을 먼저 말하면 "
+                    "안 됩니다.\n"
                     + self._route_intro_facts,
                 }
             if self._debrief_pending:
@@ -1105,6 +1108,9 @@ class Bridge:
                         and response.get("id") == self._confidence_narration_response_id):
                     self._confidence_narration_response_id = None
                     self._response_requested = True
+                    await self.send_browser({
+                        "type": "confidence_narration.done", "runId": self.session.run_id,
+                        "responseId": response.get("id")})
                 if (self._route_intro_id and self._route_intro_response_id
                         and response.get("id") == self._route_intro_response_id):
                     if response.get("status") != "completed":

@@ -207,6 +207,13 @@ DRIFT_PULL_MAX_DEG = .25
 DRIFT_PULL_NUDGE_DEG = .1
 DRIFT_PULL_NUDGE_S = .3
 DRIFT_PULL_REST_S = 1.5
+# Field request 2026-09-29 19:44: the forward correction happens at photo time.
+# 20260929T193929 saw ID1/ID2 at 158-165 px against ID6's 286 px while the
+# 0.1 deg nudges fired only five times, and the aircraft nearly hit the wall
+# behind it. After each photo, one fixed pulse when the photographed tag looks
+# farther than ID6 did at home.
+CAPTURE_PULL_DEG = .25
+CAPTURE_PULL_S = .8
 DRIFT_PULL_STALE_S = .5
 DRIFT_PULL_CENTER_BAND = (.25, .75)
 DRIFT_PULL_REF_PX = (60., 600.)
@@ -355,6 +362,33 @@ def drift_pull_forward_deg(client, tags, ids, frame_shape, now=None):
         return 0.
     client.drift_nudge_start = now
     return min(bound, DRIFT_PULL_NUDGE_DEG)
+
+
+def capture_forward_pulse(client, limiter, tag, profile):
+    """After a photo, push forward once if the photographed tag looks farther than ID6 at home.
+
+    Fixed tilt and duration, never backward. Nothing without a home reference,
+    an enabled forward bound or a measurable tag.
+    """
+    reference = getattr(client, "drift_ref_px", None)
+    bound = getattr(client, "hold_forward_bound", 0.)
+    size = tag_edge_height_px(tag)
+    far = bool(bound and reference and size and reference / size - 1. >= DRIFT_PULL_DEADBAND)
+    forward = min(bound, CAPTURE_PULL_DEG) if far else 0.
+    client.log_event("standalone_capture_forward_pulse", {
+        "tag_id": getattr(tag, "tag_id", None), "edge_height_px": size, "reference_px": reference,
+        "sent": far, "forward_tilt_deg": forward, "duration_s": CAPTURE_PULL_S if far else 0.})
+    if not far:
+        return
+    client.motion_valid_until_s = None
+    end = time.monotonic() + CAPTURE_PULL_S
+    try:
+        while time.monotonic() < end:
+            limiter.wait()
+            _require_flight(client)
+            client.attitude(forward, 0., client.hold_up(height_hold_up_mps(client, profile)), 0.)
+    finally:
+        client.zero()
 
 
 def load_profile(path):
@@ -1753,10 +1787,9 @@ def capture_id1_pair(client, limiter, stream, detector, logger, config, profile,
                                        shape, speed, velocity_age)
         diagnostic = dict(gate.diagnostic)
         up = client.hold_up(height_hold_up_mps(client, profile))
-        forward = drift_pull_forward_deg(client, tags, expected, shape)
-        if diagnostic.get("state") == "CAPTURE_READY":
-            # The photo frame must not wait behind an extra attitude ACK.
-            forward = 0.
+        # Forward correction happens once, right after the photo
+        # (capture_forward_pulse), not while framing.
+        forward = 0.
         client.log_event("id1_pair_framing_sample", {**diagnostic, "tag_id": expected,
             "visible_ids": [tag.tag_id for tag in tags], "right_tilt_deg": right,
             "frame_key": _snapshot_key(stream), "frame_age_s": age,
@@ -1870,6 +1903,7 @@ def capture_id1_pair(client, limiter, stream, detector, logger, config, profile,
             print(f"ID{expected} pair photo saved: {photo}", flush=True)
             captured_key, captured_count = snapshot.key, captured_count + 1
             if captured_count == capture_count:
+                capture_forward_pulse(client, limiter, confirmed, profile)
                 return
     raise TimeoutError(f"ID{expected} framing not confirmed within {profile['leg_timeout_s']:g}s "
                        f"after correction attempts; last state={gate.diagnostic.get('state')}")

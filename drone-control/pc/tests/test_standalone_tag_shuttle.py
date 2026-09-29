@@ -1069,6 +1069,41 @@ class DispatchBoundaryTests(StandaloneTestCase):
         self.assertEqual(pull(ret, [tag(2, 900, 156), tag(0, 1000, 60)], shuttle.WALL_IDS, frame, 61.),
                          nudge)
 
+    def test_capture_forward_pulse_pushes_forward_once_after_a_far_photo(self):
+        # 20260929T193929: ID1/ID2 photographed at 158-165 px against ID6 at 286 px.
+        def tag(height):
+            h = height / 2
+            return shuttle.PixelTag(1, (1200., 560.), ((1200+h, 560-h), (1200-h, 560-h),
+                                    (1200-h, 560+h), (1200+h, 560+h)), 60., 0)
+        def run(height, **changes):
+            clock = [100.]
+            client = FakeClient()
+            client.phase = "lateral"
+            client.hold_forward_bound = shuttle.DRIFT_PULL_MAX_DEG
+            client.drift_ref_px = 286.
+            for key, value in changes.items():
+                setattr(client, key, value)
+            limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .15))
+            with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                    patch.object(shuttle, "_require_flight", lambda client: None):
+                shuttle.capture_forward_pulse(client, limiter, tag(height), profile())
+            return client
+        far = run(160.)
+        pushes = [call[1] for call in far.calls if call[0] == "attitude"]
+        self.assertTrue(pushes)
+        self.assertTrue(all(axes == (shuttle.CAPTURE_PULL_DEG, 0., 0., 0.) for axes in pushes))
+        self.assertLessEqual(len(pushes), int(shuttle.CAPTURE_PULL_S / .15) + 1)
+        self.assertEqual(far.calls[-1], "zero")
+        self.assertEqual(far.events[-1][0], "standalone_capture_forward_pulse")
+        self.assertIs(far.events[-1][1]["sent"], True)
+        # At home distance, closer, without a reference or with the bound off: nothing.
+        for height, changes in ((280., {}), (320., {}), (160., {"drift_ref_px": None}),
+                                (160., {"hold_forward_bound": 0.})):
+            with self.subTest(height=height, changes=changes):
+                client = run(height, **changes)
+                self.assertFalse([c for c in client.calls if c[0] == "attitude"])
+                self.assertIs(client.events[-1][1]["sent"], False)
+
     def test_edge_height_uses_vertical_sides_in_any_corner_order(self):
         corners = ((923.8, 361.2), (702.6, 359.5), (701.5, 580.3), (922.3, 582.0))
         height = shuttle.tag_edge_height_px(SimpleNamespace(corners_px=corners))

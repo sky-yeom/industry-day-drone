@@ -432,7 +432,11 @@ class FieldTests(unittest.TestCase):
                         client.raw["bridge_build_id"] = "old"
                     elif fault == "battery":
                         client.last_telemetry.battery_percent = 29.
-                _, clients, stream, _ = self.harness(stack, adapter, cancel, mutate=mutate)
+                clock, clients, stream, _ = self.harness(stack, adapter, cancel, mutate=mutate)
+                # _await_ground_proof sleeps between polls for up to 30 s; the
+                # fake clock must advance with it or the refusal never arrives.
+                stack.enter_context(patch.object(shuttle.time, "sleep",
+                                                 lambda s: clock.__setitem__(0, clock[0] + s)))
                 result = adapter.run(self.mission(), cancel, lambda **event: None)
                 self.assertFalse(result["route_completed"])
                 self.assertNotIn("takeoff", clients[0].calls)

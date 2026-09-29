@@ -304,7 +304,8 @@ class ContractMockTransport:
         elif index == 15:
             mission["state"] = "returning"
         else:
-            mission["visited_ids"].append(6)
+            # The real field route ends over the last monitor and lands on its
+            # floor tag (4/5/7); it no longer flies back to ID6.
             mission["route_completed"] = all(len(v["capture_ids"]) == 2 for v in mission["visits"])
             self._relinquish(mission, "awaiting_rc_landing", at)
         self._touch(mission, at)

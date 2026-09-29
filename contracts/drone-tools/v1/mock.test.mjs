@@ -136,7 +136,7 @@ test('all six routes return home with two distinct attributed, decodable PNGs pe
   for (const ids of routes) {
     const admission = await api.execute(ids);
     const { mission } = await api.poll(admission.mission_id, m => m.state === 'completed');
-    assert.deepEqual(mission.visited_ids, [6, ...ids.map(id => Number(id.slice(-1))), 6]);
+    assert.deepEqual(mission.visited_ids, [6, ...ids.map(id => Number(id.slice(-1)))]);
     assert.equal(mission.route_completed, true); assert.equal(mission.ground_verified, true);
     assert.equal(mission.verification_pending, false);
     const captures = (await api.call('drone_get_captures', { mission_id: mission.mission_id })).body.captures;

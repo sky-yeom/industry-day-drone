@@ -45,7 +45,10 @@ CAPTURE_PROOF_REFRESHES = 3
 # (1.5 s), so the 0.5 s applied to height was the outlier. 0.8 s clears the
 # worst observed pairing by 1.6x, stays stricter than the flight-state budget,
 # and still rejects genuinely frozen telemetry (two missed bridge polls).
-MAX_HEIGHT_AGE_S = .8
+# 2026-09-29: raised to 1.2 s so a venue Wi-Fi stall between the status read and
+# this check (up to 1.16 s measured) is not read as frozen telemetry; still
+# stricter than FLIGHT_STATE_FRESH_S.
+MAX_HEIGHT_AGE_S = 1.2
 # The first proof keeps the strict shuttle.FRESH_S frame age: that is the frame
 # the gate chose. Encoding that same full frame to PNG (0.12-0.32 s measured on
 # the field PC) plus the status round trips then ages it, and on 2026-09-28
@@ -201,6 +204,10 @@ class FieldAdapter(LiveAdapter):
             client.status("tool_capture_stationary_proof")
             telemetry, elapsed, velocity, age, stationary = sample()
         if not stationary:
+            if not publication:
+                # Nothing has been published for this frame yet: a drift here
+                # asks the framing gate to re-settle, not for a new mission.
+                raise shuttle.FramingCorrectionDeferred("Fresh finite stationary velocity required for capture")
             raise InterruptedError("Fresh finite stationary velocity required for capture")
         if (not shuttle._number(telemetry.height_m, .5, 1.8)
                 or telemetry.height_age_s is None

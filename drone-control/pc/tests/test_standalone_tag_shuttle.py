@@ -696,7 +696,10 @@ class MissionLifecycleTests(StandaloneTestCase):
         client = FakeClient()
         client.raw.update(is_flying=True, armed=True, vs_enabled=True, vs_advanced_enabled=True, vs_authority="MSDK")
         client.raw["is_flying_age_ms"] = 0.
+        # A 1 s Wi-Fi stall (1.16 s measured at the venue) is still inside the budget.
         client.received = time.perf_counter() - 1.
+        shuttle._require_flight(client)
+        client.received = time.perf_counter() - shuttle.FLIGHT_STATE_FRESH_S - .1
         with self.assertRaises(InterruptedError):
             shuttle._require_flight(client)
 
@@ -1222,7 +1225,7 @@ class DispatchBoundaryTests(StandaloneTestCase):
     def test_edge_prebrake_brakes_once_against_travel_at_the_first_edge_sighting(self):
         def tag(x):
             return shuttle.PixelTag(1, (x, 540.), ((x+50, 490), (x-50, 490), (x-50, 590), (x+50, 590)), 60., 0)
-        def run(direction, x, speed):
+        def run(direction, x, speed, moving=True):
             clock = [100.]
             client = FakeClient()
             client.phase = "lateral"
@@ -1230,7 +1233,8 @@ class DispatchBoundaryTests(StandaloneTestCase):
             with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
                     patch.object(shuttle, "_require_flight", lambda client: None), \
                     patch.object(shuttle, "_horizontal_motion_evidence", lambda client: (speed, 0.)):
-                sent = shuttle.edge_prebrake(client, limiter, profile(), direction, tag(x), 1920)
+                sent = shuttle.edge_prebrake(client, limiter, profile(), direction, tag(x), 1920,
+                                             moving=moving)
             return sent, [c[1] for c in client.calls if c[0] == "attitude"], client
         sent, ticks, client = run("right", 1700., .4)
         self.assertTrue(sent)
@@ -1247,12 +1251,75 @@ class DispatchBoundaryTests(StandaloneTestCase):
                 sent, ticks, _ = run("right", 1700., speed)
                 self.assertTrue(sent)
                 self.assertTrue(ticks)
-        # Not at the travel-side edge: no brake.
+        # 20260929T211416: ID3 first appeared mid-frame-right and the drone kept
+        # drifting; any first sighting on a moving leg now brakes.
         for direction, x in (("right", 960.), ("right", 150.), ("left", 1700.)):
             with self.subTest(direction=direction, x=x):
                 sent, ticks, _ = run(direction, x, .4)
-                self.assertFalse(sent)
-                self.assertFalse(ticks)
+                self.assertTrue(sent)
+                self.assertTrue(ticks)
+        # A tag already in view at leg start (not moving yet): no brake.
+        sent, ticks, _ = run("right", 1700., .4, moving=False)
+        self.assertFalse(sent)
+        self.assertFalse(ticks)
+
+    def image_stop(self, xs):
+        """Run confirm_image_stop over decodes whose tag x (px of 1920) follows xs."""
+        clock = [100.]
+        client = FakeClient()
+        client.phase = "lateral"
+        frames = iter(xs)
+        stream = SimpleNamespace(last_detection_snapshot=None)
+        def detect_latest(_detector, _age):
+            # One new decode every 0.6 s, as measured in the field.
+            previous = stream.last_detection_snapshot
+            if previous is not None and clock[0] - previous.received_s < .6:
+                return self.last_tags, 0.
+            x = next(frames, None)
+            sequence = 1 if previous is None else previous.key[1] + 1
+            stream.last_detection_snapshot = SimpleNamespace(
+                key=(1, sequence), received_s=clock[0], frame=SimpleNamespace(shape=(1080, 1920, 3)))
+            self.last_tags = [] if x is None else [shuttle.PixelTag(3, (x, 540.), None, 60., 0)]
+            return self.last_tags, 0.
+        stream.detect_latest = detect_latest
+        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .1))
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                patch.object(shuttle, "_require_flight", lambda client: None):
+            still = shuttle.confirm_image_stop(client, limiter, profile(), stream, object(), 3)
+        checks = [data for name, data in client.events if name == "standalone_image_stop_check"]
+        ticks = [c[1] for c in client.calls if c[0] == "attitude"]
+        return still, checks, ticks
+
+    def test_image_stop_accepts_a_tag_that_holds_its_pixel(self):
+        still, checks, ticks = self.image_stop([1700., 1702.])
+        self.assertTrue(still)
+        self.assertEqual([c["result"] for c in checks], ["still"])
+        self.assertFalse(ticks)
+
+    def test_image_stop_brakes_against_the_measured_drift_until_still(self):
+        # 20260929T211416: ID3 slid 1718 -> 1685 px (tag moves left = aircraft
+        # still moving right), so the correction must tilt left.
+        still, checks, ticks = self.image_stop([1718., 1685., 1680., 1680.])
+        self.assertTrue(still)
+        self.assertEqual([c["result"] for c in checks], ["moving_brake", "still"])
+        self.assertLess(checks[0]["right_tilt_deg"], 0.)
+        self.assertTrue(ticks)
+        self.assertTrue(all(axes[1] == -shuttle.EDGE_PREBRAKE_DEG for axes in ticks))
+
+    def test_image_stop_is_bounded_and_never_fatal(self):
+        drifting = [1800. - 40.*i for i in range(12)]
+        still, checks, _ = self.image_stop(drifting)
+        self.assertFalse(still)
+        self.assertEqual(checks[-1]["result"], "max_rounds_continue_framing")
+        self.assertEqual(len([c for c in checks if c["result"] == "moving_brake"]),
+                         shuttle.IMAGE_STILL_MAX_ROUNDS)
+        still, checks, _ = self.image_stop([1700.])
+        self.assertFalse(still)
+        self.assertEqual(checks[-1]["result"], "tag_not_measured_twice")
+
+    def test_floor_landing_ids_map_each_monitor_to_the_tag_below_it(self):
+        self.assertEqual(shuttle.FLOOR_LANDING_IDS, {1: 4, 2: 5, 3: 7})
+        self.assertFalse(set(shuttle.FLOOR_LANDING_IDS.values()) & set(shuttle.WALL_IDS))
 
     def test_timed_tilt_refreshes_telemetry_before_the_flight_check(self):
         # 20260929T205025: the first pulse tick after the ID3 photo checked

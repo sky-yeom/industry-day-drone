@@ -333,7 +333,9 @@ class FieldTests(unittest.TestCase):
                     _, current = self.http(service, "drone_get_mission", {"mission_id": mid})
                     mission = current["mission"]
                     self.assertEqual(mission["state"], "awaiting_rc_landing", mission)
-                    self.assertEqual(mission["visited_ids"], [6, *order, 6])
+                    # The last monitor's floor tag (4/5/7) is the landing pad, so
+                    # the drone no longer flies the return leg to ID6.
+                    self.assertEqual(mission["visited_ids"], [6, *order])
                     self.assertEqual([v["destination_id"] for v in mission["visits"]], args["destination_ids"])
                     self.assertTrue(all(v["arrival_confirmed"] and len(v["capture_ids"]) == 2 for v in mission["visits"]))
                     _, response = self.http(service, "drone_get_captures", {"mission_id": mid})
@@ -354,7 +356,12 @@ class FieldTests(unittest.TestCase):
                         self.assertLessEqual(capture["capture_evidence"]["frame_age_s"], .5)
                     client = clients[0]
                     legs = [data for name, data in client.events if name == "standalone_leg"]
-                    expected_legs = list(zip([6, *order], [*order, 6]))
+                    expected_legs = list(zip([6, *order], order))
+                    landing = [data for name, data in client.events if name == "standalone_landing_search_nudge"]
+                    floor_id = shuttle.FLOOR_LANDING_IDS[order[-1]]
+                    # The fake harness cancels at a timing-dependent point, so
+                    # only a search that did start is checked for its target.
+                    self.assertTrue(all(item["reason"].startswith(f"ID{floor_id}_") for item in landing))
                     self.assertEqual([(leg["from"], leg["to"]) for leg in legs], expected_legs)
                     self.assertEqual([leg["direction"] for leg in legs],
                         [shuttle.external_direction([6, *order, 6], a, b) for a, b in expected_legs])

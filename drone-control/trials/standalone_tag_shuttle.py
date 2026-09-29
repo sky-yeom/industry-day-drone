@@ -224,7 +224,30 @@ CAPTURE_PULL_SETTLE_S = .6
 # moved 1234 -> 1104 px between two photos).
 EDGE_PREBRAKE_BAND = .25
 EDGE_PREBRAKE_DEG = RETURN_BRAKE_DEG
-EDGE_PREBRAKE_S = .4
+# 20260929T211416 ID3: 0.4 s (two ticks over the network) did not stop the
+# aircraft; the RC pilot took over 0.8 s after the first sighting. 0.9 s at the
+# pair-phase tilt ceiling removes about 0.09 m/s, the cruise the seek reaches,
+# and the image check below proves the stop instead of trusting a 0.1 m/s
+# quantized speed.
+EDGE_PREBRAKE_S = .9
+# A sighting in the first second of a leg is the previous tag's neighbour seen
+# from a standstill, not an approach: there is nothing to brake.
+SIGHTING_BRAKE_MIN_LEG_S = 1.
+# Image-based stillness after the sighting brake. The decoder yields a new
+# frame about every 0.6 s, so two distinct decodes need up to 1.5 s. The tag x
+# rate threshold, 1.5 % of the frame per second (~29 px/s, ~3-4 cm/s at the
+# 1.5 m wall distance), catches the 21:14 ID3 slide (1718 -> 1685 px in
+# ~0.7 s, ~47 px/s); a faster drift is braked against its measured direction.
+IMAGE_STILL_TIMEOUT_S = 1.5
+IMAGE_STILL_RATE_FRACTION_S = .015
+IMAGE_STILL_BRAKE_S = .4
+IMAGE_STILL_MAX_ROUNDS = 3
+# App routes end over the last monitor instead of flying home: each wall tag
+# has a floor landing tag beneath its capture position (field layout 2026-09-29).
+FLOOR_LANDING_IDS = {1: 4, 2: 5, 3: 7}
+# Return-leg arrival brake: speed is quantized to 0.1 m/s, so "<= 0.1" read as
+# still on the first tick. Brake at least this long unless the reading is 0.
+RETURN_ARRIVAL_BRAKE_MIN_S = .9
 DRIFT_PULL_STALE_S = .5
 DRIFT_PULL_CENTER_BAND = (.25, .75)
 DRIFT_PULL_REF_PX = (60., 600.)
@@ -457,27 +480,89 @@ def capture_forward_pulse(client, limiter, tag, profile, stream=None, detector=N
         "reference_px": reference, "reason": "reached" if reached else "max_rounds_continue_route"})
 
 
-def edge_prebrake(client, limiter, profile, direction, tag, frame_width, stream=None, detector=None):
-    """Brake once when the expected tag first appears at the travel-side edge.
+def edge_prebrake(client, limiter, profile, direction, tag, frame_width, stream=None, detector=None,
+                  *, moving=True):
+    """Brake once when the expected tag is first sighted, then prove the stop from the image.
 
     No speed gate: the leg is already moving toward the tag, and the 20:50
     flight reported exactly 0.1 m/s (quantized) so a `> 0.1` gate never braked.
+    No position gate either: a first sighting away from the travel-side edge
+    means decodes were missed while the aircraft slid on, which needs the stop
+    even more (field request 2026-09-29 21:14: stop when the tag is detected).
     """
     travel = 1. if direction == "right" else -1.
     x = tag.center_px[0] / frame_width if _number(frame_width, 1., 100000.) else None
     at_edge = x is not None and (x >= 1. - EDGE_PREBRAKE_BAND if travel > 0 else x <= EDGE_PREBRAKE_BAND)
     speed, _ = _horizontal_motion_evidence(client)
     right = -travel * EDGE_PREBRAKE_DEG
+    send = bool(moving and x is not None)
     client.log_event("standalone_edge_prebrake", {
         "tag_id": getattr(tag, "tag_id", None), "center_x_fraction": x, "at_edge": at_edge,
-        "horizontal_speed_mps": speed, "sent": bool(at_edge),
-        "right_tilt_deg": right if at_edge else 0., "duration_s": EDGE_PREBRAKE_S})
-    if not at_edge:
+        "moving": moving, "horizontal_speed_mps": speed, "sent": send,
+        "right_tilt_deg": right if send else 0., "duration_s": EDGE_PREBRAKE_S})
+    if not send:
         return False
     sent, stale = _timed_tilt(client, limiter, profile, stream, detector, 0., right, EDGE_PREBRAKE_S)
     client.log_event("standalone_edge_prebrake_done", {"tag_id": getattr(tag, "tag_id", None),
                                                        "sent_ticks": sent, "stale_ticks": stale})
+    confirm_image_stop(client, limiter, profile, stream, detector, getattr(tag, "tag_id", None))
     return True
+
+
+def _tag_x_sample(client, limiter, stream, detector, tag_id, deadline, after_key):
+    """Hold zero until a fresh decode newer than after_key shows tag_id; (x_fraction, t, key) or None."""
+    while time.monotonic() < deadline:
+        limiter.wait()
+        client.zero()
+        _require_flight(client)
+        tags, age = stream.detect_latest(detector, FRESH_S)
+        snapshot = stream.last_detection_snapshot
+        if snapshot is None or not _number(age, 0., FRESH_S) or snapshot.key == after_key:
+            continue
+        shape = getattr(snapshot.frame, "shape", ())
+        match = [t for t in tags if getattr(t, "tag_id", None) == tag_id and t.center_px]
+        if len(shape) < 2 or not match:
+            continue
+        return match[0].center_px[0] / float(shape[1]), snapshot.received_s, snapshot.key
+    return None
+
+
+def confirm_image_stop(client, limiter, profile, stream, detector, tag_id):
+    """Measure the tag's image drift between two decodes; brake against it until still.
+
+    Telemetry speed is quantized to 0.1 m/s and cannot tell 0.05 m/s from
+    zero, so stillness is read from the tag position itself. Bounded to
+    IMAGE_STILL_MAX_ROUNDS short brakes; returns True once still, False if
+    the tag was lost or the rounds ran out (the framing gate then continues).
+    """
+    if stream is None or detector is None or tag_id is None:
+        return False
+    for round_no in range(1, IMAGE_STILL_MAX_ROUNDS + 1):
+        deadline = time.monotonic() + IMAGE_STILL_TIMEOUT_S
+        first = _tag_x_sample(client, limiter, stream, detector, tag_id, deadline, None)
+        second = None if first is None else _tag_x_sample(
+            client, limiter, stream, detector, tag_id, deadline, first[2])
+        if second is None:
+            client.log_event("standalone_image_stop_check", {
+                "tag_id": tag_id, "round": round_no, "result": "tag_not_measured_twice"})
+            return False
+        dt = second[1] - first[1]
+        rate = (second[0] - first[0]) / dt if dt > 0. else 0.
+        still = abs(rate) <= IMAGE_STILL_RATE_FRACTION_S
+        # Moving right slides the scene left in the image, so the brake tilts
+        # toward the tag's own image motion.
+        brake = 0. if still else math.copysign(EDGE_PREBRAKE_DEG, rate)
+        client.log_event("standalone_image_stop_check", {
+            "tag_id": tag_id, "round": round_no, "x_fraction": [first[0], second[0]],
+            "dt_s": dt, "rate_fraction_s": rate, "threshold_fraction_s": IMAGE_STILL_RATE_FRACTION_S,
+            "result": "still" if still else "moving_brake", "right_tilt_deg": brake,
+            "duration_s": 0. if still else IMAGE_STILL_BRAKE_S})
+        if still:
+            return True
+        _timed_tilt(client, limiter, profile, stream, detector, 0., brake, IMAGE_STILL_BRAKE_S)
+    client.log_event("standalone_image_stop_check", {
+        "tag_id": tag_id, "round": IMAGE_STILL_MAX_ROUNDS, "result": "max_rounds_continue_framing"})
+    return False
 
 
 def load_profile(path):
@@ -614,6 +699,9 @@ class MixedDetector:
             raise ValueError("Calibrated camera and existing floor ID0 configuration required")
         self.floor_config = replace(config, tags=(floor,))
         self.base = detector_factory(self.floor_config)
+        # Floor landing tags are returned as pixels only while a landing asks
+        # for them, so no wall leg ever sees an id it does not expect.
+        self.landing_ids = frozenset()
 
     def detect(self, frame):
         base = self.base
@@ -625,7 +713,7 @@ class MixedDetector:
         walls = []
         for item in raw:
             tag_id = int(item.tag_id)
-            if tag_id not in WALL_IDS:
+            if tag_id not in WALL_IDS and tag_id not in self.landing_ids:
                 continue
             center = tuple(float(value) for value in item.center)
             corners = tuple(tuple(float(value) for value in corner) for corner in item.corners)
@@ -792,10 +880,12 @@ class ShuttleClient(MissionClient):
         try:
             return super().attitude(forward_tilt_deg, right_tilt_deg, up_mps, yaw_rate_rps)
         except InterruptedError as exc:
-            if str(exc) == "Fresh height, velocity and attitude required":
+            if str(exc) in ("Fresh height, velocity and attitude required", "No fresh camera frame"):
                 # The status read wrote no motion command; during a Wi-Fi/FC
                 # freshness hiccup every caller must hold/re-observe rather
-                # than turn an unsent refusal into a dead mission.
+                # than turn an unsent refusal into a dead mission. A venue
+                # Wi-Fi stall (up to 1.16 s measured 2026-09-29) stalls the
+                # video with it, so a stale camera frame is the same case.
                 raise FramingCorrectionDeferred(str(exc)) from None
             raise
 
@@ -987,7 +1077,9 @@ def _observe(client, stream, detector, logger, phase, expected, direction=None):
 def _require_flight(client):
     raw = client.raw
     elapsed = time.perf_counter() - client.received
-    if (raw.get("is_flying") is not True or not _number(elapsed, 0., FRESH_S)
+    # PC-side processing (decode, PNG encode) between two polls counts against
+    # the same flight-state budget the phone's own is_flying age already uses.
+    if (raw.get("is_flying") is not True or not _number(elapsed, 0., FLIGHT_STATE_FRESH_S)
             or not fresh(raw, "is_flying", max(0., (FLIGHT_STATE_FRESH_S - elapsed) * 1000))):
         raise InterruptedError("Fresh airborne state lost; no resume")
     if (raw.get("armed") is not True or raw.get("vs_enabled") is not True
@@ -1400,8 +1492,8 @@ def _frame_center_box(detector, fraction):
     return (width/2., height/2.), (width*fraction/2., height*fraction/2.)
 
 
-def _center_home_tag(client, limiter, stream, detector, logger, config):
-    """Slide along the wall until ID6 sits in the middle of the frame.
+def _center_home_tag(client, limiter, stream, detector, logger, config, tag_id=6):
+    """Slide along the wall until the wall tag (ID6 at home) sits in the middle of the frame.
 
     The route's last leg only requires the home tag to be in view, so the
     aircraft can finish a metre off its launch point and the downward camera
@@ -1430,9 +1522,9 @@ def _center_home_tag(client, limiter, stream, detector, logger, config):
         limiter.wait()
         client.status("standalone_home_centering")
         _require_flight(client)
-        tags, age = _observe(client, stream, detector, logger, PatrolPhase.RETURN, 6)
+        tags, age = _observe(client, stream, detector, logger, PatrolPhase.RETURN, tag_id)
         box = _frame_center_box(detector, HOME_CENTER_BOX_FRACTION)
-        home = next((tag for tag in tags if tag.tag_id == 6 and tag.center_px), None)
+        home = next((tag for tag in tags if tag.tag_id == tag_id and tag.center_px), None)
         key = _snapshot_key(stream)
         now = time.monotonic()
         if home is None or box is None or key is None or not _number(age, 0., FRESH_S):
@@ -1451,7 +1543,7 @@ def _center_home_tag(client, limiter, stream, detector, logger, config):
                 recoveries += 1
                 recovery_until = now + CENTER_RECOVERY_PULSE_S
                 client.log_event("standalone_home_recovery_pulse", {
-                    "tag_id": 6, "pulse_index": recoveries, "missing_s": now-missing_since,
+                    "tag_id": tag_id, "pulse_index": recoveries, "missing_s": now-missing_since,
                     "right_tilt_deg": -travelled_sign*CENTER_RECOVERY_DEG,
                     "reason": "ID6_left_the_frame_reverse_the_travel_that_lost_it"})
                 client.attitude(0., -travelled_sign*CENTER_RECOVERY_DEG, 0., 0.)
@@ -1482,21 +1574,25 @@ def _center_home_tag(client, limiter, stream, detector, logger, config):
     else:
         client.zero()
         client.log_event("standalone_home_centering_gave_up", {
-            "tag_id": 6, "error_px": last_error, "timeout_s": HOME_CENTER_TIMEOUT_S,
+            "tag_id": tag_id, "error_px": last_error, "timeout_s": HOME_CENTER_TIMEOUT_S,
             "recovery_pulses": recoveries})
-        print("ID6 centering timed out; landing search starts from here", flush=True)
+        print(f"ID{tag_id} centering timed out; landing search starts from here", flush=True)
         return False
     client.zero()
     client.log_event("standalone_home_centered", {
-        "tag_id": 6, "error_px": last_error, "box_fraction": HOME_CENTER_BOX_FRACTION,
+        "tag_id": tag_id, "error_px": last_error, "box_fraction": HOME_CENTER_BOX_FRACTION,
         "center_px": last_center, "confirm_frames": centered_frames,
         "recovery_pulses": recoveries})
-    print(f"ID6 centered: error={last_error:.0f}px", flush=True)
+    print(f"ID{tag_id} centered: error={last_error:.0f}px", flush=True)
     return True
 
 
-def _land_on_floor_home(client, limiter, stream, detector, logger, config, anchor_center):
-    """Centre ID6, drop the gimbal, find ID0 under the aircraft, then land.
+def _land_on_floor_home(client, limiter, stream, detector, logger, config, anchor_center,
+                        *, wall_id=6, target_id=0):
+    """Centre the wall tag, drop the gimbal, find the floor tag under the aircraft, then land.
+
+    Home is ID6 over floor ID0; an app route instead ends over its last
+    monitor and lands on that monitor's floor tag (FLOOR_LANDING_IDS).
 
     The wall tag only says the aircraft is home in one axis, so the downward
     camera re-acquires the floor tag it launched from before any descent is
@@ -1517,9 +1613,21 @@ def _land_on_floor_home(client, limiter, stream, detector, logger, config, ancho
     if patrol is None:
         client.log_event("standalone_landing_skipped", {"reason": "no_patrol_config"})
         return False
-    _center_home_tag(client, limiter, stream, detector, logger, config)
+    _center_home_tag(client, limiter, stream, detector, logger, config, wall_id)
+    landing_ids = getattr(detector, "landing_ids", None)
+    if target_id != 0 and landing_ids is not None:
+        detector.landing_ids = frozenset({target_id})
+    try:
+        return _align_and_land(client, limiter, stream, detector, logger, config, anchor_center,
+                               patrol, target_id)
+    finally:
+        if target_id != 0 and landing_ids is not None:
+            detector.landing_ids = landing_ids
+
+
+def _align_and_land(client, limiter, stream, detector, logger, config, anchor_center, patrol, target_id):
     client.gimbal_down()
-    _pause(client, limiter, stream, detector, logger, 1., PatrolPhase.FLOOR_HOME, 0)
+    _pause(client, limiter, stream, detector, logger, 1., PatrolPhase.FLOOR_HOME, target_id)
     # The route ramp is a fraction of full speed, so the alignment velocity
     # converts to the body tilt this site flies with rather than a raw m/s.
     scale = patrol.angle_deg / patrol.speed_mps
@@ -1542,9 +1650,9 @@ def _land_on_floor_home(client, limiter, stream, detector, logger, config, ancho
         limiter.wait()
         client.status("standalone_floor_home_alignment")
         _require_flight(client)
-        tags, age = _observe(client, stream, detector, logger, PatrolPhase.FLOOR_HOME, 0)
-        floor = min((tag for tag in tags if tag.tag_id == 0 and tag.center_px),
-                    key=lambda tag: abs(tag.pose_error), default=None)
+        tags, age = _observe(client, stream, detector, logger, PatrolPhase.FLOOR_HOME, target_id)
+        floor = min((tag for tag in tags if tag.tag_id == target_id and tag.center_px),
+                    key=lambda tag: 0. if tag.pose_error is None else abs(tag.pose_error), default=None)
         box = _frame_center_box(detector, LANDING_CENTER_BOX_FRACTION)
         key = _snapshot_key(stream)
         now = time.monotonic()
@@ -1556,7 +1664,7 @@ def _land_on_floor_home(client, limiter, stream, detector, logger, config, ancho
                 # restarting it and searching for a tag already underneath.
                 client.zero()
                 if aligned(now):
-                    return _commit_landing(client, limiter, config, floor_center=last_seen,
+                    return _commit_landing(client, limiter, config, tag_id=target_id, floor_center=last_seen,
                                            anchor_center=anchor_center, frames=centered_frames)
                 continue
             centered_since, centered_frames, last_key = None, 0, None
@@ -1572,7 +1680,7 @@ def _land_on_floor_home(client, limiter, stream, detector, logger, config, ancho
                     "nudge_index": nudges_used, "missing_s": now - missing_since,
                     "forward_tilt_deg": nudge_vector[0]*SEARCH_NUDGE_DEG,
                     "right_tilt_deg": nudge_vector[1]*SEARCH_NUDGE_DEG,
-                    "reason": "ID0_not_in_downward_view_walk_the_bounded_search_pattern"})
+                    "reason": f"ID{target_id}_not_in_downward_view_walk_the_bounded_search_pattern"})
                 client.attitude(nudge_vector[0]*SEARCH_NUDGE_DEG,
                                 nudge_vector[1]*SEARCH_NUDGE_DEG, 0., 0.)
             else:
@@ -1582,7 +1690,7 @@ def _land_on_floor_home(client, limiter, stream, detector, logger, config, ancho
         if key == last_key:
             client.zero()
             if aligned(now):
-                return _commit_landing(client, limiter, config, floor_center=last_seen,
+                return _commit_landing(client, limiter, config, tag_id=target_id, floor_center=last_seen,
                                        anchor_center=anchor_center, frames=centered_frames)
             continue
         if last_key is not None and key[0] != last_key[0]:
@@ -1596,7 +1704,7 @@ def _land_on_floor_home(client, limiter, stream, detector, logger, config, ancho
             centered_frames += 1
             client.zero()
             if aligned(now):
-                return _commit_landing(client, limiter, config, floor_center=floor,
+                return _commit_landing(client, limiter, config, tag_id=target_id, floor_center=floor,
                                        anchor_center=anchor_center, frames=centered_frames,
                                        error_px=[error_x, error_y],
                                        box_half_px=[half_width, half_height])
@@ -1605,20 +1713,20 @@ def _land_on_floor_home(client, limiter, stream, detector, logger, config, ancho
         forward, right = _floor_alignment_velocity(error_x, error_y, patrol)
         client.attitude(forward*scale, right*scale, 0., 0.)
     client.zero()
-    raise TimeoutError("ID0 landing alignment timed out "
+    raise TimeoutError(f"ID{target_id} landing alignment timed out "
                        + ("(never detected)" if last_seen is None
                           else f"(last at {last_seen.center_px})"))
 
 
-def _commit_landing(client, limiter, config, *, floor_center, anchor_center, frames,
+def _commit_landing(client, limiter, config, *, floor_center, anchor_center, frames, tag_id=0,
                     error_px=None, box_half_px=None):
     """Log the confirmed alignment, then hand the descent to the DJI landing."""
     client.log_event("standalone_landing_alignment_confirmed", {
-        "tag_id": 0, "error_px": error_px, "box_fraction": LANDING_CENTER_BOX_FRACTION,
+        "tag_id": tag_id, "error_px": error_px, "box_fraction": LANDING_CENTER_BOX_FRACTION,
         "box_half_px": box_half_px, "confirm_frames": frames,
         "takeoff_anchor_px": None if anchor_center is None else list(anchor_center),
         "center_px": None if floor_center is None else list(floor_center.center_px)})
-    print("ID0 inside the centre box"
+    print(f"ID{tag_id} inside the centre box"
           + ("" if error_px is None else f": error=({error_px[0]:.0f},{error_px[1]:.0f})px")
           + "; commanding DJI landing", flush=True)
     client.land(config.network.confirmation_token)
@@ -1800,9 +1908,15 @@ def _finish_arrival_brake(client, limiter, profile, direction, seen_since):
     """
     travel = 1. if direction == "right" else -1.
     braked = False
+    brake_started = time.monotonic()
     while time.monotonic() - seen_since <= RETURN_ARRIVAL_BRAKE_MAX_S:
         speed, velocity_age = _horizontal_motion_evidence(client)
-        if speed is None or not _number(velocity_age, 0., FLIGHT_STATE_FRESH_S) or speed <= RETURN_STILL_MPS:
+        if speed is None or not _number(velocity_age, 0., FLIGHT_STATE_FRESH_S):
+            break
+        # A 0.1 m/s reading is one quantization step, not stillness: only a zero
+        # reading ends the brake early, and it always ends after the minimum.
+        if speed < RETURN_STILL_MPS / 2. or (speed <= RETURN_STILL_MPS
+                and time.monotonic() - brake_started >= RETURN_ARRIVAL_BRAKE_MIN_S):
             break
         braked = True
         up = client.hold_up(height_hold_up_mps(client, profile))
@@ -1853,6 +1967,7 @@ def capture_id1_pair(client, limiter, stream, detector, logger, config, profile,
     # 0.25 deg pulses did not move the aircraft enough to recover an overshoot.
     client.lateral_bounds = (-.6, .6)
     deadline = time.monotonic() + profile["leg_timeout_s"]
+    leg_started = time.monotonic()
     first_id1_recorded = False
     client.log_event("standalone_leg", {"from": departure, "to": expected, "direction": direction,
         "phase_scope": f"first_ID{expected}_pair_framing"})
@@ -1894,7 +2009,10 @@ def capture_id1_pair(client, limiter, stream, detector, logger, config, profile,
         seen = [tag for tag in tags if tag.tag_id == expected]
         if not prebrake_checked and seen and len(shape) >= 2:
             prebrake_checked = True
-            if edge_prebrake(client, limiter, profile, direction, seen[0], shape[1], stream, detector):
+            moving = time.monotonic() - leg_started >= SIGHTING_BRAKE_MIN_LEG_S
+            if edge_prebrake(client, limiter, profile, direction, seen[0], shape[1], stream, detector,
+                             moving=moving):
+                gate.note_external_stop()
                 continue
         client.status("id1_pair_after_detection")
         _require_flight(client)
@@ -2088,8 +2206,13 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
         profile = {**profile, "max_tilt_deg": .6}
         config = replace(config, patrol=replace(config.patrol, angle_deg=.6, recovery_max_angle_deg=.6))
     active_route = list(ROUTE_IDS) if continue_patrol or pair_gate is None else [6, 1]
+    landing_wall, landing_tag = 6, 0
     if external_route is not None:
-        active_route = list(external_route)
+        # The app route ends over its last monitor and lands on that monitor's
+        # floor tag; the c -> Home6 leg is no longer flown.
+        active_route = list(external_route[:-1])
+        landing_wall = external_route[-2]
+        landing_tag = FLOOR_LANDING_IDS[landing_wall]
     cancel = threading.Event() if cancel is None else cancel
     emit = on_event or (lambda **event: None)
     client = ShuttleClient(config, cancel, on_snapshot or (lambda snapshot: None))
@@ -2199,11 +2322,15 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
             _pause(client, limiter, stream, detector, logger, profile["visit_pause_s"], phase, expected)
         client.zero()
         completed = True
+        if external_route is not None:
+            # Same UI transition as before: the flight is heading down now.
+            emit(state="returning")
         # The route and its photos are already the mission's result, so a
         # landing that cannot align must not retract them: the aircraft is then
         # left hovering for the RC pilot exactly as it was before this existed.
         try:
-            _land_on_floor_home(client, limiter, stream, detector, logger, config, anchor_center)
+            _land_on_floor_home(client, limiter, stream, detector, logger, config, anchor_center,
+                                wall_id=landing_wall, target_id=landing_tag)
         except (Exception, KeyboardInterrupt) as landing_error:
             # Log before touching the aircraft: the 16:18 flight lost authority
             # to an RC stick during the floor search, the zero() below raised in

@@ -242,10 +242,12 @@ class HorizontalGateTests(StandaloneTestCase):
         self.assertIsNone(gate.update([tag(3)], .4, .01, (1, 1))[1])
         self.assertEqual(gate.update([tag(3)], .41, .01, (1, 2))[1].tag_id, 3)
 
-    def test_stale_missing_negative_and_nan_frame_age_are_rejected(self):
+    def test_stale_missing_negative_and_nan_frame_age_wait_without_motion(self):
         for age, key in ((.501, (1, 2)), (-.01, (1, 2)), (float("nan"), (1, 2)), (.01, None)):
-            with self.subTest(age=age, key=key), self.assertRaises(RuntimeError):
-                self.gate().update([tag(3)], 1., age, key)
+            with self.subTest(age=age, key=key):
+                gate = self.gate()
+                self.assertEqual(gate.update([tag(3)], 1., age, key), (0., None))
+                self.assertEqual(gate.framing_action, "stale_or_invalid_detection_frame")
 
     def test_old_frame_or_video_reconnect_cannot_complete_hold(self):
         gate = self.gate()
@@ -304,7 +306,7 @@ class HorizontalGateTests(StandaloneTestCase):
             stream.last_detection_snapshot = SimpleNamespace(key=(1, frame_id), frame=SimpleNamespace(shape=(720, 1280, 3)))
             return next(frames), .01
         stream.detect_latest = detect
-        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .11))
+        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .16))
         cfg = replace(config(), camera=replace(config().camera, cx=640.))
         with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
                 patch.object(shuttle.time, "perf_counter", lambda: clock[0]), \
@@ -318,6 +320,33 @@ class HorizontalGateTests(StandaloneTestCase):
             self.assertEqual((forward, up, yaw), (0., 0., 0.))
             self.assertLessEqual(abs(right), 1.5)
         self.assertIn("zero", client.calls)
+
+    def test_real_traversal_waits_out_stale_frame_without_aborting(self):
+        clock = [100.]
+        client, logger = FakeClient(), MagicMock()
+        client.arm("offline")
+        client.raw["is_flying"] = True
+        samples = iter((([tag(1)], .6), ([tag(1)], .01), ([tag(1)], .01),
+                        ([tag(1)], .01), ([tag(1)], .01)))
+        stream = SimpleNamespace(last_detection_snapshot=None)
+        def detect(_detector, _age):
+            frame_id = 1 if stream.last_detection_snapshot is None else stream.last_detection_snapshot.key[1] + 1
+            stream.last_detection_snapshot = SimpleNamespace(
+                key=(1, frame_id), frame=SimpleNamespace(shape=(720, 1280, 3)))
+            return next(samples)
+        stream.detect_latest = detect
+        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .11))
+        cfg = replace(config(), camera=replace(config().camera, cx=640.))
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                patch.object(shuttle.time, "perf_counter", lambda: clock[0]), \
+                redirect_stdout(io.StringIO()):
+            result = shuttle.traverse_horizontal(client, limiter, stream, None, logger, cfg, profile(),
+                                                 6, 1, shuttle.PatrolPhase.OUTBOUND)
+        self.assertEqual(result.tag_id, 1)
+        first_sample = next(data for event, data in client.events
+                            if event == "standalone_horizontal_sample")
+        self.assertEqual(first_sample["framing_action"], "stale_or_invalid_detection_frame")
+        self.assertGreaterEqual(client.calls.count("zero"), 1)
 
     def _fly_return_leg(self, departure, route, frames, speeds):
         clock, client, logger = [100.], FakeClient(), MagicMock()
@@ -420,6 +449,45 @@ class HorizontalGateTests(StandaloneTestCase):
         self.assertEqual(motion, [])
         self.assertEqual(client.calls.count("zero"), 4)
         logger.save_confirmation_photo.assert_called_once()
+
+    def test_hover_pause_waits_out_stale_video_frames(self):
+        clock, client, logger = [100.], FakeClient(), MagicMock()
+        client.arm("offline")
+        client.raw["is_flying"] = True
+        stream = SimpleNamespace(last_detection_snapshot=None)
+        def detect(_detector, _age):
+            frame_id = 1 if stream.last_detection_snapshot is None else stream.last_detection_snapshot.key[1] + 1
+            stream.last_detection_snapshot = SimpleNamespace(
+                key=(1, frame_id), frame=SimpleNamespace(shape=(720, 1280, 3)))
+            return [], .9
+        stream.detect_latest = detect
+        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .2))
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                patch.object(shuttle.time, "perf_counter", lambda: clock[0]):
+            shuttle._pause(client, limiter, stream, None, logger, .7,
+                           shuttle.PatrolPhase.WALL_HOME, 6)
+        self.assertGreaterEqual(client.calls.count("zero"), 3)
+        self.assertTrue(any(event == "standalone_pause_frame_deferred"
+                            for event, _ in client.events))
+
+    def test_arrival_brake_deferral_holds_zero_and_finishes_the_leg(self):
+        clock, client = [100.], FakeClient()
+        client.phase = "lateral"
+        client.arm("offline")
+        client.raw["is_flying"] = True
+        client.received = clock[0]
+        client.last_telemetry.velocity_north_mps = .2
+        client.last_telemetry.velocity_age_s = .01
+        def stale_attitude(*axes):
+            raise shuttle.FramingCorrectionDeferred("Detected camera frame expired before command dispatch")
+        client.attitude = stale_attitude
+        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .1))
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                patch.object(shuttle.time, "perf_counter", lambda: clock[0]):
+            shuttle._finish_arrival_brake(client, limiter, profile(), "left", 99.)
+        self.assertIn("zero", client.calls)
+        self.assertTrue(any(event == "standalone_arrival_brake_deferred"
+                            for event, _ in client.events))
 
     def test_invalid_decoding_quality_cannot_confirm_a_wall(self):
         for changes in ({"hamming": None}, {"hamming": 3}, {"decision_margin": None},

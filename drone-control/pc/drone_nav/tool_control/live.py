@@ -248,11 +248,13 @@ class MissionClient(NDJSONClient):
         # ATTITUDE is the same case once more: its write has left before the wait,
         # so waiting longer only decides whether a late ACK ends the run. On the
         # 0929 hotspot flight RTT climbed 30 -> 218ms and one attitude ACK then
-        # overran 0.4s mid-route; the run died and needed an RC landing. 0.8s
-        # stays under the phone's 1s release so authority is never dropped.
-        budget = {"takeoff": 3., "arm": 3., "gimbal": 2., "stick_mode": 3., "disarm": 1.,
+        # overran 0.4s mid-route; the run died and needed an RC landing. The
+        # venue Wi-Fi is expected to spike near 0.8s, and the phone watchdog now
+        # holds Virtual Stick authority for 3s. A 2s ACK wait stays below that
+        # release while leaving room for one spike plus bridge scheduling.
+        budget = {"takeoff": 3., "arm": 3., "gimbal": 2., "stick_mode": 3., "disarm": 2.,
                   "land": 3., "ground_ack": 6., "status": 2., "zero": 2.,
-                  "attitude": .8}.get(kind, .4)
+                  "attitude": 2.}.get(kind, .4)
         self._socket.deadline = time.perf_counter() + budget
         prior_raw, prior_received = copy.deepcopy(self.raw), self.received
         self.last_telemetry = None

@@ -72,9 +72,10 @@ RETURN_ARRIVAL_BRAKE_MAX_S = 1.5
 # fine). Three missed polls is the stale threshold for the flight flag only.
 FLIGHT_STATE_FRESH_S = 1.5
 # A single missed/stale ID0 sample during climb (decode hiccup, tag briefly
-# clipped by the FOV as attitude shifts) recovers within one or two 100 ms
-# ticks. Only a sustained miss is a real loss, mirroring FLIGHT_STATE_FRESH_S.
-CLIMB_TAG_MISS_GRACE_S = 1.0
+# clipped by the FOV as attitude shifts, or one venue Wi-Fi stall) recovers
+# within a few 100 ms ticks. Only a sustained miss is a real loss, mirroring
+# FLIGHT_STATE_FRESH_S.
+CLIMB_TAG_MISS_GRACE_S = 1.5
 # The flight controller keeps finishing its auto-takeoff hover stabilisation for
 # a moment after it hands Virtual Stick authority over, and while it does it
 # accepts roll/pitch/yaw but silently discards vertical throttle. Six field
@@ -709,6 +710,17 @@ class ShuttleClient(MissionClient):
         self.log_event("standalone_authority_reacquired",
                        {"reason": reason, "attempt": self.reacquisitions})
 
+    def attitude(self, forward_tilt_deg, right_tilt_deg, up_mps=0., yaw_rate_rps=0.):
+        try:
+            return super().attitude(forward_tilt_deg, right_tilt_deg, up_mps, yaw_rate_rps)
+        except InterruptedError as exc:
+            if str(exc) == "Fresh height, velocity and attitude required":
+                # The status read wrote no motion command; during a Wi-Fi/FC
+                # freshness hiccup every caller must hold/re-observe rather
+                # than turn an unsent refusal into a dead mission.
+                raise FramingCorrectionDeferred(str(exc)) from None
+            raise
+
     def observe_frame(self, snapshot):
         if snapshot is None or not _number(time.monotonic() - snapshot.received_s, 0., FRESH_S):
             # Nothing has reached the wire yet and the next pass decodes a new
@@ -771,7 +783,7 @@ class ShuttleClient(MissionClient):
                 speed, age, sampled_at = self._pair_dispatch_proof
                 age = None if age is None else age + time.perf_counter() - sampled_at
             if not _number(age, 0., FRESH_S) or speed is None:
-                raise InterruptedError("Fresh horizontal velocity required at pair dispatch")
+                raise FramingCorrectionDeferred("Fresh horizontal velocity required at pair dispatch")
             if self.motion_valid_until_s is not None and speed > .08:
                 raise FramingCorrectionDeferred("Aircraft no longer settled before framing pulse dispatch")
 
@@ -829,7 +841,9 @@ class HorizontalGate:
 
     def update(self, detections, now_s, frame_age, frame_key, frame_shape):
         if not _number(frame_age, 0., FRESH_S) or frame_key is None:
-            raise RuntimeError("Fresh identified camera frame required; lateral motion cancelled")
+            self.centered_since = None
+            self.framing_action = "stale_or_invalid_detection_frame"
+            return 0., None
         if self.last_key is not None:
             if frame_key[0] != self.last_key[0]:
                 raise InterruptedError("Video stream generation changed; no automatic flight resume")
@@ -1262,7 +1276,8 @@ def _climb(client, limiter, stream, detector, logger, config, target, profile=No
                         if (final_up != 0. or not _number(final_t.velocity_down_mps, -.05, .05)
                                 or final_t.velocity_age_s is None
                                 or not _number(final_t.velocity_age_s + final_elapsed, 0., FRESH_S)):
-                            raise InterruptedError("Climb confirmation changed or expired during logging")
+                            raise FramingCorrectionDeferred(
+                                "Climb confirmation changed or expired during logging")
                         return
                     previous_key = key
             else:
@@ -1554,7 +1569,10 @@ def _pause(client, limiter, stream, detector, logger, seconds, phase, expected):
         _require_flight(client)
         _, age = _observe(client, stream, detector, logger, phase, expected)
         if not _number(age, 0., FRESH_S):
-            raise RuntimeError("Camera became stale while hovering")
+            client.log_event("standalone_pause_frame_deferred", {
+                "phase": getattr(phase, "value", phase), "expected_id": expected,
+                "frame_age_s": age})
+            continue
 
 
 def acquire_wall_home(client, limiter, stream, detector, logger, config):
@@ -1710,7 +1728,12 @@ def _finish_arrival_brake(client, limiter, profile, direction, seen_since):
             break
         braked = True
         up = client.hold_up(height_hold_up_mps(client, profile))
-        client.attitude(0., -travel * RETURN_BRAKE_DEG, up, 0.)
+        try:
+            client.attitude(0., -travel * RETURN_BRAKE_DEG, up, 0.)
+        except FramingCorrectionDeferred as exc:
+            client.zero()
+            client.log_event("standalone_arrival_brake_deferred", {"reason": str(exc)})
+            break
         client.log_event("standalone_arrival_brake", {"horizontal_speed_mps": speed,
                                                       "right_tilt_deg": -travel * RETURN_BRAKE_DEG})
         limiter.wait()
@@ -1859,7 +1882,11 @@ def capture_id1_pair(client, limiter, stream, detector, logger, config, profile,
                 continue
             speed, velocity_age = _horizontal_motion_evidence(client)
             if not _number(velocity_age, 0., FRESH_S) or speed is None:
-                raise InterruptedError(f"Fresh horizontal velocity required for ID{expected} capture")
+                client.zero()
+                client.log_event("id1_pair_capture_deferred", {"reason": "stale_horizontal_velocity",
+                    "tag_id": expected, "horizontal_speed_mps": speed,
+                    "velocity_age_s": velocity_age})
+                continue
             if speed > .08:
                 client.log_event("id1_pair_capture_deferred", {"reason": "motion_after_zero_ack",
                     "horizontal_speed_mps": speed, "velocity_age_s": velocity_age})

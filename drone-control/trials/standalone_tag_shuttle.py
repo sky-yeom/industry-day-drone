@@ -181,6 +181,14 @@ HEIGHT_HOLD_BOUNDS = (("deadband_m", .02, .5), ("gain_mps_per_m", .05, 1.5),
                       # live.py rejects anything past its own envelope on the
                       # wire, so reject it here instead of mid-leg.
                       ("max_up_mps", .05, MAX_SETPOINT_UP_MPS))
+# On the 9/29 black foam floor the aircraft rises on its own with zero vertical
+# command (20260929T162210: 1.4 -> 1.7 m over three legs). A two-sided hold
+# around the target oscillated (e0d1d8a, reverted), so the only downward term
+# is a slow push from a ceiling well above the target and below live.py's
+# 1.8 m corridor guard. Sonar reports in 0.1 m steps, so a reading of 1.7
+# already counts as at the ceiling.
+CEILING_HEIGHT_M = 1.7
+CEILING_DOWN_MPS = .05
 PROFILE_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 
@@ -249,7 +257,9 @@ def height_hold_up_mps(client, profile):
     only ever pushes back up: sinking is the failure that was observed, and a
     downward term would fight the operator rather than hold the hover. A profile
     without height_hold, a telemetry read without a height, or any height at or
-    above the cruise band all command exactly zero.
+    above the cruise band all command exactly zero. The one exception is the
+    ceiling: at CEILING_HEIGHT_M the hold eases down at CEILING_DOWN_MPS so a
+    self-rising aircraft never reaches the 1.8 m corridor guard.
     """
     hold = profile.get("height_hold")
     telemetry = client.last_telemetry
@@ -258,6 +268,8 @@ def height_hold_up_mps(client, profile):
     height = getattr(telemetry, "height_m", None)
     if not _number(height, -1e3, 1e3):
         return 0.
+    if height > CEILING_HEIGHT_M - .05:
+        return -CEILING_DOWN_MPS
     sink = profile["target_height_m"] - height
     if sink < hold["deadband_m"]:
         return 0.
@@ -470,6 +482,7 @@ class ShuttleClient(MissionClient):
         # Zero admits only up == 0 on a lateral leg, which is what every flight
         # before the cruise hold dispatched.
         self.hold_up_bound = 0.
+        self.hold_down_bound = 0.
         # Set at arm so a watchdog handback can be undone without the caller
         # having to thread the token back through every phase.
         self._confirmation_token = None
@@ -587,7 +600,7 @@ class ShuttleClient(MissionClient):
         anything the guard would not admit becomes a plain zero and the leg
         keeps its own axis.
         """
-        if self.phase != "lateral" or not _number(value, 0., self.hold_up_bound):
+        if self.phase != "lateral" or not _number(value, -self.hold_down_bound, self.hold_up_bound):
             return 0.
         return value
 
@@ -600,11 +613,11 @@ class ShuttleClient(MissionClient):
         if self.phase == "climb":
             permitted = forward == right == yaw == 0. and _number(up, 0., MAX_SETPOINT_UP_MPS)
         elif self.phase == "lateral":
-            # The cruise hold only ever pushes up, and never past the profile's
-            # own ceiling, so a profile without height_hold leaves this bound at
-            # zero and admits exactly the same commands as before.
+            # The cruise hold pushes up to the profile's speed and down only at
+            # the slow ceiling speed; a profile without height_hold leaves both
+            # bounds at zero and admits exactly the same commands as before.
             permitted = (forward == yaw == 0. and _number(right, *self.lateral_bounds)
-                         and _number(up, 0., self.hold_up_bound))
+                         and _number(up, -self.hold_down_bound, self.hold_up_bound))
         elif self.phase == "landing":
             # Floor alignment is the one phase that steers both horizontal axes:
             # the downward camera reports the home tag's offset in x and y, and
@@ -1816,6 +1829,7 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
     client = ShuttleClient(config, cancel, on_snapshot or (lambda snapshot: None))
     client.arm_authority_timeout_s = phase_timeout_s(profile, "arm_authority_s", ARM_AUTHORITY_TIMEOUT_S)
     client.hold_up_bound = float((profile.get("height_hold") or {}).get("max_up_mps") or 0.)
+    client.hold_down_bound = CEILING_DOWN_MPS if profile.get("height_hold") else 0.
     ground_proof_s = phase_timeout_s(profile, "ground_proof_s", GROUND_PROOF_TIMEOUT_S)
     stream = logger = None
     visited, completed, error, diagnostic_errors = [], False, None, []

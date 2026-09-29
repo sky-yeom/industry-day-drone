@@ -47,6 +47,7 @@ class FakeClient:
     # Bind the real implementation so this double cannot drift from the guard
     # it stands in for; the zero bound is a profile without height_hold.
     hold_up_bound = 0.
+    hold_down_bound = 0.
     hold_up = shuttle.ShuttleClient.hold_up
 
     def __init__(self):
@@ -987,6 +988,34 @@ class DispatchBoundaryTests(StandaloneTestCase):
                 client.phase = phase
                 with self.subTest(phase=phase):
                     self.assertEqual(client.hold_up(.04), 0.)
+
+    def test_ceiling_eases_down_slowly_and_only_at_the_ceiling(self):
+        # 20260929T162210: zero up on legs 1->2 and 2->3, sonar 1.4 -> 1.7 m.
+        # Below the ceiling the hold stays up-only (the two-sided hold was
+        # reverted); at a 1.7 reading it eases down at 0.05 m/s.
+        profile = {"target_height_m": 1.4,
+                   "height_hold": {"deadband_m": .08, "gain_mps_per_m": .4, "max_up_mps": .18}}
+        for height, expected in ((1.3, .04), (1.4, 0.), (1.5, 0.), (1.6, 0.),
+                                 (1.7, -.05), (1.8, -.05)):
+            client = SimpleNamespace(last_telemetry=SimpleNamespace(height_m=height))
+            with self.subTest(height=height):
+                self.assertAlmostEqual(shuttle.height_hold_up_mps(client, profile), expected, places=6)
+        client = SimpleNamespace(last_telemetry=SimpleNamespace(height_m=1.8))
+        self.assertEqual(shuttle.height_hold_up_mps(client, {"target_height_m": 1.4}), 0.)
+        clock = [100.]
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]):
+            client = self.client(clock)
+            client.phase, client.hold_up_bound = "lateral", .18
+            client.hold_down_bound = shuttle.CEILING_DOWN_MPS
+            client._guard_dispatch("attitude", {"forward_tilt_deg": 0., "right_tilt_deg": -.6,
+                                                "up_mps": -.05, "yaw_rate_rps": 0.})
+            with self.assertRaises(PermissionError):
+                client._guard_dispatch("attitude", {"forward_tilt_deg": 0., "right_tilt_deg": -.6,
+                                                    "up_mps": -.06, "yaw_rate_rps": 0.})
+            self.assertEqual(client.hold_up(-.05), -.05)
+            self.assertEqual(client.hold_up(-.06), 0.)
+            client.phase = "climb"
+            self.assertEqual(client.hold_up(-.05), 0.)
 
     def test_video_generation_stays_pinned_across_phases(self):
         clock = [100.]

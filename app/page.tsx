@@ -56,6 +56,8 @@ export default function Home() {
   const advancedToCapturesRef = useRef(false);
   const advancedToRouteRef = useRef(false);
   const advancedToResultsRef = useRef(false);
+  const forcePromptPendingRef = useRef(false);
+  const forceRoutePendingRef = useRef(false);
   const streamingRef = useRef<{ user: string | null; agent: string | null }>({ user: null, agent: null });
   const state = snapshot.state;
   const missionLaunched = state.clockRunning || state.elapsedMs > 0 || ["paused", "complete"].includes(state.missionPhase);
@@ -133,6 +135,8 @@ export default function Home() {
     advancedToCapturesRef.current = false;
     advancedToRouteRef.current = false;
     advancedToResultsRef.current = false;
+    forcePromptPendingRef.current = false;
+    forceRoutePendingRef.current = false;
     setStep("opening");
     setSnapshot({ state: INITIAL_STATE, receivedAt: 0 });
     setNow(0);
@@ -257,28 +261,50 @@ export default function Home() {
   // relay/server.py), so mission state stays consistent either way.
   const forceConfirmPrompt = useCallback(() => {
     const session = sessionRef.current;
-    if (!session || state.promptPhase === "confirmed") return;
+    if (!session || state.promptPhase === "confirmed" || forcePromptPendingRef.current) return;
+    forcePromptPendingRef.current = true;
+    window.setTimeout(() => { forcePromptPendingRef.current = false; }, 500);
+    session.interruptCurrentSpeech();
     const kind = SCENARIOS[scenarioId].kind;
-    const description = kind === "security" ? SECURITY_TARGET_APPEARANCE.description
-      : kind === "construction" ? CONSTRUCTION_TARGET_APPEARANCE.description
-      : TARGET_APPEARANCE.description;
+    const appearance = kind === "security" ? SECURITY_TARGET_APPEARANCE
+      : kind === "construction" ? CONSTRUCTION_TARGET_APPEARANCE
+      : TARGET_APPEARANCE;
+    // Build real appearance_constraints from the scenario's own known
+    // shirtColor/hairColor/garment/headwear fields (the same ground-truth
+    // attributes a participant describing the reference photo would state),
+    // instead of sending an empty list. An empty list makes the relay think
+    // "no distinguishing features were given at all", which tanks
+    // promptConfidence and makes Gibby ask the participant to describe the
+    // appearance again mid-비행경로 instead of just stating the confidence.
+    const appearanceFields = appearance as unknown as Record<string, string | undefined>;
+    const appearanceConstraints = (["shirtColor", "hairColor", "garment", "headwear"] as const)
+      .filter((attribute) => appearanceFields[attribute])
+      .map((attribute) => ({ attribute, operator: "include" as const, values: [appearanceFields[attribute] as string] }));
     session.sendCommand("confirm_prompt", {
-      prompt_text: description, appearance_constraints: [], unsupported_appearance: [],
+      prompt_text: appearance.description, appearance_constraints: appearanceConstraints, unsupported_appearance: [],
     });
-  }, [scenarioId]);
+  }, [scenarioId, state.promptPhase]);
 
   const forceConfirmRoute = useCallback(() => {
     const session = sessionRef.current;
-    if (!session) return;
-    // Force the first two stops in scenario map order rather than a
-    // hardcoded "monitor-1"/"monitor-2" - keeps this in sync automatically
-    // if a scenario's stop ids or count ever change.
-    const [first, second] = MONITORS_BY_KIND[SCENARIOS[scenarioId].kind];
-    if (first) session.sendCommand("select_stop", { monitor: first.id });
-    if (second) session.sendCommand("select_stop", { monitor: second.id });
+    if (!session || forceRoutePendingRef.current) return;
+    forceRoutePendingRef.current = true;
+    session.interruptCurrentSpeech();
+    // Prefer the relay-computed "careful clue-analysis" recommended order
+    // (state.vulnerableAdjustedOrder - the same order Gibby would recommend
+    // out loud) over raw scenario declaration order, so forcing the route
+    // visits the real target first/second instead of possibly last (which
+    // can burn through the injury time window and make the mission look
+    // like it "isn't working"). Falls back to declared monitor order only
+    // if the recommended order hasn't been computed yet.
+    const declaredOrder = MONITORS_BY_KIND[SCENARIOS[scenarioId].kind].map((monitor) => monitor.id);
+    const order = state.vulnerableAdjustedOrder.length >= 2 ? state.vulnerableAdjustedOrder : declaredOrder;
+    const [first, second] = order;
+    if (first) session.sendCommand("select_stop", { monitor: first });
+    if (second) session.sendCommand("select_stop", { monitor: second });
     session.sendCommand("confirm_route");
     session.sendCommand("launch_mission");
-  }, [scenarioId]);
+  }, [scenarioId, state.vulnerableAdjustedOrder]);
 
   // Display interpolation only: expiration, reporting and scoring remain relay-owned.
   const elapsedMs = state.elapsedMs + (state.clockRunning ? Math.max(0, now - snapshot.receivedAt) : 0);

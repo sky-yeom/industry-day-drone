@@ -72,15 +72,15 @@ function Find-Phone {
     # 3) Full scan of the same /24
     $prefix = ($addr.IPAddress -split '\.')[0..2] -join '.'
     Write-Host "Phone: scanning $prefix.0/24 ..."
-    $jobs = 1..254 | ForEach-Object {
-        Start-ThreadJob -ScriptBlock {
-            param($ip, $port)
-            $c = [System.Net.Sockets.TcpClient]::new()
-            try { if ($c.ConnectAsync($ip, $port).Wait(700) -and $c.Connected) { $ip } } catch { } finally { $c.Dispose() }
-        } -ArgumentList "$prefix.$_", $ControlPort
+    # Start-ThreadJob does not exist in Windows PowerShell 5.1, so start every
+    # connect at once and wait on the tasks together instead.
+    $probes = foreach ($n in 1..254) {
+        $c = [System.Net.Sockets.TcpClient]::new()
+        [pscustomobject]@{ Ip = "$prefix.$n"; Client = $c; Task = $c.ConnectAsync("$prefix.$n", $ControlPort) }
     }
-    $hit = ($jobs | Wait-Job -Timeout 40 | Receive-Job | Where-Object { $_ } | Select-Object -First 1)
-    $jobs | Remove-Job -Force -ErrorAction SilentlyContinue
+    try { [void][System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]@($probes.Task), 1500) } catch { }
+    $hit = ($probes | Where-Object { $_.Task.Status -eq 'RanToCompletion' -and $_.Client.Connected } | Select-Object -First 1).Ip
+    foreach ($p in $probes) { $p.Client.Dispose() }
     if ($hit) { Write-Host "Phone: $hit  (scan)"; return $hit }
     throw "Phone not found. Check that the bridge app is running and on the same hotspot (port $ControlPort)."
 }

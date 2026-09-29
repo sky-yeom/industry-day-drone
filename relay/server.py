@@ -1035,8 +1035,14 @@ class Bridge:
                 self.voice_turns.stop(event.get("item_id"), self.session)
             elif etype == "conversation.item.input_audio_transcription.completed":
                 self.voice_turns.transcribe(event.get("item_id"), event.get("transcript"))
+                # `text` is only reachable behind VOICE_DIAGNOSTICS/voice_trace, both
+                # opt-in and already redact secrets (see VoiceTrace._clean). Without the
+                # raw text a noisy-venue transcription failure only shows up as a
+                # non-empty transcript that Gibby still rejected, with no way to tell
+                # whether ambient noise added stray words around a real "네"/"예".
                 self.trace_voice("transcript", item_id=event.get("item_id"),
-                                 nonempty=bool((event.get("transcript") or "").strip()))
+                                 nonempty=bool((event.get("transcript") or "").strip()),
+                                 text=event.get("transcript"))
                 self._mute_native_response_if_no_real_speech(event.get("item_id"))
                 if (self.strict_turn_taking and item_id == self._accepted_item_id
                         and not self.voice_turns.turns[item_id].text):
@@ -1151,8 +1157,12 @@ class Bridge:
                     rejection = await self.voice_turns.authorize(name, args, turn, self.session) if from_voice else None
                     if rejection:
                         log.warning("Blocked voice action %s: %s", name, rejection)
+                        # `text` lets a noisy-venue rejection loop (e.g. repeated
+                        # not_consent/stop_mismatch) be diagnosed from the trace alone,
+                        # instead of guessing whether noise is corrupting transcripts.
                         self.trace_voice("rejected", name=name, code=self.voice_turns.last_rejection_code,
-                                         item_id=turn.item_id if turn else None)
+                                         item_id=turn.item_id if turn else None,
+                                         text=turn.text if turn else None)
                         outcome = {"ok": False, "facts": rejection, "silent": True,
                                    "ask": "현재 질문만 짧게 다시 묻고 참가자의 답을 기다릴 것"}
                     else:

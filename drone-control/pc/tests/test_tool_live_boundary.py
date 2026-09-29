@@ -178,7 +178,7 @@ class LiveTransportBoundaryTest(unittest.TestCase):
             client._armed, client._armed_since = True, 0.
             client.send("attitude", {"forward_tilt_deg": 0, "right_tilt_deg": .3,
                                      "up_mps": 0, "yaw_rate_rps": 0})
-            clock[0] = 100.3
+            clock[0] = 100.2
             client.status("fast_read")
             clock[0] = 100.8
             client.status("after_slow_ack")
@@ -187,8 +187,9 @@ class LiveTransportBoundaryTest(unittest.TestCase):
             client.cleaning = True
             clock[0] = 102.0
             client.status("cleanup_read")
+        # The late read is answered by the keep-alive zero itself.
         self.assertEqual([r["type"] for r in raw.writes],
-                         ["attitude", "status", "zero", "status", "status", "status"])
+                         ["attitude", "status", "zero", "status", "status"])
         self.assertFalse(client.failed)
 
     def test_status_before_any_motion_or_arm_sends_no_keepalive(self):

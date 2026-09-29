@@ -29,7 +29,7 @@ BUILD_ID = "5.18-connectivity.20260913.3"
 # ~3.3s in the field). Treat a vs_authority/armed mismatch as fatal only once this
 # grace period has elapsed since arm(), instead of aborting on the very first read.
 AUTHORITY_HANDOFF_GRACE_S = 4.0
-MOTION_KEEPALIVE_S = .45
+MOTION_KEEPALIVE_S = .3
 
 
 def fresh(raw, key, max_ms=500):
@@ -212,14 +212,16 @@ class MissionClient(NDJSONClient):
             raise ValueError("This site uses Advanced BODY ANGLE only")
         # The phone releases Virtual Stick after 1s without an attitude/zero, and
         # a status read does not reset that timer. On the 0929 hotspot flights a
-        # single status ACK took up to 765ms and a loop sends three in a row, so
-        # the gap between stick commands reached 1.2-1.3s and authority was lost
-        # mid-route. The phone already zeroes the setpoint 300ms after the last
-        # command, so a zero here changes no motion; it only keeps authority.
+        # single ACK took up to 765ms and a loop sends three status reads in a
+        # row, so stick commands were 1.1-1.3s apart and authority was lost
+        # mid-route. A zero ACK carries the same telemetry a status read would
+        # fetch, so past the keep-alive age the read is answered by a zero
+        # instead: one round trip, not two. The phone already zeroes the
+        # setpoint 300ms after the last command, so this changes no motion.
         if (kind == "status" and self._armed and not self.cleaning
                 and self.last_motion_write is not None
                 and time.perf_counter() - self.last_motion_write > MOTION_KEEPALIVE_S):
-            self.send("zero", {})
+            return self.send("zero", {})
         if self._file.buffer:
             self.failed = True
             raise ConnectionError("Unsolicited ACK; new action refused")

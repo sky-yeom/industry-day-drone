@@ -93,6 +93,44 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
         turn = participant_turn(self.bridge, "오케이")
         self.assertTrue((await self.call("confirm_prompt", {}, turn))["ok"])
 
+    async def test_repeated_not_consent_escalates_to_a_short_yes_no_request(self):
+        # A noisy venue can make a real "네" fail to match a couple of times
+        # in a row. After repeated not_consent rejections for the *same*
+        # question, the model should be nudged to ask for a short, clean
+        # yes/no instead of repeating the same open-ended question - this
+        # never changes what counts as a valid yes, only what the model is
+        # told to ask next.
+        participant_turn(self.bridge, SEARCH_PROMPT)
+        self.session.prepare_prompt(**PROMPT_ARGS)
+        spoken_reply(self.bridge)
+        first = participant_turn(self.bridge, "아니")
+        first_outcome = await self.call("confirm_prompt", {}, first)
+        self.assertFalse(first_outcome["ok"])
+        self.assertNotIn("네' 또는 '아니오", first_outcome["facts"])
+        second = participant_turn(self.bridge, "아니")
+        second_outcome = await self.call("confirm_prompt", {}, second)
+        self.assertFalse(second_outcome["ok"])
+        self.assertIn("네' 또는 '아니오", second_outcome["facts"])
+
+    async def test_escalation_streak_resets_once_a_new_question_starts(self):
+        participant_turn(self.bridge, SEARCH_PROMPT)
+        self.session.prepare_prompt(**PROMPT_ARGS)
+        spoken_reply(self.bridge)
+        for _ in range(2):
+            turn = participant_turn(self.bridge, "아니")
+            self.assertFalse((await self.call("confirm_prompt", {}, turn))["ok"])
+        # A restated/corrected description bumps pending_prompt_revision and
+        # gets its own readback, i.e. a genuinely new question - the
+        # escalation streak must not bleed into it, so the very first
+        # rejection here should read like a first-time rejection again, not
+        # an immediate escalation.
+        self.session.prepare_prompt(**PROMPT_ARGS)
+        spoken_reply(self.bridge)
+        turn = participant_turn(self.bridge, "아니")
+        outcome = await self.call("confirm_prompt", {}, turn)
+        self.assertFalse(outcome["ok"])
+        self.assertNotIn("네' 또는 '아니오", outcome["facts"])
+
     async def test_late_correction_invalidates_newer_consent_for_the_same_revision(self):
         self.session.prepare_prompt(**PROMPT_ARGS)
         spoken_reply(self.bridge)

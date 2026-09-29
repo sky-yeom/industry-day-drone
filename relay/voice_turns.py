@@ -143,6 +143,8 @@ class VoiceTurns:
         self.route_readback = None
         self.route_generated = False
         self.response_timestamps = {}
+        self._consent_rejection_key = None
+        self._consent_rejection_streak = 0
 
     def mark_item(self, item_id, event):
         turn = self.turns.get(item_id)
@@ -310,7 +312,14 @@ class VoiceTurns:
                 return self.reject("description_missing", "탐색 설명이 아직 없습니다. 어떤 사람을 찾을지 물어보세요.")
         elif name == "confirm_prompt":
             if not is_affirmative(turn.text):
-                return self.reject("not_consent", "참가자가 동의하지 않았습니다. 수정 사항을 반영하거나 다시 물어보세요.")
+                # turn.prompt_revision is already cleared to None by transcribe()
+                # for any non-affirmative reply (see transcribe() above), so it
+                # can't identify *which* question this was answering here -
+                # session.pending_prompt_revision is the stable identifier: it
+                # only changes when the participant's description is actually
+                # restated (prepare_prompt), not on every failed confirm attempt.
+                return self.reject("not_consent", "참가자가 동의하지 않았습니다. 수정 사항을 반영하거나 다시 물어보세요.",
+                                    name=name, session=session, question_id=session.pending_prompt_revision)
             if (session.pending_prompt is None or turn.prompt_revision is None
                     or turn.prompt_revision != session.pending_prompt_revision
                     or self.rejected_prompt_revision == turn.prompt_revision
@@ -322,11 +331,36 @@ class VoiceTurns:
                 return self.reject("stop_mismatch", "참가자의 이번 답변에서 그 목적지를 확인하지 못했습니다. 목적지를 대신 고르지 말고 다시 물어보세요.")
         elif name == "launch_mission":
             if not is_affirmative(turn.text) or not turn.route_readback_done:
-                return self.reject("departure_not_confirmed", "경로 안내 뒤 새로운 출발 동의를 받아야 합니다. 출발하지 말고 답을 기다리세요.")
+                return self.reject("departure_not_confirmed", "경로 안내 뒤 새로운 출발 동의를 받아야 합니다. 출발하지 말고 답을 기다리세요.",
+                                    name=name, session=session, question_id=tuple(session.state.confirmedRoute))
         return None
 
-    def reject(self, code, message):
+    # Consecutive same yes/no-style rejections, keyed by (tool, question
+    # context, question_id) so a new question always starts a fresh count -
+    # `context(session)` alone (phase/draftRoute) does not change between two
+    # different readbacks of the same prompt-confirmation phase, so an
+    # explicit, caller-supplied `question_id` (e.g. pending_prompt_revision)
+    # is used to actually identify "this specific question" rather than just
+    # "this stage of the flow". A noisy venue can make a real "네" fail to
+    # match a couple of times in a row (stray transcribed noise words); after
+    # repeated failures on the *same* question, nudge the model to ask for a
+    # short, clean "네"/"아니오" instead of repeating the same open-ended
+    # question, which is more likely to produce a short, cleanly-transcribed
+    # reply. This only changes what the model is told to *ask* - it never
+    # changes what counts as a valid yes.
+    _CONSENT_ESCALATION_THRESHOLD = 2
+
+    def reject(self, code, message, *, name=None, session=None, question_id=None):
         self.last_rejection_code = code
+        if name is not None and session is not None:
+            key = (name, code, self.context(session), question_id)
+            if self._consent_rejection_key == key:
+                self._consent_rejection_streak += 1
+            else:
+                self._consent_rejection_key = key
+                self._consent_rejection_streak = 1
+            if self._consent_rejection_streak >= self._CONSENT_ESCALATION_THRESHOLD:
+                message = message + " 참가자에게 짧게 '네' 또는 '아니오'라고만 말씀해 달라고 요청하세요."
         return message
 
     def commit(self, turn, name):

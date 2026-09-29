@@ -359,10 +359,8 @@ class RemoteChannelTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(browser.subprotocol, "relay.operator.v1")
                 await browser.recv()
                 await browser.recv()
-                for name, args in (("confirm_prompt", PROMPT_ARGS), ("confirm_prompt", PROMPT_ARGS),
-                                   ("confirm_prompt", PROMPT_ARGS), ("select_stop", {"monitor": "monitor-3"}),
-                                   ("select_stop", {"monitor": "monitor-1"}), ("confirm_route", {}),
-                                   ("launch_mission", {})):
+                for name, args in (("confirm_prompt", PROMPT_ARGS), ("select_stop", {"monitor": "monitor-3"}),
+                                   ("confirm_route", {}), ("launch_mission", {})):
                     await browser.send(json.dumps({"type": "command", "name": name, "args": args,
                                                    "requestId": str(uuid4())}))
                 async with asyncio.timeout(10):
@@ -374,11 +372,10 @@ class RemoteChannelTests(unittest.IsolatedAsyncioTestCase):
                             if state["missionPhase"] == "complete" and state["droneState"] == "completed":
                                 break
                 self.assertEqual(state["droneToolExecution"], "mock")
-                self.assertEqual([c["monitorId"] for c in state["captures"]],
-                                 ["monitor-3", "monitor-1", "monitor-2"])
-                self.assertEqual([c["visitIndex"] for c in state["captures"]], [0, 1, 2])
+                self.assertEqual([c["monitorId"] for c in state["captures"]], ["monitor-3"])
+                self.assertEqual([c["visitIndex"] for c in state["captures"]], [0])
                 self.assertTrue(all(c["missionId"] == state["droneMissionId"] for c in state["captures"]))
-                self.assertEqual(state["confirmedRoute"], ["monitor-3", "monitor-1", "monitor-2"])
+                self.assertEqual(state["confirmedRoute"], ["monitor-3"])
                 for token in (DEVICE_TOKEN, LOCAL_TOKEN, OPERATOR_TOKEN):
                     self.assertNotIn(token, json.dumps(state))
         self.assertEqual(self.count("drone_execute_route"), 1)

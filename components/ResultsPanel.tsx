@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import PagedText from "@/components/PagedText";
 import { MONITOR_MAP_BY_KIND } from "@/data/monitors";
-import { OUTCOME_LABELS, SECURITY_OUTCOME_LABELS, CONSTRUCTION_OUTCOME_LABELS, type DashboardState } from "@/lib/types";
+import type { DashboardState } from "@/lib/types";
 
 function ResultTextCard({ title, label, text, compact = false, sharedHeight, onHeightChange, onSpaceChange }: {
   title: string; label: string; text: string;
@@ -33,11 +33,9 @@ function ResultTextCard({ title, label, text, compact = false, sharedHeight, onH
       const available = Math.max(0, Math.floor(slot.clientHeight - heading.getBoundingClientRect().height - chrome));
       setTextHeight(previous => previous === available ? previous : available);
       onHeightChange(label, heading.getBoundingClientRect().height + content.getBoundingClientRect().height + chrome);
-      // One readable 24px line plus the 24px pager and its 4px gap.
       onSpaceChange(label, available < 52);
     };
     const observer = new ResizeObserver(measure);
-    // Observe the allocated slot, not the content-sized card: pagination must not resize its own budget.
     observer.observe(slot);
     observer.observe(heading);
     observer.observe(content);
@@ -62,27 +60,27 @@ export default function ResultsPanel({ state, debrief, onReset, visible = true }
   const score = state.score;
   const terminal = state.missionPhase === "complete" || state.missionPhase === "aborted";
   const panelRef = useRef<HTMLElement>(null);
-  const [compactColumns, setCompactColumns] = useState(false);
   const [compactSummary, setCompactSummary] = useState(false);
   const [spaceWarnings, setSpaceWarnings] = useState<Record<string, boolean>>({});
   const [cardHeights, setCardHeights] = useState<Record<string, number>>({});
   const onHeightChange = useCallback((label: string, height: number) => {
     setCardHeights(previous => previous[label] === height ? previous : { ...previous, [label]: height });
   }, []);
-  const sharedHeight = Math.max(cardHeights["최종 작전 설명"] || 0,
-    state.userPromptText ? cardHeights["결과의 탐지 프롬프트"] || 0 : 0);
+  const sharedHeight = cardHeights["최종 작전 설명"] || 0;
   const onSpaceChange = useCallback((label: string, insufficient: boolean) => {
     setSpaceWarnings(previous => previous[label] === insufficient ? previous : { ...previous, [label]: insufficient });
   }, []);
-  const insufficientSpace = spaceWarnings["최종 작전 설명"]
-    || (Boolean(state.userPromptText) && spaceWarnings["결과의 탐지 프롬프트"]);
+  const insufficientSpace = spaceWarnings["최종 작전 설명"];
+  const checkedMonitorId = state.confirmedRoute?.[0]
+    ?? state.activeMonitorId
+    ?? state.people.find((person) => person.outcome)?.monitorId
+    ?? null;
+  const checkedMonitorLabel = checkedMonitorId ? MONITOR_MAP_BY_KIND[state.kind][checkedMonitorId].label : null;
 
   useEffect(() => {
     const panel = panelRef.current;
     if (!panel) return;
     const measure = () => {
-      // Short phone/landscape regions need columns; tall narrow regions can afford stacked cards.
-      setCompactColumns(panel.clientWidth >= 300 && panel.clientWidth < 640 && panel.clientHeight < 460);
       setCompactSummary(panel.clientWidth >= 640 && panel.clientHeight < 360);
     };
     const observer = new ResizeObserver(measure);
@@ -94,8 +92,8 @@ export default function ResultsPanel({ state, debrief, onReset, visible = true }
   return <section ref={panelRef} className={`flex h-full min-h-0 w-full flex-col gap-2 p-2 ${compactSummary ? "" : "sm:p-3"}`}>
     <div className="flex shrink-0 items-center justify-between gap-3">
       <div className="flex items-baseline gap-2">
-      <p className="text-[0.625rem] font-bold tracking-[0.2em] text-[#091f2c]">작전 최종 설명</p>
-      <h2 className="text-lg font-semibold text-[#091f2c]">결과</h2>
+        <p className="text-[0.625rem] font-bold tracking-[0.2em] text-[#091f2c]">작전 최종 설명</p>
+        <h2 className="text-lg font-semibold text-[#091f2c]">결과</h2>
       </div>
       {terminal && <button type="button" onClick={onReset}
         className={`pixel-button bg-[#ffd23f] px-4 text-sm font-semibold text-[#091f2c] ${compactSummary ? "py-1 leading-5" : "py-2"}`}>처음으로</button>}
@@ -109,61 +107,25 @@ export default function ResultsPanel({ state, debrief, onReset, visible = true }
       </p>}
       <div aria-hidden={insufficientSpace || undefined} inert={Boolean(insufficientSpace)}
         className={`flex h-full min-h-0 flex-col gap-2 ${insufficientSpace ? "invisible overflow-hidden" : ""}`}>
-      <div className="flex shrink-0 flex-col gap-2">
-      <div className={`pixel-panel flex w-full shrink-0 flex-col items-center bg-[#ffd23f] text-center ${compactSummary ? "px-2 py-1" : "px-3 py-2"}`}>
-        <p className="text-[0.625rem] font-bold leading-3 tracking-[0.2em] text-[#091f2c]">
-          {state.missionPhase === "aborted" ? "작전 중단"
-            : state.kind === "security" ? "112 신고 작전 종료"
-            : state.kind === "construction" ? "안전관리자 신고 작전 종료"
-            : "119 신고 작전 종료"}
-        </p>
-        <p className={`${compactSummary ? "text-lg leading-6" : "text-xl"} font-bold text-[#091f2c]`}>{score ? (state.kind === "security"
-          ? `${score.total}곳 중 ${score.caughtCount ?? 0}곳 확인`
-          : state.kind === "construction"
-          ? `${score.total}곳 중 ${score.violationsReportedCount ?? 0}곳 신고`
-            + ((score.violatorsFoundCount ?? 0) > (score.violationsReportedCount ?? 0)
-              ? ` (위반자 ${score.violatorsFoundCount}명)` : "")
-          // Triage now has exactly one real target hidden among false-alarm sites,
-          // so a "X명 중 Y명 신고" count reads as a fraction of many people rather
-          // than the single rescue this scenario actually is - report it as pass/fail.
-          : (score.reportedCount ?? 0) > 0 ? "구조 성공" : "구조 실패") : "결과 확인 중"}</p>
-      </div>
-      <div className="grid shrink-0 grid-cols-3 items-start gap-2">
-        {state.people.map((person) => {
-          const capture = person.captureId
-            ? state.captures.find((c) => c.id === person.captureId)
-            : undefined;
-          const violatorCount = capture?.evidence?.violatorCount;
-          return <article key={person.id} className={`pixel-panel min-w-0 [overflow-wrap:anywhere] ${compactSummary ? "p-1" : "p-1.5"}`}>
-          <div className={compactSummary ? "flex flex-wrap items-baseline gap-x-2" : undefined}>
-          <h3 className="text-xs font-semibold text-[#091f2c]">{MONITOR_MAP_BY_KIND[state.kind][person.monitorId].label}</h3>
-          <p className={`${compactSummary ? "" : "mt-1"} text-[0.6875rem] text-[#091f2c]`}>{person.label}</p>
-          </div>
-          <p className={`${compactSummary ? "mt-0.5" : "mt-1"} text-xs font-semibold text-[#091f2c]`}>
-            {person.outcome
-              ? (person.falseAlarm && ((state.kind === "security" && person.outcome === "escaped")
-                  || (state.kind === "triage" && person.outcome === "report_missed"))
-                ? (person.falseAlarmReveal ?? "오경보")
-                : state.kind === "security" ? SECURITY_OUTCOME_LABELS[person.outcome as "caught" | "escaped"]
-                : state.kind === "construction" ? CONSTRUCTION_OUTCOME_LABELS[person.outcome as "reported" | "not_found" | "unchecked"]
-                  + (person.outcome === "reported" && violatorCount && violatorCount > 1 ? ` (${violatorCount}명)` : "")
-                : OUTCOME_LABELS[person.outcome as "reported" | "reported_injured" | "report_missed"])
-              : "미해결 · 작전 중단"}
+        <div className="pixel-panel flex w-full shrink-0 flex-col items-center bg-[#ffd23f] text-center px-3 py-2">
+          <p className="text-[0.625rem] font-bold leading-3 tracking-[0.2em] text-[#091f2c]">
+            {state.missionPhase === "aborted" ? "작전 중단" : "119 신고 작전 종료"}
           </p>
-          </article>;
-        })}
-      </div>
-      </div>
-      <div className={`grid min-h-0 flex-1 items-start gap-2 ${state.userPromptText
-        ? (compactColumns ? "grid-cols-2 grid-rows-1" : "grid-cols-1 grid-rows-2 sm:grid-cols-2 sm:grid-rows-1")
-        : "grid-cols-1 grid-rows-1"}`}>
-        <ResultTextCard title="최종 작전 설명" label="최종 작전 설명"
-          text={debrief || "작전 결과를 정리하고 있어!"} compact={compactSummary}
-          sharedHeight={sharedHeight} onHeightChange={onHeightChange} onSpaceChange={onSpaceChange} />
-        {state.userPromptText && <ResultTextCard title="확정한 탐지 프롬프트" label="결과의 탐지 프롬프트"
-          text={state.userPromptText} compact={compactSummary}
-          sharedHeight={sharedHeight} onHeightChange={onHeightChange} onSpaceChange={onSpaceChange} />}
-      </div>
+          <p className={`${compactSummary ? "text-lg leading-6" : "text-xl"} font-bold text-[#091f2c]`}>
+            {score ? (score.reportedCount ?? 0) > 0 ? "구조 성공" : "구조 실패" : "결과 확인 중"}
+          </p>
+        </div>
+        <div className="min-h-0 flex-1">
+          <ResultTextCard
+            title={checkedMonitorLabel ? `확인한 지역 · ${checkedMonitorLabel}` : "최종 작전 설명"}
+            label="최종 작전 설명"
+            text={debrief || "작전 결과를 정리하고 있어!"}
+            compact={compactSummary}
+            sharedHeight={sharedHeight}
+            onHeightChange={onHeightChange}
+            onSpaceChange={onSpaceChange}
+          />
+        </div>
       </div>
     </div>}
   </section>;

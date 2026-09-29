@@ -27,6 +27,7 @@ class FakeAircraft(MockAdapter):
     # Exercise live protocol semantics with no flight imports or SDK transport.
     mode, live_ready = "live", True
     profile_id, site_revision = "test-site", "test-revision"
+    supported_ordered_sequences = [["tag-1"], ["tag-2"], ["tag-3"], ["tag-1", "tag-2", "tag-3"]]
 
     def __init__(self):
         self.arrive, self.finish, self.ground = (threading.Event() for _ in range(3))
@@ -130,17 +131,11 @@ class HttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.vision.calls, [])
         self.assertEqual(self.session.data["captures"], [])
         self.adapter.arrive.set()
-        await self.wait_for(lambda: len(self.session.data["captures"]) == 3)
-        # False-alarm sites only ever resolve via their deadline (never via
-        # detection). This test uses a real, non-advancing clock, so nudge
-        # it forward past both false-alarm deadlines once all 3 sites have
-        # actually been physically visited/captured.
-        self.fake_clock.advance(max(p["deadlineMs"] for p in self.session.data["people"]) + 1000)
+        await self.wait_for(lambda: len(self.session.data["captures"]) == 1)
         await self.wait_for(lambda: self.session.phase == "complete")
         self.assertEqual(self.count("drone_execute_route"), 1)
-        self.assertEqual([c["monitorId"] for c in self.session.data["captures"]],
-            ["monitor-3", "monitor-1", "monitor-2"])
-        self.assertEqual([c["visitIndex"] for c in self.session.data["captures"]], [0, 1, 2])
+        self.assertEqual([c["monitorId"] for c in self.session.data["captures"]], ["monitor-3"])
+        self.assertEqual([c["visitIndex"] for c in self.session.data["captures"]], [0])
         self.assertTrue(all(c["missionId"] == self.session.data["droneMissionId"] for c in self.session.data["captures"]))
         self.assertTrue(all(frame.image_bytes == png() for frame, _ in self.vision.calls))
         self.adapter.finish.set()

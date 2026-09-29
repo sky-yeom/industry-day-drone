@@ -57,7 +57,7 @@ send({type:"drain",id:"single-block"});
 assert.equal(playback.port.messages.filter(m=>m.id==="single-block").length,0,
              "queued PCM must not report playback");
 playback.process([], [[new Float32Array(128)]]);
-assert.deepEqual(playback.port.messages.filter(m=>m.id==="single-block").map(m=>m.type), ["started","drained"]);
+assert.deepEqual(playback.port.messages.filter(m=>m.id==="single-block").map(m=>m.type), ["started","ended","drained"]);
 
 const held = new processors["playback-processor"]();
 const hold = data=>held.port.onmessage({data});
@@ -110,7 +110,7 @@ const afterMap=new Float32Array(960);
 prefetched.process([],[[afterMap]]);
 assert.deepEqual([...afterMap],Array.from(briefing,sample=>sample/32768),
   "the first eligible render emits the full retained PCM without another delay");
-assert.deepEqual(prefetched.port.messages.filter(m=>m.id==="briefing").map(m=>m.type),["started","drained"]);
+assert.deepEqual(prefetched.port.messages.filter(m=>m.id==="briefing").map(m=>m.type),["started","ended","drained"]);
 prefetch({type:"hold",id:"obsolete"});
 prefetch({type:"push",id:"obsolete",pcm:new Int16Array([9000])});
 prefetch({type:"discard",ids:["obsolete"]});

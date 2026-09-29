@@ -38,7 +38,7 @@ _SCHEMA_PATH = (Path(__file__).resolve().parents[1] / "drone-control"
 _SCHEMAS = {tool["name"]: tool["parameters"]
             for tool in json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))}
 _DESTINATIONS = ("tag-1", "tag-2", "tag-3")
-_ROUTES = tuple(itertools.permutations(_DESTINATIONS))
+_ROUTES = tuple((destination,) for destination in _DESTINATIONS) + tuple(itertools.permutations(_DESTINATIONS))
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")
 _BASE = dict(contract_version=CONTRACT_VERSION, schema_version=1,
              execution_mode="mock", physical_execution=False)
@@ -268,7 +268,7 @@ class ContractMockTransport:
                 mission["state"] = "taking_off"
         elif index == 2:
             mission["state"] = "running"
-        elif index < 15:
+        elif index < 3 + 4 * len(mission["visits"]):
             visit_index, action = divmod(index - 3, 4)
             visit = mission["visits"][visit_index]
             if action == 0:
@@ -301,7 +301,7 @@ class ContractMockTransport:
                 mission["captures"].append(capture)
                 visit["capture_ids"].append(capture["capture_id"])
                 visit["state"] = "captured"
-        elif index == 15:
+        elif index == 3 + 4 * len(mission["visits"]):
             mission["state"] = "returning"
         else:
             mission["visited_ids"].append(6)
@@ -311,7 +311,7 @@ class ContractMockTransport:
 
     def _advance(self, now):
         # Process deadlines chronologically, including expiry before a late read.
-        # At most 17 route steps and stop/landing events exist per active mission.
+        # Route steps scale with the accepted sequence length, plus stop/landing events.
         while self._current is not None:
             runtime = self._runtime
             events = [(at, priority, name) for priority, (name, at) in enumerate((
@@ -403,7 +403,7 @@ class ContractMockTransport:
             if args["profile_id"] != PROFILE_ID or args["site_revision"] != SITE_REVISION:
                 _fail("SITE_MISMATCH", "Read current capabilities before execution")
             if tuple(args["destination_ids"]) not in _ROUTES:
-                _fail("UNSUPPORTED_ROUTE", "Visit each registered destination exactly once")
+                _fail("UNSUPPORTED_ROUTE", "Use one supported ordered sequence from capabilities")
             if self._current is not None:
                 _fail("MISSION_BUSY", "Current mission has not finished simulated landing")
             if len(self._missions) >= self.max_missions:

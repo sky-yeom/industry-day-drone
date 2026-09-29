@@ -53,7 +53,7 @@ class Backend:
         if name == "drone_get_capabilities":
             value = live_response(live_ready=True, profile_id="site-v1", site_revision="rev-1",
                 destinations=[dict(destination_id=f"tag-{n}", monitor_id=f"monitor-{n}") for n in (1, 2, 3)],
-                supported_ordered_sequences=[["tag-3", "tag-1", "tag-2"]])
+                supported_ordered_sequences=[["tag-1"], ["tag-2"], ["tag-3"], ["tag-3", "tag-1", "tag-2"]])
             value["execution_mode"] = self.execution_mode
             return value
         if name == "drone_get_status":
@@ -147,7 +147,7 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.session.data["error"])
         self.assertEqual(len(self.commands("drone_execute_route")), 1)
         self.assertEqual(self.commands("drone_execute_route")[0][1]["arguments"]["destination_ids"],
-                         ["tag-3", "tag-1", "tag-2"])
+                         ["tag-3"])
 
     async def test_blinking_flight_controller_is_waited_out_not_refused(self):
         """The phone's key handler drops for seconds at a time and heals itself."""
@@ -221,9 +221,9 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
         from relay.appearance import REVISION_REQUEST
         from relay.vision import PromptRevisionRequired
         self.backend.arrived = True
-        self.vision.results = [PromptRevisionRequired(REVISION_REQUEST) for _ in range(3)]
+        self.vision.results = [PromptRevisionRequired(REVISION_REQUEST)]
         self.assertTrue((await self.runner.launch())["ok"])
-        await settle(lambda: len(self.vision.calls) == 3)
+        await settle(lambda: len(self.vision.calls) == 1)
         # A cloud verdict says nothing about the aircraft, so the route that ends
         # on its own landing pad is never taken away from it mid-air.
         self.assertEqual(self.commands("drone_stop_mission"), [])
@@ -231,7 +231,7 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(self.session.phase, "aborted")
         self.assertIsNone(self.session.data["droneErrorCode"])
         captures = self.session.data["captures"]
-        self.assertEqual([capture["status"] for capture in captures], ["captured"] * 3)
+        self.assertEqual([capture["status"] for capture in captures], ["captured"])
         self.assertTrue(all(capture["evidence"] is None for capture in captures))
         self.assertTrue(all(REVISION_REQUEST in capture["analysisNote"] for capture in captures))
         # No verdict means no outcome: nobody is claimed found and nobody written off.
@@ -240,7 +240,6 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
     async def test_whole_route_once_waits_for_actual_arrival_and_matching_frames(self):
         self.vision.results = [
             {"targetPresent": True, "description": "초록색 티셔츠와 갈색 머리의 남성이 보입니다.", "box": None, "confidence": 90}
-            for _ in range(3)
         ]
         first, second = await asyncio.gather(self.runner.launch(), self.runner.launch())
         self.assertTrue(first["ok"] and second["ok"])
@@ -248,18 +247,16 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.data["captures"], [])
         self.assertEqual(self.vision.calls, [])
         self.assertEqual(len(self.commands("drone_execute_route")), 1)
-        self.assertEqual(self.commands("drone_execute_route")[0][1]["arguments"]["destination_ids"], ["tag-3", "tag-1", "tag-2"])
+        self.assertEqual(self.commands("drone_execute_route")[0][1]["arguments"]["destination_ids"], ["tag-3"])
         self.backend.arrived = True
-        await settle(lambda: len(self.session.data["captures"]) == 3)
-        self.clock.advance(max(p["deadlineMs"] for p in self.session.data["people"]) + 1000)
+        await settle(lambda: len(self.session.data["captures"]) == 1)
         await settle(lambda: self.session.phase == "complete")
-        self.assertEqual([c["monitorId"] for c in self.session.data["captures"]], ["monitor-3", "monitor-1", "monitor-2"])
-        self.assertEqual([c["visitIndex"] for c in self.session.data["captures"]], [0, 1, 2])
+        self.assertEqual([c["monitorId"] for c in self.session.data["captures"]], ["monitor-3"])
+        self.assertEqual([c["visitIndex"] for c in self.session.data["captures"]], [0])
         self.assertTrue(all(c["evidence"]["box"] is None for c in self.session.data["captures"]))
         self.assertEqual(self.vision.scene_contexts, [
-            {"monitor_id": monitor, "label": self.session.person(monitor)["label"],
-             "report": self.session.person(monitor)["clue"]}
-            for monitor in ("monitor-3", "monitor-1", "monitor-2")
+            {"monitor_id": "monitor-3", "label": self.session.person("monitor-3")["label"],
+             "report": self.session.person("monitor-3")["clue"]}
         ])
         self.assertTrue(all(frame.image_bytes == png() for frame, _ in self.vision.calls))
         self.assertEqual(self.session.data["droneStopState"], "not_requested")
@@ -274,7 +271,6 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
         self.vision.results = [NEGATIVE]
         await self.runner.launch()
         await settle(lambda: self.session.person("monitor-3")["outcome"] == "reported")
-        self.clock.advance(max(p["deadlineMs"] for p in self.session.data["people"]) + 1000)
         await settle(lambda: self.session.phase == "complete")
         self.assertEqual([f.id for f, _ in self.vision.calls][:2], ["frame-0-0", "frame-0-1"])
         self.assertEqual(len(self.commands("drone_execute_route")), 1)
@@ -288,7 +284,6 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([f.id for f, _ in self.vision.calls], ["frame-0-0"])
         self.backend.frames_per_visit = 2
         await settle(lambda: self.session.person("monitor-3")["outcome"] == "reported")
-        self.clock.advance(max(p["deadlineMs"] for p in self.session.data["people"]) + 1000)
         await settle(lambda: self.session.phase == "complete")
         self.assertEqual([f.id for f, _ in self.vision.calls][:2], ["frame-0-0", "frame-0-1"])
         self.assertEqual(len(self.commands("drone_execute_route")), 1)
@@ -311,19 +306,14 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.data["droneStopState"], "stop_requested")
         self.assertEqual(self.session.phase, "aborted")
 
-    async def test_deadline_ends_scoring_but_lets_the_aircraft_land_itself_first(self):
-        await self.runner.launch()
-        self.clock.advance(60000)
-        await settle(lambda: self.session.phase == "complete")
-        # The rescue clock ran out on the people, not on the aircraft. Cutting its
-        # authority here would strand it hovering indoors, so it keeps the route
-        # that ends on its landing pad and the debrief waits for that landing.
-        self.assertEqual(self.commands("drone_stop_mission"), [])
-        self.assertFalse(self.runner._deadlines.done())
-        self.assertEqual([event for event in self.events if event["type"] == "mission.debrief"], [])
+    async def test_completion_waits_for_physical_landing_before_debrief(self):
         self.backend.arrived = True
+        await self.runner.launch()
+        await settle(lambda: self.session.phase == "complete")
+        self.assertEqual(self.commands("drone_stop_mission"), [])
+        self.assertEqual([event for event in self.events if event["type"] == "mission.debrief"], [])
         self.backend.mission.update(state="completed")
-        await settle(lambda: self.runner._deadlines.done())
+        await settle(lambda: any(event["type"] == "mission.debrief" for event in self.events))
         self.assertEqual(self.commands("drone_stop_mission"), [])
         self.assertEqual(self.session.phase, "complete")
         self.assertEqual(len([event for event in self.events if event["type"] == "mission.debrief"]), 1)

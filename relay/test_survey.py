@@ -1,4 +1,3 @@
-import itertools
 from types import SimpleNamespace
 import unittest
 
@@ -35,16 +34,12 @@ def capture(monitor="monitor-1", id="frame-1", image_bytes=b"pixels"):
 
 
 def confirm_all(session, prompt_args=PROMPT_ARGS):
-    """Confirm the shared target description once — all scenario kinds
-    (triage/security/construction) now apply a single confirm_prompt call
-    to every site at once, so no per-site looping is needed."""
     return session.confirm_prompt(**prompt_args)
 
 
-def ready(session, route=("monitor-3", "monitor-1", "monitor-2")):
+def ready(session, route=("monitor-3",)):
     confirm_all(session)
     session.select_stop(route[0])
-    session.select_stop(route[1])
     session.confirm_route()
 
 
@@ -66,11 +61,9 @@ class SurveyTests(unittest.TestCase):
         self.assertFalse(s.launch_mission()["ok"])
         confirm_all(s, {"prompt_text": SEARCH_PROMPT})
         self.assertFalse(s.select_stop(["monitor-1"])["ok"])
-        self.assertFalse(s.select_stop("불난 집")["ok"])
         self.assertTrue(s.select_stop("monitor-3")["ok"])
         self.assertFalse(s.select_stop("monitor-3")["ok"])
-        s.select_stop("monitor-2")
-        self.assertEqual(s.state.draftRoute, ["monitor-3", "monitor-2", "monitor-1"])
+        self.assertEqual(s.state.draftRoute, ["monitor-3"])
         self.assertEqual(s.phase, "briefing")
         s.confirm_route()
         self.clock.advance(99999)
@@ -109,7 +102,7 @@ class SurveyTests(unittest.TestCase):
         self.assertEqual(s.snapshot()["userPromptText"], "")
         self.assertEqual(s.snapshot()["promptPhase"], "briefing")
         self.assertFalse(s.select_stop("monitor-3")["ok"])
-        s.state.draftRoute = ["monitor-3", "monitor-2", "monitor-1"]
+        s.state.draftRoute = ["monitor-3"]
         self.assertFalse(s.confirm_route()["ok"])
         s.data["missionPhase"] = "ready"
         self.assertFalse(s.launch_mission()["ok"])
@@ -123,7 +116,6 @@ class SurveyTests(unittest.TestCase):
         self.assertTrue(s.select_stop("monitor-3")["ok"])
         self.assertFalse(s.confirm_prompt("이미 확인했는데 다시")["ok"])
         self.assertTrue(all(p["outcome"] is None for p in s.data["people"]))
-        s.select_stop("monitor-2")
         s.confirm_route()
         s.launch_mission()
         self.assertFalse(s.confirm_prompt("출발 후 변경")["ok"])
@@ -141,10 +133,6 @@ class SurveyTests(unittest.TestCase):
                 self.assertFalse(session.select_stop("monitor-1")["ok"])
 
     def test_mock_ignores_unassessable_extras_but_azure_keeps_visual_text(self):
-        """Extra descriptors the mock vision engine can't verify (e.g. glasses)
-        no longer block prepare/confirm_prompt in mock mode — only the
-        recognizable color/garment/hair signal is used for matching, and
-        the raw text (including the unassessable part) is still recorded."""
         mock, azure = SurveySession(), SurveySession(mode="azure")
         self.assertTrue(mock.prepare_prompt("안경 쓴 사람", [], ["안경"])["ok"])
         self.assertTrue(mock.confirm_prompt("초록색 옷과 안경을 쓴 사람")["ok"])
@@ -157,7 +145,7 @@ class SurveyTests(unittest.TestCase):
         from relay import tools
 
         self.assertEqual(tools.GREETING,
-                         "안녕! 난 Gibby야! 너는 119 종합상황실 소속 상황요원이고, 방금 익명 문자로 사진이랑 같이 위급 신고가 "
+                         "안녕! 난 Gibby야! 너는 일일구 종합상황실 소속 상황요원이고, 방금 익명 문자로 사진이랑 같이 위급 신고가 "
                          "들어왔어. 바다, 잔해 아래, 불이 난 집, 이렇게 세 곳에서 신고가 들어왔는데 드론은 한 대뿐이라 한 곳씩만 "
                          "확인할 수 있어. 그중 두 곳은 오인 신고고 한 곳에만 실제로 사람이 있어. 네가 오더만 내려주면 내가 드론 "
                          "보낼게! 먼저 찾는 사람이 어떤 모습인지 말해줄 수 있어?")
@@ -171,7 +159,8 @@ class SurveyTests(unittest.TestCase):
             self.assertNotIn(person["clue"], tools.GREETING)
             self.assertNotIn(person["clue"], rejected["facts"])
             self.assertIn(person["clue"], confirmed["facts"])
-        self.assertIn("설명한 뒤", confirmed["ask"])
+        self.assertIn("한 곳만", confirmed["ask"])
+        self.assertNotIn("추천 순서", confirmed["facts"])
 
     def test_wrong_appearance_is_saved_without_correcting_or_blocking_route(self):
         wrong = [{"attribute": "hairColor", "operator": "include", "values": ["blond"]}]
@@ -180,7 +169,6 @@ class SurveyTests(unittest.TestCase):
         self.assertEqual(self.session.data["userPromptText"], "금발인 사람을 찾아줘")
         self.assertEqual(self.session.data["appearanceConstraints"], wrong)
         self.assertEqual(self.session.person("monitor-1")["appearanceConstraints"], wrong)
-        confirm_all(self.session)
         self.assertTrue(self.session.select_stop("monitor-3")["ok"])
         self.assertTrue(all(person["outcome"] is None for person in self.session.data["people"]))
 
@@ -196,10 +184,8 @@ class SurveyTests(unittest.TestCase):
         self.assertEqual(outcome["confidence"], s.data["promptConfidence"])
         self.assertEqual(outcome["confidenceReason"], s.data["promptConfidenceReason"])
         self.assertNotIn("확신도", outcome["facts"])
-        # Fewer confirmed appearance attributes and an unsupported clause both
-        # push the confidence for finding the right person down.
         weaker = SurveySession(mode="azure")
-        weaker.confirm_prompt("안경 쓴 사람을 찾아줘", [], ["안경"], )
+        weaker.confirm_prompt("안경 쓴 사람을 찾아줘", [], ["안경"])
         self.assertLess(weaker.data["promptConfidence"], s.data["promptConfidence"])
 
     def test_invalid_appearance_does_not_confirm_prompt(self):
@@ -217,30 +203,30 @@ class SurveyTests(unittest.TestCase):
 
     def test_debrief_uses_gibby_tone_without_changing_results(self):
         for mode in ("mock", "azure"):
-            for rescued in (True, False):
-                with self.subTest(mode=mode, rescued=rescued):
+            for monitor, rescued in (("monitor-3", True), ("monitor-1", False), ("monitor-3", False)):
+                with self.subTest(mode=mode, monitor=monitor, rescued=rescued):
                     clock = Clock()
                     session = SurveySession(mode=mode, clock=clock)
-                    ready(session)
+                    ready(session, (monitor,))
                     session.launch_mission()
                     if rescued:
-                        detect(session, "monitor-3", POSITIVE)
-                    clock.advance(50000)
-                    session.expire()
-                    text = session.debrief()
-                    real_label = session.labels["monitor-3"]
-                    if rescued:
-                        self.assertIn(f"실제 사람이 있던 {real_label}에서 시간 안에 위치를 119에 신고해서 구조로 이어졌어.", text)
-                        self.assertIn("확신도", text)
+                        detect(session, monitor, POSITIVE)
                     else:
-                        self.assertIn(f"실제 사람이 있던 {real_label}을(를) 시간 안에 확인하지 못해서 신고 시한을 놓쳤어.", text)
-                    for person in session.data["people"]:
-                        if person.get("falseAlarm"):
-                            self.assertIn(person["falseAlarmReveal"], text)
+                        detect(session, monitor, POSITIVE if monitor != "monitor-3" else NEGATIVE)
+                        if monitor == "monitor-3":
+                            detect(session, monitor, NEGATIVE, "frame-2")
+                    text = session.debrief()
+                    if rescued:
+                        self.assertIn("일일구에 위치를 신고했어", text)
+                        self.assertIn("확신도", text)
+                    elif monitor == "monitor-1":
+                        self.assertIn(session.person("monitor-1")["falseAlarmReveal"], text)
+                    else:
+                        self.assertIn("끝내 확인하지 못했어", text)
                     self.assertIn("모의 분석" if mode == "mock" else "Azure 이미지 분석", text)
                     self.assertIn("가상 훈련이야.", text)
-                    self.assertIn("우리가 고른 확인 순서는", text)
-                    self.assertNotRegex(text, r"했습니다|입니다|되었습니다")
+                    self.assertNotIn("우리가 고른 확인 순서는", text)
+                    self.assertNotRegex(text.split("\n\n")[0], r"했습니다|입니다|되었습니다")
 
     def test_aborted_debrief_stays_friendly_without_inventing_outcomes(self):
         session = SurveySession()
@@ -250,112 +236,45 @@ class SurveyTests(unittest.TestCase):
         self.assertIn("찾는 사람을 구조했는지는 아직 알 수 없어.", text)
         self.assertNotIn("신고했어", text)
 
-    def test_all_six_route_permutations(self):
-        outcomes = {}
-        for route in itertools.permutations(MONITOR_IDS):
-            with self.subTest(route=route):
-                clock = Clock()
-                s = SurveySession(clock=clock)
-                ready(s, route)
-                s.launch_mission()
-                for i, monitor in enumerate(route):
-                    s.expire()
-                    if s.person(monitor)["outcome"]:
-                        continue
-                    clock.advance(sum(SCENARIO[k] for k in ("travelMs", "captureMs", "mockAnalysisMs")))
-                    detect(s, monitor, frame_id=f"frame-{i}")
-                clock.advance(max(person["deadlineMs"] for person in SCENARIO["people"]))
-                s.expire()
-                self.assertEqual(s.phase, "complete")
-                outcomes[route] = s.person("monitor-3")["outcome"]
-                self.assertEqual(s.data["score"]["falseAlarmCount"], 2)
-                self.assertLessEqual(s.data["score"]["reportedCount"], 1)
-        # monitor-3 (the real target) has the tightest deadline (24000ms); each
-        # stop costs travelMs+captureMs+mockAnalysisMs=10000ms sequentially, so
-        # it's only reachable in time as the 1st or 2nd stop of the route —
-        # visited 3rd it always arrives after its deadline has already passed.
-        for route, outcome in outcomes.items():
-            position = route.index("monitor-3")
-            expected = "reported" if position <= 1 else "report_missed"
-            self.assertEqual(outcome, expected, route)
-
-    def test_deadline_boundary_for_real_target_and_false_alarms_never_reported(self):
-        for monitor, ms, outcome in (
-            ("monitor-3", 23999, "reported"),
-            ("monitor-3", 24000, "report_missed"),
-            # False-alarm sites can never become "reported" no matter what a
-            # (mismatched) positive detection claims — a positive here
-            # resolves them as report_missed immediately instead of waiting
-            # on their own deadline, since the automatic recapture loop
-            # would not check them again anyway.
-            ("monitor-1", 29999, "report_missed"),
-            ("monitor-2", 39999, "report_missed"),
+    def test_single_stop_success_and_failure(self):
+        for monitor, evidence, expected in (
+            ("monitor-3", POSITIVE, "reported"),
+            ("monitor-1", POSITIVE, "report_missed"),
         ):
-            with self.subTest(monitor=monitor, ms=ms):
+            with self.subTest(monitor=monitor):
                 clock = Clock()
                 s = SurveySession(clock=clock)
-                ready(s)
+                ready(s, (monitor,))
                 s.launch_mission()
-                clock.advance(ms)
-                detect(s, monitor)
-                self.assertEqual(s.person(monitor)["outcome"], outcome)
+                detect(s, monitor, evidence)
+                self.assertEqual(s.phase, "complete")
+                self.assertEqual(s.person(monitor)["outcome"], expected)
+                self.assertEqual(s.data["score"]["total"], 1)
+                self.assertEqual(s.data["score"]["falseAlarmCount"], int(s.person(monitor).get("falseAlarm", False)))
 
-    def test_strict_deadline_and_late_analysis(self):
-        for ms in (23999, 24000, 24001):
-            with self.subTest(ms=ms):
-                clock = Clock()
-                s = SurveySession(clock=clock)
-                ready(s)
-                s.launch_mission()
-                s.set_operation("capturing", "monitor-3", s.run_id)
-                s.add_capture(capture("monitor-3"), s.run_id)
-                s.analyzing("frame-1", s.run_id)
-                clock.advance(ms)
-                s.apply_detection(s.run_id, "frame-1", POSITIVE)
-                self.assertEqual(s.person("monitor-3")["outcome"],
-                                 "reported" if ms < 24000 else "report_missed")
-
-    def test_negative_arrival_and_unanswered_only_expire_at_deadline(self):
+    def test_negative_recapture_marks_selected_site_missed(self):
         s = self.session
         ready(s)
         s.launch_mission()
-        s.set_operation("flying", "monitor-3", s.run_id)
-        self.assertIsNone(s.person("monitor-3")["outcome"])
         detect(s, "monitor-3", NEGATIVE)
+        self.assertIsNone(s.person("monitor-3")["outcome"])
         detect(s, "monitor-3", NEGATIVE, "frame-2")
         self.assertEqual(s.person("monitor-3")["attempts"], 2)
-        self.assertIsNone(s.person("monitor-3")["outcome"])
-        self.clock.advance(24000)
-        s.expire()
         self.assertEqual(s.person("monitor-3")["outcome"], "report_missed")
-        self.assertIsNone(s.person("monitor-1")["outcome"])
-        self.assertIsNone(s.data["score"])
-        self.clock.advance(16000)
-        s.expire()
-        self.assertEqual(s.data["score"]["reportMissedCount"], 3)
-        self.assertEqual(s.data["score"]["falseAlarmCount"], 2)
+        self.assertEqual(s.data["score"]["reportMissedCount"], 1)
 
-    def test_deadline_or_abort_releases_pending_analysis_without_fabricating_evidence(self):
-        for ending in ("deadline", "abort"):
-            with self.subTest(ending=ending):
-                clock = Clock()
-                session = SurveySession(clock=clock)
-                ready(session)
-                session.launch_mission()
-                session.set_operation("capturing", "monitor-1", session.run_id)
-                session.add_capture(capture("monitor-1"), session.run_id)
-                session.analyzing("frame-1", session.run_id)
-                if ending == "deadline":
-                    clock.advance(45000)
-                    session.expire()
-                    self.assertEqual(session.data["score"]["reportMissedCount"], 3)
-                else:
-                    session.abort_mission()
-                    self.assertIsNone(session.data["score"])
-                self.assertEqual(session.data["captures"][-1]["status"], "captured")
-                self.assertIsNone(session.data["captures"][-1]["evidence"])
-                self.assertIsNone(session._active_capture)
-                self.assertFalse(session.apply_detection(session.run_id, "frame-1", POSITIVE))
+    def test_abort_releases_pending_analysis_without_fabricating_evidence(self):
+        session = SurveySession(clock=Clock())
+        ready(session)
+        session.launch_mission()
+        session.set_operation("capturing", "monitor-1", session.run_id)
+        session.add_capture(capture("monitor-1"), session.run_id)
+        session.analyzing("frame-1", session.run_id)
+        session.abort_mission()
+        self.assertEqual(session.data["captures"][-1]["status"], "captured")
+        self.assertIsNone(session.data["captures"][-1]["evidence"])
+        self.assertIsNone(session._active_capture)
+        self.assertFalse(session.apply_detection(session.run_id, "frame-1", POSITIVE))
 
     def test_pause_excludes_only_error_wait_and_abort_has_no_fake_outcomes(self):
         s = self.session
@@ -419,7 +338,7 @@ class SurveyTests(unittest.TestCase):
                     "appearanceConstraints", "unsupportedAppearance", "promptConfidence",
                     "promptConfidenceReason", "droneControlMode", "droneStopState",
                     "droneErrorCode", "droneState", "activeVisitIndex", "droneMissionId",
-                    "dangerOrder", "vulnerableAdjustedOrder", "kind"}
+                    "kind"}
         self.assertEqual(set(snapshot), expected)
         snapshot["people"][0]["outcome"] = "reported"
         self.assertIsNone(s.person("monitor-1")["outcome"])

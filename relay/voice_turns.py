@@ -331,7 +331,7 @@ class VoiceTurns:
                 return self.reject("stop_mismatch", "참가자의 이번 답변에서 그 목적지를 확인하지 못했습니다. 목적지를 대신 고르지 말고 다시 물어보세요.")
         elif name == "launch_mission":
             if not is_affirmative(turn.text) or not turn.route_readback_done:
-                return self.reject("departure_not_confirmed", "경로 안내 뒤 새로운 출발 동의를 받아야 합니다. 출발하지 말고 답을 기다리세요.",
+                return self.reject("departure_not_confirmed", "출발 전 새로운 동의를 받아야 합니다. 출발하지 말고 답을 기다리세요.",
                                     name=name, session=session, question_id=tuple(session.state.confirmedRoute))
         return None
 

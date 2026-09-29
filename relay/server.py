@@ -11,7 +11,6 @@ from uuid import uuid4
 
 import uvicorn
 import websockets
-from azure.identity.aio import DefaultAzureCredential
 from azure.core.exceptions import AzureError
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,7 +20,7 @@ from websockets.exceptions import WebSocketException
 
 try:
     from . import config, tools
-    from .survey import SurveySession, SCENARIOS_BY_KIND
+    from .survey import SurveySession
     from .mission_runner import MissionRunner
     from .live_mission import LiveMissionRunner
     from .drone_client import DroneClient, DroneError
@@ -37,7 +36,7 @@ try:
 except ImportError:
     import config
     import tools
-    from survey import SurveySession, SCENARIOS_BY_KIND
+    from survey import SurveySession
     from mission_runner import MissionRunner
     from live_mission import LiveMissionRunner
     from drone_client import DroneClient, DroneError
@@ -129,6 +128,7 @@ async def validate_transport_configuration():
 def credential():
     global _credential
     if _credential is None:
+        from azure.identity.aio import DefaultAzureCredential
         _credential = DefaultAzureCredential(process_timeout=30)
     return _credential
 
@@ -743,15 +743,6 @@ class Bridge:
                     "새 답변을 기다리고 도구는 호출하지 마세요.\n참가자 설명: "
                     + json.dumps(self.session.pending_prompt["prompt_text"], ensure_ascii=False),
                 })
-            if self._route_readback_pending and self.session.phase == "ready":
-                response["response"] = {
-                    "tool_choice": "none",
-                    "metadata": {"routeReadback": "true", "runId": self.session.run_id},
-                    "instructions": tools.SYSTEM_PROMPT_BY_KIND[self.session.kind]
-                    + "\n이번 응답에서는 아래 전체 경로를 빠짐없이 읽고 '이 경로로 출발할까?'라고 물어보세요. "
-                    "아직 출발하지 않았습니다. 질문 뒤에는 말을 멈추고 참가자의 새 답변을 기다리세요.\n"
-                    + self._route_readback_facts,
-                }
             if self._confidence_narration_pending:
                 self._confidence_narration_pending = False
                 response["response"] = {
@@ -774,9 +765,25 @@ class Bridge:
                     "instructions": tools.voice_context(self.session)["instructions"]
                     + "\n이번 응답에서는 아래 세 현장의 신고 내용을 모두 설명한 뒤 첫 목적지만 물어보세요. "
                     "참가자의 외형 설명을 다시 읽거나 특징 힌트, 우선순위, 추천 경로를 덧붙이지 마세요. "
-                    "목적지를 대신 고르거나 도구를 호출하지 말고 답변을 기다리세요.\n"
+                    "목적지를 대신 고르거나 도구를 호출하지 말고 답변을 기다리세요. "
+                    "이 응답은 질문으로 끝나야 하며, '출발한다', '출발할게', '가서 살펴볼게', '신고할게' 같은 "
+                    "출발·비행 안내는 절대 포함하지 마세요. 참가자가 아직 답하지 않았으므로 출발을 먼저 말하면 "
+                    "안 됩니다.\n"
                     + self._route_intro_facts,
                 }
+            # `elif` (not a bare `if`) so a launch that becomes pending in the
+            # same flush as an unset route-intro/confidence response never
+            # clobbers it — otherwise the "3 calls" narration is silently
+            # replaced by the departure line and never actually gets spoken.
+            elif self._launch_pending:
+                response["response"] = {
+                    "instructions": tools.SYSTEM_PROMPT
+                    + "\n이번 응답에서는 다음 두 문장만 그대로 말하고 끝내세요: "
+                    + tools.DEPARTURE_ANNOUNCEMENT + " 추가 설명, 질문, 도구 호출은 하지 마세요.",
+                    "tool_choice": "none",
+                    "metadata": {"missionLaunch": "true", "runId": self.session.run_id},
+                }
+                self._launch_attempts += 1
             if self._debrief_pending:
                 self._debrief_attempts += 1
                 response.setdefault("response", {})["metadata"] = {
@@ -788,15 +795,6 @@ class Bridge:
                     "위 결과 사실에서 신고 인원, 부상 인원, 시한 초과를 Gibby의 다정하고 자연스러운 반말로 짧게 요약하고 끝내세요. "
                     "신고하지 못한 결과를 과장해서 칭찬하거나 확인되지 않은 결과를 덧붙이지 마세요. "
                     "프롬프트를 다시 묻거나 다음 행동을 질문하지 마세요.")
-            if self._launch_pending:
-                response["response"] = {
-                    "instructions": tools.SYSTEM_PROMPT_BY_KIND[self.session.kind]
-                    + "\n이번 응답에서는 다음 두 문장만 그대로 말하고 끝내세요: "
-                    + tools.DEPARTURE_ANNOUNCEMENT_BY_KIND[self.session.kind] + " 추가 설명, 질문, 도구 호출은 하지 마세요.",
-                    "tool_choice": "none",
-                    "metadata": {"missionLaunch": "true", "runId": self.session.run_id},
-                }
-                self._launch_attempts += 1
             self._last_response = response
             self._narration.clear()
             self._response_requested = False
@@ -950,10 +948,6 @@ class Bridge:
                     self._prompt_readback_pending = False
                     self.voice_turns.begin_prompt_readback(response.get("id"), self.session.pending_prompt_revision)
                 self.trace_voice("response", response_id=response.get("id"), prompt_readback=bool(metadata.get("promptReadback")))
-                if (metadata.get("routeReadback") == "true" and metadata.get("runId") == self.session.run_id
-                        and self.session.phase == "ready"):
-                    self._route_readback_pending = False
-                    self.voice_turns.begin_route_readback(response.get("id"), self.session)
                 if metadata.get("missionLaunch") == "true" and metadata.get("runId") == self.session.run_id:
                     self._launch_pending = False
                     self._launch_response_id = response.get("id")
@@ -1105,6 +1099,9 @@ class Bridge:
                         and response.get("id") == self._confidence_narration_response_id):
                     self._confidence_narration_response_id = None
                     self._response_requested = True
+                    await self.send_browser({
+                        "type": "confidence_narration.done", "runId": self.session.run_id,
+                        "responseId": response.get("id")})
                 if (self._route_intro_id and self._route_intro_response_id
                         and response.get("id") == self._route_intro_response_id):
                     if response.get("status") != "completed":
@@ -1211,17 +1208,10 @@ class Bridge:
                 self._prompt_readback_pending = True
             if name == "confirm_prompt" and not outcome["ok"] and self.session.pending_prompt:
                 self._prompt_readback_pending = True
-            if name == "confirm_route" and outcome["ok"] and not self._route_readback_facts:
-                self.voice_turns.prepare_route()
-                self._route_readback_facts = outcome["facts"]
-                self._route_readback_pending = True
             if name in {"clear_route", "select_stop", "confirm_prompt"} and outcome["ok"]:
                 self._route_readback_facts = ""
                 self._route_readback_pending = False
                 self.voice_turns.prepare_route()
-            if name == "launch_mission" and not outcome["ok"] and self.session.phase == "ready":
-                self._route_readback_facts = self.session.get_state()["facts"]
-                self._route_readback_pending = True
             if name == "launch_mission" and outcome["ok"] and self.upstream and not self.departure_started:
                 self.retire_route_intro()
                 self._launch_pending = True
@@ -1272,10 +1262,13 @@ class Bridge:
             else:
                 outcome = await self.run_tool(name, args, call_id, from_voice=True, turn=turn,
                                               response_id=event.get("response_id"))
-            if outcome["ok"] and name == "select_stop" and len(self.session.state.draftRoute) == 3:
-                # Preparing the completed route is automatic; departure still needs a new reply.
+            if outcome["ok"] and name == "select_stop" and len(self.session.state.draftRoute) == 1:
+                # Picking one location goes straight into the flight; no separate departure agreement is asked for.
                 outcome = await self.run_tool("confirm_route", {}, f"{call_id}:confirm-route",
                                               turn=turn, response_id=event.get("response_id"))
+                if outcome["ok"]:
+                    outcome = await self.run_tool("launch_mission", {}, f"{call_id}:launch-mission",
+                                                  turn=turn, response_id=event.get("response_id"))
             if self.upstream and not self._voice_stopped:
                 async with self._tool_lock:
                     await self.upstream.send(json.dumps({
@@ -1391,7 +1384,7 @@ class Bridge:
         if self.upstream and not self._greet_requested:
             self._greet_requested = True
             self._greeting_pending = True
-            greeting = tools.GREETING_BY_KIND[self.session.kind]
+            greeting = tools.GREETING
             await self.request_response(
                 "이번은 고정된 첫 인사입니다. 아래 '읽을 문장'을 마지막 물음표까지 한 글자도 빠짐없이, "
                 "처음부터 끝까지 정확히 그대로 읽으세요. 마지막 문장은 반드시 '읽을 문장'에 적힌 그대로의 질문으로 "
@@ -1440,10 +1433,7 @@ async def ws_endpoint(browser: WebSocket):
         await browser.accept(subprotocol=protocol)
     else:
         await browser.accept()
-    scenario_kind = browser.query_params.get("scenario", "triage")
-    if scenario_kind not in SCENARIOS_BY_KIND:
-        scenario_kind = "triage"
-    session = SurveySession(mode=config.TRIAGE_MODE, drone_control_mode=config.DRONE_CONTROL_MODE, kind=scenario_kind)
+    session = SurveySession(mode=config.TRIAGE_MODE, drone_control_mode=config.DRONE_CONTROL_MODE)
     try:
         bridge = Bridge(browser, session, strict_turn_taking=browser.query_params.get("voice", "1") != "0")
     except DroneError as exc:

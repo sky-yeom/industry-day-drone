@@ -93,6 +93,10 @@ export interface VoiceHandlers {
   onResultsReveal?: () => void;
   /** The caption for the response actually playing, not a queued future reply. */
   onSpeechText?: (text: string) => void;
+  /** Fires once the spoken 확신도 (prompt-confidence) narration response has
+   * fully finished playing, so the UI can advance off that screen exactly
+   * when Gibby stops talking about it instead of on a fixed timer. */
+  onConfidenceNarrationDone?: () => void;
 }
 
 export interface RelayConfig {
@@ -145,6 +149,15 @@ export class VoiceSession {
   private launchRunId: string | null = null;
   private launchResponseId: string | null = null;
   private launchDrainRequested = false;
+  private confidenceResponseId: string | null = null;
+  private confidenceNarrationSignaled = false;
+  // Streamed audio can transiently empty the client-side playback queue
+  // between two network deltas of the *same* response (arrival isn't
+  // perfectly gapless), so a worklet "ended" event alone is not proof that
+  // no more audio is coming. Only trust it once the server has also said
+  // generation for that response is fully done.
+  private confidenceGenerationDone = false;
+  private confidencePlaybackEnded = false;
   private voiceStopped = false;
   private missionEnded = false;
   private resultsRequested = false;
@@ -186,6 +199,10 @@ export class VoiceSession {
     this.launchRunId = null;
     this.launchResponseId = null;
     this.launchDrainRequested = false;
+    this.confidenceResponseId = null;
+    this.confidenceNarrationSignaled = false;
+    this.confidenceGenerationDone = false;
+    this.confidencePlaybackEnded = false;
     this.voiceStopped = false;
     this.missionEnded = false;
     this.resultsRequested = false;
@@ -285,6 +302,18 @@ export class VoiceSession {
         }
         if (msg.type === "started" && this.narratingResults && msg.id && this.resultsResponseIds.has(msg.id)) {
           this.revealResults();
+        }
+        if (msg.type === "ended" && msg.id === this.confidenceResponseId && !this.confidenceNarrationSignaled) {
+          this.confidencePlaybackEnded = true;
+          // The playback queue can look momentarily empty between two
+          // network-delivered audio deltas of the *same* still-generating
+          // response, so this alone doesn't prove there's no more audio
+          // coming. Only actually advance once the server has also
+          // confirmed generation is fully done (see confidence_narration.done).
+          if (this.confidenceGenerationDone) {
+            this.confidenceNarrationSignaled = true;
+            this.handlers.onConfidenceNarrationDone?.();
+          }
         }
         if (msg.type !== "drained" || !msg.id) return;
         this.afterOutput(msg.contextTime, () => {
@@ -593,6 +622,15 @@ export class VoiceSession {
     this.routeIntro = null;
   }
 
+  /** True while `id` is a route-intro response whose text/audio must stay
+   * withheld from the browser until the map/route screen calls
+   * `sendRouteIntroReady()` — even though its transcript deltas already
+   * stream in from the model as soon as it starts generating. */
+  private isRouteIntroHeld(id: string): boolean {
+    const intro = this.routeIntro;
+    return !!intro && !intro.ready && intro.responseIds.has(id);
+  }
+
   sendText(text: string): boolean {
     if (this.ws?.readyState !== WebSocket.OPEN) return false;
     // Voice Live rejects a second response while one is generating with
@@ -615,7 +653,15 @@ export class VoiceSession {
     this.routeVisible = true;
     if (this.ws?.readyState !== WebSocket.OPEN || !this.routeIntro) return false;
     if (this.routeIntro.ready) return true;
+    const heldIds = [...this.routeIntro.responseIds];
     this.routeIntro.ready = true;
+    for (const id of heldIds) {
+      const speech = this.speech.get(id);
+      if (!speech) continue;
+      const text = [...speech.parts.values()].join("");
+      if (text.trim()) this.handlers.onTranscript("agent", text, speech.terminal);
+      if (this.audibleResponseId === id) this.publishSpeechCaption(id);
+    }
     this.ws.send(JSON.stringify({ type: "route_intro.ready", runId: this.currentRunId, introId: this.routeIntro.introId }));
     for (const id of this.routeIntro.responseIds) {
       this.tracePlayback("route_ready", id);
@@ -709,6 +755,30 @@ export class VoiceSession {
         if (msg.runId !== this.currentRunId) return;
         this.handlers.onError(typeof msg.message === "string" && msg.message
           ? msg.message : "말을 알아듣지 못했어. 지금 말해줘 표시가 나오면 다시 말해 줘.");
+        return;
+      }
+      case "confidence_narration.done": {
+        if (msg.runId !== this.currentRunId) return;
+        // Generation finishing server-side doesn't mean the audio has been
+        // heard yet — we wait for the worklet's per-response "ended" signal
+        // (playback of this exact response's audio fully consumed) so the
+        // map/route screen never swaps in mid-sentence. Only fire
+        // immediately here if there's no audio to wait for at all.
+        const speech = this.confidenceResponseId ? this.speech.get(this.confidenceResponseId) : undefined;
+        if (!speech?.hasAudio) {
+          this.confidenceNarrationSignaled = true;
+          this.handlers.onConfidenceNarrationDone?.();
+        } else {
+          this.confidenceGenerationDone = true;
+          // The worklet may have already reported "ended" while generation
+          // was still streaming in (a transient empty-queue false alarm at
+          // the time); now that generation is confirmed fully done, that
+          // earlier signal is trustworthy — act on it retroactively.
+          if (this.confidencePlaybackEnded && !this.confidenceNarrationSignaled) {
+            this.confidenceNarrationSignaled = true;
+            this.handlers.onConfidenceNarrationDone?.();
+          }
+        }
         return;
       }
       case "route_intro.pending": {
@@ -808,9 +878,15 @@ export class VoiceSession {
       case "response.created": {
         const response = msg.response as {
           id?: string;
-          metadata?: { missionDebrief?: boolean | string; missionLaunch?: boolean | string; runId?: string };
+          metadata?: { missionDebrief?: boolean | string; missionLaunch?: boolean | string; runId?: string;
+            confidenceNarration?: string };
         } | undefined;
         const metadata = response?.metadata;
+        if (response?.id && metadata?.confidenceNarration && metadata.runId === this.currentRunId) {
+          this.confidenceResponseId = response.id;
+          this.confidenceGenerationDone = false;
+          this.confidencePlaybackEnded = false;
+        }
         if (response?.id && this.launchRunId !== null &&
             (metadata?.missionLaunch === true || metadata?.missionLaunch === "true") &&
             metadata.runId === this.launchRunId) {
@@ -935,7 +1011,9 @@ export class VoiceSession {
           ? String(msg.transcript ?? speech.parts.get(part) ?? "")
           : (speech.parts.get(part) ?? "") + String(msg.delta ?? "");
         speech.parts.set(part, text);
-        if (id === this.responseId) this.handlers.onTranscript("agent", [...speech.parts.values()].join(""), false);
+        if (id === this.responseId && !this.isRouteIntroHeld(id)) {
+          this.handlers.onTranscript("agent", [...speech.parts.values()].join(""), false);
+        }
         this.publishSpeechCaption(id);
         return;
       }
@@ -962,7 +1040,7 @@ export class VoiceSession {
         }
         if (this.responseId && response?.id !== this.responseId) return;
         const text = speech ? [...speech.parts.values()].join("") : "";
-        if (text.trim()) {
+        if (text.trim() && response?.id && !this.isRouteIntroHeld(response.id)) {
           this.handlers.onTranscript("agent", text, true);
         }
         if (this.toolCallPending) {

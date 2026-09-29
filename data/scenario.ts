@@ -18,6 +18,14 @@ export const MONITOR_CLUES = Object.fromEntries(
   scenario.people.map((person) => [person.monitorId, person.clue]),
 );
 
+// The one site that actually has a person (the other two are false alarms).
+// Derived from the raw scenario data since `MissionState.people` doesn't
+// carry `falseAlarm` (only the raw JSON / `TriageSite` shape does).
+const realPerson = scenario.people.find((person) => !person.falseAlarm) ?? scenario.people[0];
+export const TRIAGE_REAL_MONITOR_ID: MonitorId = isMonitorId(realPerson.monitorId)
+  ? realPerson.monitorId
+  : "monitor-1";
+
 export const INITIAL_MISSION_STATE: MissionState = {
   runId: "",
   revision: 0,
@@ -29,8 +37,6 @@ export const INITIAL_MISSION_STATE: MissionState = {
   unsupportedAppearance: [],
   promptConfidence: null,
   promptConfidenceReason: "",
-  dangerOrder: [],
-  vulnerableAdjustedOrder: [],
   missionPhase: "briefing",
   mode: "mock",
   elapsedMs: 0,
@@ -46,10 +52,6 @@ export const INITIAL_MISSION_STATE: MissionState = {
       label: person.label,
       clue: person.clue,
       targetDescription: person.targetAppearance.description,
-      initiallyInjured: person.initiallyInjured,
-      vulnerable: person.vulnerable,
-      deadlineMs: person.deadlineMs,
-      deteriorationMs: person.initiallyInjured ? 0 : Math.max(0, person.deadlineMs - scenario.injuryWindowMs),
       outcome: null,
       resolvedAtMs: null,
       captureId: null,
@@ -76,13 +78,9 @@ export interface TriageSite {
   falseAlarm: boolean;
 }
 
-// Single-card stand-in for the prompt/confirm phase: like the security and
-// construction scenarios, this scenario has exactly one real person (in one
-// of the 3 sites — the other two are false alarms) described once by voice.
-// Reuses monitor-1's shared promptConfirmed/promptText/promptConfidence
-// (apply_prompt_to_all keeps all 3 people[] entries identical after
-// confirmation) so TriageSiteCards' existing person-lookup-by-monitorId
-// logic works unchanged with a 1-item list.
+// Single-card stand-in for the prompt/confirm phase: this scenario has one
+// shared target description confirmed once by voice before the user chooses
+// which of the three calls to check.
 export const TRIAGE_TARGET_SITE: TriageSite = {
   monitorId: "monitor-1",
   label: "찾는 사람",

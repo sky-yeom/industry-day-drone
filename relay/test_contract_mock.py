@@ -46,7 +46,7 @@ class ContractMockTests(unittest.IsolatedAsyncioTestCase):
     async def test_same_seven_tools_route_captures_and_frozen_schema(self):
         caps = await self.call("drone_get_capabilities")
         self.assertEqual(len(caps["tools"]), 7)
-        self.assertEqual(len(caps["supported_ordered_sequences"]), 6)
+        self.assertEqual(len(caps["supported_ordered_sequences"]), 9)
         self.assertIsNone((await self.call("drone_get_status"))["active_mission_id"])
         await self.call("drone_get_sensor_snapshot")
         with patch("socket.socket", side_effect=AssertionError("No mock socket")), \
@@ -130,8 +130,8 @@ class ContractMockTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final["mission"]["stop_reason"], "caller_lease_expired")
         self.assertFalse(final["mission"]["route_completed"])
 
-    async def test_all_six_orders_preserve_order_and_two_captures_per_visit(self):
-        for order in itertools.permutations(("tag-1", "tag-2", "tag-3")):
+    async def test_supported_orders_preserve_order_and_two_captures_per_visit(self):
+        for order in [("tag-1",), ("tag-2",), ("tag-3",), *itertools.permutations(("tag-1", "tag-2", "tag-3"))]:
             admitted = await self.call("drone_execute_route", dict(self.args, destination_ids=list(order)))
             completed = await self.finish(admitted["mission"]["mission_id"])
             self.assertEqual(completed["visited_ids"], [6, *(int(dest[-1]) for dest in order), 6])

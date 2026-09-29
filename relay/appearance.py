@@ -59,11 +59,8 @@ _COLORS = {
 # get shadowed by a shorter alternative matching first and leaving a
 # trailing "색" that the grammar can't otherwise account for.
 _COLOR = "(?:" + "|".join(sorted(_COLORS, key=len, reverse=True)) + ")"
-# Hard-hat/headwear phrasing (construction scenario): "안전모" or "헬멧",
-# optionally followed by a negation ("안 쓴", "미착용", "쓰지 않은") or a
-# positive marker ("쓴", "착용한"). No negation words present at all is
-# treated as a positive ("wearing it") mention, matching the phrasing this
-# scenario's system prompt and voice descriptions actually use.
+# Headwear phrasing: "안전모" or "헬멧", optionally followed by a negation
+# ("안 쓴", "미착용", "쓰지 않은") or a positive marker ("쓴", "착용한").
 _HEADWEAR_ITEM = "안전모|헬멧"
 _FEATURE = re.compile(
     rf"(?P<colors>{_COLOR}(?:\s*(?:또는|혹은|이나)\s*{_COLOR})*)"

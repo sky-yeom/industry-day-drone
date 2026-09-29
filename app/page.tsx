@@ -10,9 +10,7 @@ import GibbyResultsTransition from "@/components/GibbyResultsTransition";
 import PixelShell from "@/components/PixelShell";
 import ResultsPanel from "@/components/ResultsPanel";
 import { INITIAL_ROUTE_STATE, MONITORS_BY_KIND } from "@/data/monitors";
-import { INITIAL_MISSION_STATE, TARGET_APPEARANCE, TRIAGE_TARGET_SITE } from "@/data/scenario";
-import { SECURITY_SUSPECT_SITE, SECURITY_TARGET_APPEARANCE } from "@/data/security-scenario";
-import { CONSTRUCTION_TARGET_APPEARANCE, CONSTRUCTION_TARGET_SITE } from "@/data/construction-scenario";
+import { INITIAL_MISSION_STATE, TARGET_APPEARANCE, TRIAGE_REAL_MONITOR_ID, TRIAGE_TARGET_SITE } from "@/data/scenario";
 import { SCENARIOS, type ScenarioId } from "@/data/scenarios";
 import { fetchRelayConfig, VoiceSession, type RelayConfig, type VoiceStatus } from "@/lib/voiceClient";
 import type { ChatMessage, DashboardState } from "@/lib/types";
@@ -56,6 +54,10 @@ export default function Home() {
   const advancedToCapturesRef = useRef(false);
   const advancedToRouteRef = useRef(false);
   const advancedToResultsRef = useRef(false);
+  const promptConfirmedRef = useRef(false);
+  const confidenceNarrationDoneRef = useRef(false);
+  const mapIntroFallbackTimerRef = useRef<number | null>(null);
+  const routeIntroEarlyTriggeredRef = useRef(false);
   const streamingRef = useRef<{ user: string | null; agent: string | null }>({ user: null, agent: null });
   const state = snapshot.state;
   const missionLaunched = state.clockRunning || state.elapsedMs > 0 || ["paused", "complete"].includes(state.missionPhase);
@@ -91,15 +93,10 @@ export default function Home() {
     if (scene.generation !== generationRef.current || returnSceneRef.current !== scene || resultsReadyRef.current) return;
     resultsReadyRef.current = true;
     setStep("results");
-    // Show the result text boxes as soon as the return animation finishes -
-    // don't make the participant stare at a blank screen while a brand new
-    // voice connection spins up just to narrate the debrief out loud.
     setResultsVisible(true);
     sessionRef.current?.markResultsReady(scene.runId);
   }, []);
 
-  // A failed run parks on the map instead of the debrief. The operator asked for
-  // it, so leave the way through open rather than deciding for them.
   const showResults = useCallback(() => {
     if (advancedToResultsRef.current) return;
     advancedToResultsRef.current = true;
@@ -123,6 +120,10 @@ export default function Home() {
     void sessionRef.current?.stop();
   }, []);
 
+  useEffect(() => {
+    if (step !== "map-intro") routeIntroEarlyTriggeredRef.current = false;
+  }, [step]);
+
   const reset = useCallback(() => {
     ++generationRef.current;
     const previous = sessionRef.current;
@@ -133,6 +134,13 @@ export default function Home() {
     advancedToCapturesRef.current = false;
     advancedToRouteRef.current = false;
     advancedToResultsRef.current = false;
+    promptConfirmedRef.current = false;
+    confidenceNarrationDoneRef.current = false;
+    routeIntroEarlyTriggeredRef.current = false;
+    if (mapIntroFallbackTimerRef.current !== null) {
+      window.clearTimeout(mapIntroFallbackTimerRef.current);
+      mapIntroFallbackTimerRef.current = null;
+    }
     setStep("opening");
     setSnapshot({ state: INITIAL_STATE, receivedAt: 0 });
     setNow(0);
@@ -159,6 +167,16 @@ export default function Home() {
     if (sessionRef.current) return;
     const generation = ++generationRef.current;
     const current = () => generationRef.current === generation;
+    const tryAdvanceToMapIntro = () => {
+      if (!current() || advancedToRouteRef.current) return;
+      if (!promptConfirmedRef.current || !confidenceNarrationDoneRef.current) return;
+      advancedToRouteRef.current = true;
+      if (mapIntroFallbackTimerRef.current !== null) {
+        window.clearTimeout(mapIntroFallbackTimerRef.current);
+        mapIntroFallbackTimerRef.current = null;
+      }
+      setStep("map-intro");
+    };
     setStatus("connecting");
     setSpeechText("");
     void fetchRelayConfig().then((value) => { if (current()) setConfig(value); });
@@ -177,6 +195,11 @@ export default function Home() {
       onLevel: () => {},
       onDebrief: (text) => { if (current()) setDebrief(text); },
       onResultsReveal: () => { if (current()) setResultsVisible(true); },
+      onConfidenceNarrationDone: () => {
+        if (!current() || confidenceNarrationDoneRef.current) return;
+        confidenceNarrationDoneRef.current = true;
+        tryAdvanceToMapIntro();
+      },
       onSpeechText: (text) => { if (current()) setSpeechText(text); },
       onRouteState: (next) => {
         if (!current()) return;
@@ -184,23 +207,19 @@ export default function Home() {
         if (previous.runId && (previous.runId !== next.runId || next.revision < previous.revision)) return;
         latestStateRef.current = next;
         const terminal = next.missionPhase === "complete" || next.missionPhase === "aborted";
-        if (!advancedToRouteRef.current && !terminal && next.promptPhase === "confirmed") {
-          advancedToRouteRef.current = true;
-          // Give the confidence/reasoning banner (just set on this same
-          // state update) a beat to actually render and be read/heard on
-          // the prompt screen before we swap it out for the map transition.
-          // Without this delay the two updates land in the same React
-          // commit and the banner is never visible at all.
-          window.setTimeout(() => {
-            if (current()) setStep("map-intro");
-          }, 4000);
+        if (!advancedToRouteRef.current && !terminal && next.promptPhase === "confirmed" && !promptConfirmedRef.current) {
+          promptConfirmedRef.current = true;
+          if (mapIntroFallbackTimerRef.current === null) {
+            mapIntroFallbackTimerRef.current = window.setTimeout(() => {
+              mapIntroFallbackTimerRef.current = null;
+              confidenceNarrationDoneRef.current = true;
+              tryAdvanceToMapIntro();
+            }, 12000);
+          }
+          tryAdvanceToMapIntro();
         }
-        if (!advancedToResultsRef.current &&
-            terminal) {
+        if (!advancedToResultsRef.current && terminal) {
           if (next.missionPhase === "aborted" && next.error) {
-            // A single failure used to jump straight to the debrief, which reads
-            // as "the run is over" when the aircraft is merely stopped. Hold the
-            // map and let the operator choose the next move.
             setHalted(next.error);
           } else {
             advancedToResultsRef.current = true;
@@ -213,8 +232,8 @@ export default function Home() {
           }
         }
         const receivedAt = performance.now();
-        setSnapshot((previous) => {
-          if (previous.state.runId === next.runId && next.revision < previous.state.revision) return previous;
+        setSnapshot((previousSnapshot) => {
+          if (previousSnapshot.state.runId === next.runId && next.revision < previousSnapshot.state.revision) return previousSnapshot;
           return { state: next, receivedAt };
         });
         setNow(receivedAt);
@@ -251,36 +270,24 @@ export default function Home() {
     start();
   }, [reset, start]);
 
-  // Manual operator override for a mic/venue-audio failure: drives the
-  // exact same relay tools a real voice confirmation would, through the
-  // model-independent browser "command" channel (see run_tool in
-  // relay/server.py), so mission state stays consistent either way.
   const forceConfirmPrompt = useCallback(() => {
     const session = sessionRef.current;
     if (!session || state.promptPhase === "confirmed") return;
-    const kind = SCENARIOS[scenarioId].kind;
-    const description = kind === "security" ? SECURITY_TARGET_APPEARANCE.description
-      : kind === "construction" ? CONSTRUCTION_TARGET_APPEARANCE.description
-      : TARGET_APPEARANCE.description;
     session.sendCommand("confirm_prompt", {
-      prompt_text: description, appearance_constraints: [], unsupported_appearance: [],
+      prompt_text: TARGET_APPEARANCE.description, appearance_constraints: [], unsupported_appearance: [],
     });
-  }, [scenarioId]);
+  }, [state.promptPhase]);
 
   const forceConfirmRoute = useCallback(() => {
     const session = sessionRef.current;
     if (!session) return;
-    // Force the first two stops in scenario map order rather than a
-    // hardcoded "monitor-1"/"monitor-2" - keeps this in sync automatically
-    // if a scenario's stop ids or count ever change.
-    const [first, second] = MONITORS_BY_KIND[SCENARIOS[scenarioId].kind];
-    if (first) session.sendCommand("select_stop", { monitor: first.id });
-    if (second) session.sendCommand("select_stop", { monitor: second.id });
+    const targetMonitorId = TRIAGE_REAL_MONITOR_ID;
+    const targetMonitor = MONITORS_BY_KIND.triage.find((monitor) => monitor.id === targetMonitorId) ?? MONITORS_BY_KIND.triage[0];
+    if (targetMonitor) session.sendCommand("select_stop", { monitor: targetMonitor.id });
     session.sendCommand("confirm_route");
     session.sendCommand("launch_mission");
-  }, [scenarioId]);
+  }, []);
 
-  // Display interpolation only: expiration, reporting and scoring remain relay-owned.
   const elapsedMs = state.elapsedMs + (state.clockRunning ? Math.max(0, now - snapshot.receivedAt) : 0);
   const visionReady = config?.visionReady ?? false;
   const agentText = speechText ?? [...transcript].reverse().find((message) => message.role === "agent")?.text ?? "";
@@ -303,13 +310,16 @@ export default function Home() {
   if (step === "map-intro") {
     const scenario = SCENARIOS[scenarioId];
     return <GibbyMapTransition
-      sites={
-        scenario.kind === "security" ? [SECURITY_SUSPECT_SITE]
-          : scenario.kind === "construction" ? [CONSTRUCTION_TARGET_SITE]
-          : [TRIAGE_TARGET_SITE]
-      }
+      sites={[TRIAGE_TARGET_SITE]}
       state={state}
       briefing={scenario.briefing}
+      promptConfidence={state.promptConfidence}
+      promptConfidenceReason={state.promptConfidenceReason}
+      onWalkingStart={() => {
+        if (routeIntroEarlyTriggeredRef.current) return;
+        routeIntroEarlyTriggeredRef.current = true;
+        sessionRef.current?.sendRouteIntroReady();
+      }}
       onDone={() => {
         if (!returnSceneRef.current && latestStateRef.current.runId === state.runId) setStep("route");
       }}

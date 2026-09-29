@@ -1,6 +1,6 @@
 export type MonitorId = "monitor-1" | "monitor-2" | "monitor-3";
 export type DetectionMode = "mock" | "azure";
-export type ScenarioKind = "triage" | "security" | "construction";
+export type ScenarioKind = "triage";
 export type MissionPhase =
   | "briefing"
   | "ready"
@@ -11,8 +11,6 @@ export type MissionPhase =
   | "complete"
   | "aborted";
 export type ReportOutcome = "reported" | "reported_injured" | "report_missed";
-export type SecurityOutcome = "caught" | "escaped";
-export type ConstructionOutcome = "reported" | "not_found" | "unchecked";
 
 export interface MonitorDestination {
   id: MonitorId;
@@ -52,14 +50,7 @@ export interface DetectionEvidence {
   description: string;
   confidence: number | null;
   box: [number, number, number, number] | null;
-  // Present only when the mock vision engine matched more than one person
-  // in the same capture: every matched person's box, so all of them (not
-  // just the first, which `box` above still holds for backward compat) can
-  // be highlighted on screen.
   boxes?: [number, number, number, number][];
-  // Present only for the "construction" scenario kind: count of distinct
-  // people confirmed matching the prompt with a hard-hat violation in this
-  // capture (can be 2+ when a zone holds multiple violators).
   violatorCount?: number;
 }
 
@@ -79,11 +70,7 @@ export interface PersonState {
   label: string;
   clue: string;
   targetDescription: string;
-  initiallyInjured: boolean;
-  vulnerable: boolean;
-  deadlineMs: number;
-  deteriorationMs: number;
-  outcome: ReportOutcome | SecurityOutcome | ConstructionOutcome | null;
+  outcome: ReportOutcome | null;
   resolvedAtMs: number | null;
   captureId: string | null;
   attempts: number;
@@ -91,29 +78,16 @@ export interface PersonState {
   promptText: string;
   promptConfidence: number | null;
   promptConfidenceReason: string;
-  // Present for the "security" and "triage" scenario kinds.
   falseAlarm?: boolean;
   falseAlarmReveal?: string;
 }
 
 export interface MissionScore {
   total: number;
-  // Triage ("119 신고") scenario fields.
   reportedCount?: number;
   injuredCount?: number;
   reportMissedCount?: number;
-  // Security Breach ("112 신고") scenario fields.
-  caughtCount?: number;
-  escapedCount?: number;
-  // Shared by security and triage (their false-alarm sites).
   falseAlarmCount?: number;
-  // Construction Site Safety (현장 안전관리자 신고) scenario fields.
-  violationsReportedCount?: number;
-  // Distinct people count, not zones: can exceed violationsReportedCount
-  // when a reported zone held 2+ confirmed violators.
-  violatorsFoundCount?: number;
-  notFoundCount?: number;
-  uncheckedCount?: number;
 }
 
 export interface AppearanceConstraint {
@@ -133,8 +107,6 @@ export interface MissionState {
   unsupportedAppearance: string[];
   promptConfidence: number | null;
   promptConfidenceReason: string;
-  dangerOrder: MonitorId[];
-  vulnerableAdjustedOrder: MonitorId[];
   missionPhase: MissionPhase;
   mode: DetectionMode;
   elapsedMs: number;
@@ -151,16 +123,5 @@ export type DashboardState = RoutePlanningState & MissionState;
 export const OUTCOME_LABELS: Record<ReportOutcome, string> = {
   reported: "119 신고 완료",
   reported_injured: "부상 확인 · 119 신고 완료",
-  report_missed: "신고 시한 초과",
-};
-
-export const SECURITY_OUTCOME_LABELS: Record<SecurityOutcome, string> = {
-  caught: "112 신고 완료",
-  escaped: "놓침 · 확인 실패",
-};
-
-export const CONSTRUCTION_OUTCOME_LABELS: Record<ConstructionOutcome, string> = {
-  reported: "안전관리자 신고 완료",
-  not_found: "확인했지만 대상 없음",
-  unchecked: "미확인",
+  report_missed: "구조 실패",
 };

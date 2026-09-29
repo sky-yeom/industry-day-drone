@@ -70,7 +70,8 @@ async def main():
     parser.add_argument("--url", default="ws://127.0.0.1:8080/ws")
     parser.add_argument("--voice", action="store_true", help="명시적으로 Azure 음성 연결을 사용")
     parser.add_argument("--greeting-only", action="store_true", help="고정 음성 인사말만 확인")
-    parser.add_argument("--bad-priority", action="store_true")
+    parser.add_argument("--bad-priority", action="store_true",
+                        help="정답이 아닌(오인 신고) 구역을 선택")
     parser.add_argument("--wrong-description", action="store_true")
     args = parser.parse_args()
     if args.greeting_only and not args.voice:
@@ -78,7 +79,7 @@ async def main():
     prompt = "빨간색 티셔츠를 입은 사람을 찾아 주세요." if args.wrong_description else SEARCH_PROMPT
     appearance = [{"attribute": "shirtColor", "operator": "include", "values": ["red"]}] if args.wrong_description else APPEARANCE
     url = args.url + ("&" if "?" in args.url else "?") + f"voice={int(args.voice)}"
-    async with websockets.connect(url, open_timeout=30, max_size=8 * 1024 * 1024) as ws:
+    async with websockets.connect(url, open_timeout=30, max_size=32 * 1024 * 1024) as ws:
         events = await receive_until(ws, lambda e: e.get("type") == "route.state")
         ready_event = next(e for e in events if e["type"] == "relay.ready")
         if ready_event["mode"] != "mock" and not args.voice:
@@ -102,18 +103,17 @@ async def main():
             events = await voice_turn(ws, "네, 제가 말한 탐색 프롬프트가 맞아요.")
             assert any(e["type"] == "tool.finished" and e["name"] == "confirm_prompt"
                        and e["result"]["ok"] for e in events), "참여자 탐색 프롬프트 미확인"
-            await voice_turn(ws, "모니터 삼부터 가요.")
-            events = await voice_turn(ws, "그 다음은 바다에 빠진 사람이요.")
+            await voice_turn(ws, "바다에 빠진 사람이 있는 곳으로 가요.")
+            events = await voice_turn(ws, "네, 이 지역으로 가주세요.")
             states = [e["state"] for e in events if e["type"] == "route.state"]
             assert states and states[-1]["missionPhase"] == "ready", "출발 동의 전에 시작했거나 경로 미준비"
-            launch_events = await voice_turn(ws, "네, 이 경로로 출발하세요.")
+            launch_events = await voice_turn(ws, "네, 출발하세요.")
         else:
-            route = ("monitor-3", "monitor-2") if args.bad_priority else ("monitor-3", "monitor-1")
+            monitor = "monitor-2" if args.bad_priority else "monitor-3"
             await command(ws, "confirm_prompt", {
                 "prompt_text": prompt, "appearance_constraints": appearance, "unsupported_appearance": [],
             }, "participant-prompt")
-            await command(ws, "select_stop", {"monitor": route[0]}, "first")
-            await command(ws, "select_stop", {"monitor": route[1]}, "second")
+            await command(ws, "select_stop", {"monitor": monitor}, "first")
             events = await command(ws, "confirm_route", {}, "ready")
             assert events[-1]["state"]["missionPhase"] == "ready"
             assert events[-1]["state"]["elapsedMs"] == 0
@@ -125,15 +125,15 @@ async def main():
         states = [e["state"] for e in events if e["type"] == "route.state"]
         final = states[-1]
         assert final["missionPhase"] == "complete"
-        assert final["score"]["total"] == 3
-        assert all(p["outcome"] is not None for p in final["people"])
+        assert final["score"]["total"] == 1
+        checked = next(p for p in final["people"] if p["monitorId"] == final["confirmedRoute"][0])
+        assert checked["outcome"] is not None
         if not args.voice:
-            assert final["score"]["reportedCount"] == (0 if args.wrong_description else 2 if args.bad_priority else 3)
-        for person in final["people"]:
-            if person["outcome"] != "too_late":
-                frame = next(c for c in final["captures"] if c["id"] == person["captureId"])
-                assert frame["evidence"]["targetPresent"] and frame["imageUrl"].startswith("data:image/")
-                assert person["resolvedAtMs"] < person["deadlineMs"]
+            assert final["score"]["reportedCount"] == (0 if (args.wrong_description or args.bad_priority) else 1)
+        if checked["outcome"] is not None:
+            frame = next(c for c in final["captures"] if c["id"] == checked["captureId"])
+            assert frame["imageUrl"].startswith("data:image/")
+            assert isinstance(frame["evidence"]["targetPresent"], bool)
         if args.voice:
             assert any(e["type"] == "mission.launch.done" for e in events), "출발 음성 안내가 완료되지 않았습니다."
             assert not any(e["type"] == "mission.debrief.response" for e in events), "재생 준비 전에 결과 음성이 시작되었습니다."

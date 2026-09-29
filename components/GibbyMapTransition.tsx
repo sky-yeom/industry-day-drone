@@ -7,51 +7,45 @@ import TriageSiteCards from "@/components/TriageSiteCards";
 import { ANCHOR_W, LAST_FRAME, gibbyFrameStyle } from "@/lib/gibbyMapSprite";
 import { MAP_IMAGE_BY_KIND } from "@/data/monitors";
 import type { TriageSite } from "@/data/scenario";
-import type { SecurityZone } from "@/data/security-scenario";
-import type { ConstructionZone } from "@/data/construction-scenario";
 import type { BriefingBullet, MissionState } from "@/lib/types";
 
 const FRAME_MS = 400;
-// Linger a bit longer while he's unrolling (frames 4-5) so it doesn't flash by.
 const UNROLL_EXTRA_MS = 220;
-// Brief buffer after his last frame before both the voice cue and the
-// swap into the real Route screen fire together (see the single combined
-// timeout below) — just long enough that his final pose reads for a beat,
-// not a separate "reveal" animation. There's no in-transition map preview
-// anymore (removed per feedback — it read as "the map shows twice": once
-// small here, once full-size on the real Route screen).
 const READY_DELAY_MS = 150;
 
-/**
- * Prompt -> Route handoff: Gibby (fixed position/size — he never
- * translates or rescales here, per the "don't move him" requirement) digs
- * in his pocket and unrolls a map while the old prompt content (photo +
- * briefing) fades out and the title swaps to "비행경로". The moment he
- * reaches the last frame, `onDone` fires so the parent can swap into the live
- * Route step (real per-scenario map art + info cards) — there's no separate smaller
- * map preview shown here first.
- */
 export default function GibbyMapTransition({
   sites,
   state,
   briefing,
+  promptConfidence,
+  promptConfidenceReason,
+  onWalkingStart,
   onDone,
 }: {
-  sites: (TriageSite | SecurityZone | ConstructionZone)[];
+  sites: TriageSite[];
   state: MissionState;
   briefing: BriefingBullet[];
+  promptConfidence?: number | null;
+  promptConfidenceReason?: string;
+  onWalkingStart?: () => void;
   onDone: () => void;
 }) {
   preload(MAP_IMAGE_BY_KIND[state.kind], { as: "image" });
   const [frame, setFrame] = useState(0);
   const done = useRef(onDone);
   useEffect(() => { done.current = onDone; }, [onDone]);
-  // Old photo/briefing content starts fading out as soon as Gibby actually
-  // pulls the scroll out of his pocket (frame 2), instead of waiting for
-  // the whole animation to finish — so the "content leaves" beat is synced
-  // with the "map comes out" beat rather than happening all at once at the
-  // very end.
+  const walkingStart = useRef(onWalkingStart);
+  useEffect(() => { walkingStart.current = onWalkingStart; }, [onWalkingStart]);
   const fadingOut = frame >= 2;
+  const walking = frame >= 1;
+
+  // The route-intro narration (the "3 calls" briefing) must stay silent until
+  // the screen has actually left the 확신도-mirrored first frame and shown the
+  // 비행경로 header, not just after the map-intro step mounts.
+  useEffect(() => {
+    if (!walking) return;
+    walkingStart.current?.();
+  }, [walking]);
 
   useEffect(() => {
     if (frame >= LAST_FRAME) return;
@@ -62,7 +56,6 @@ export default function GibbyMapTransition({
 
   useEffect(() => {
     if (frame !== LAST_FRAME) return;
-    // The mounted map releases prefetched audio after its first visible paint.
     const id = window.setTimeout(() => done.current(), READY_DELAY_MS);
     return () => window.clearTimeout(id);
   }, [frame]);
@@ -72,37 +65,48 @@ export default function GibbyMapTransition({
       <div aria-hidden className="pixel-scene-sky absolute inset-0" />
       <PixelGround />
 
-      <div className="relative z-10 flex h-full min-h-0 w-full flex-col gap-3 px-4 pb-[8dvh] pt-4 sm:px-6 sm:pt-6">
+      <div className="relative z-10 flex h-full min-h-0 w-full flex-col justify-center gap-2 pl-4 pr-[calc(6%+481px*var(--ui-scale))] pb-[8dvh] pt-4 sm:pl-6 sm:pt-6">
         <div className="shrink-0">
-          <p className="text-sm font-bold tracking-[0.14em] text-[#091f2c] sm:text-base">실시간 경로 관제</p>
-          <h2 className="mt-2 text-lg font-bold text-[#091f2c] sm:text-xl">비행경로</h2>
+          {walking
+            ? <>
+                <p className="text-sm font-bold tracking-[0.14em] text-[#091f2c] sm:text-base">실시간 경로 관제</p>
+                <h2 className="mt-2 text-lg font-bold text-[#091f2c] sm:text-xl">비행경로</h2>
+              </>
+            : <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <p className="text-sm font-bold tracking-[0.14em] text-[#091f2c] sm:text-base">임무 브리핑</p>
+                <h2 className="text-lg font-bold tracking-[0.05em] text-[#091f2c] sm:text-xl">탐지·신고 대상</h2>
+              </div>}
         </div>
 
-        {/* Old prompt content fades away as soon as the transition starts. */}
-        <div className={`min-h-0 max-w-[53.75rem] flex-1 space-y-3 overflow-y-auto transition-opacity duration-700 ${fadingOut ? "pointer-events-none opacity-0" : "opacity-100"}`}>
-          <TriageSiteCards sites={sites} people={state.people} compact />
-          <div className="pixel-panel shrink-0 p-5">
-            <ol aria-label="임무 브리핑" className="space-y-4 text-sm leading-relaxed text-[#091f2c]">
-              {briefing.map((bullet, index) => (
-                <li key={bullet.id} className="flex gap-3">
-                  <span className="shrink-0 font-bold text-[#d63447]">{index + 1}.</span>
-                  <span>{bullet.text}</span>
-                </li>
-              ))}
-            </ol>
-          </div>
-        </div>
+        {!walking && promptConfidence != null && promptConfidenceReason !== undefined && promptConfidenceReason !== "" &&
+          <div className="pixel-panel flex shrink-0 max-w-[53.75rem] items-start gap-2 bg-white/95 px-3 py-2 text-xs leading-snug text-[#091f2c]">
+            <span className="shrink-0 rounded-full bg-emerald-500 px-2 py-0.5 font-bold tabular-nums text-white">
+              확신도 {promptConfidence}%
+            </span>
+            <span className="min-w-0 flex-1">{promptConfidenceReason}</span>
+          </div>}
 
-        {/* No map preview here anymore — the real Route screen (full
-            per-scenario map art + info cards) swaps in directly right after Gibby's
-            last frame, at the same moment the voice cue fires (see the
-            combined timeout above), instead of showing a smaller map
-            here first and then the full one a moment later. */}
+        {walking
+          ? <div className={`min-h-0 max-w-[53.75rem] flex-1 space-y-3 overflow-y-auto transition-opacity duration-700 ${fadingOut ? "pointer-events-none opacity-0" : "opacity-100"}`}>
+              <TriageSiteCards sites={sites} people={state.people} compact />
+              <div className="pixel-panel shrink-0 p-5">
+                <ol aria-label="임무 브리핑" className="space-y-4 text-sm leading-relaxed text-[#091f2c]">
+                  {briefing.map((bullet, index) => (
+                    <li key={bullet.id} className="flex gap-3">
+                      <span className="shrink-0 font-bold text-[#d63447]">{index + 1}.</span>
+                      <span>{bullet.text}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            </div>
+          : <div className="flex max-w-[53.75rem] flex-1 flex-row items-center gap-3">
+              <div className="min-w-0 shrink">
+                <TriageSiteCards sites={sites} people={state.people} />
+              </div>
+            </div>}
       </div>
 
-      {/* Gibby: fixed at the exact same corner spot he was docked at on the
-          prompt screen (see .gibby-travel--corner) — only the sprite frame
-          changes here, no translate/scale, so he never appears to move. */}
       <div
         className="absolute bottom-[16%] z-20 flex items-end justify-center"
         style={{

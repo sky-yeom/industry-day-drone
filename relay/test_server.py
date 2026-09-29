@@ -129,14 +129,13 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         forceConfirmRoute) sends raw browser `command` messages, which
         pump_browser routes straight to run_tool with no model/voice turn
         involved at all. Confirm that full sequence — confirm_prompt,
-        two select_stop calls, confirm_route, launch_mission — succeeds and
+        one select_stop call, confirm_route, launch_mission — succeeds and
         actually launches the mission, exactly like a real voice
         confirmation would."""
         for index, (name, args) in enumerate((
             ("confirm_prompt", {"prompt_text": SEARCH_PROMPT, "appearance_constraints": [],
                                  "unsupported_appearance": []}),
             ("select_stop", {"monitor": "monitor-1"}),
-            ("select_stop", {"monitor": "monitor-2"}),
             ("confirm_route", {}),
             ("launch_mission", {}),
         )):
@@ -231,13 +230,6 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_departure_closes_voice_but_mission_and_text_results_continue(self):
         ready(self.session)
         self.session.scenario.update(travelMs=0, captureMs=0)
-        # False-alarm sites never resolve from detection alone; drop their
-        # deadlines to (effectively) zero so they settle immediately via the
-        # runner's own inline expire() checks instead of needing a real,
-        # multi-second wall-clock wait in this unit test.
-        for person in self.session.data["people"]:
-            if person.get("falseAlarm"):
-                person["deadlineMs"] = 0
         self.vision.block = asyncio.Event()
         upstream = Upstream()
         self.bridge.upstream = upstream
@@ -271,7 +263,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.vision.block.set()
         await settle(lambda: any(e["type"] == "mission.debrief" for e in self.browser.events))
         self.assertEqual(self.session.data["score"]["reportedCount"], 1)
-        self.assertEqual(self.session.data["score"]["falseAlarmCount"], 2)
+        self.assertEqual(self.session.data["score"]["falseAlarmCount"], 0)
         self.assertEqual(sum(e["type"] == "response.create" for e in upstream.sent), 1)
         self.assertFalse(any(e["type"] == "mission.debrief.response" for e in self.browser.events))
 
@@ -702,7 +694,6 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         await self.bridge.close()
         self.assertTrue(self.vision.cancelled)
         self.assertTrue(self.bridge.runner._work.done())
-        self.assertTrue(self.bridge.runner._deadlines.done())
         self.assertEqual(self.session.phase, "aborted")
         self.assertIsNone(self.session.data["score"])
 
@@ -753,19 +744,11 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         scenario = deepcopy(SCENARIO)
         scenario.update(travelMs=0, captureMs=0)
         session = SurveySession(scenario=scenario)
-        # False-alarm sites never resolve from detection alone; drop their
-        # deadlines to zero so they settle immediately (via the runner's own
-        # inline expire() checks) instead of needing a real, multi-second
-        # wall-clock wait in this unit test.
-        for person in session.data["people"]:
-            if person.get("falseAlarm"):
-                person["deadlineMs"] = 0
         messages = [
             {"type": "command", "name": name, "args": args, "requestId": str(i)}
             for i, (name, args) in enumerate((
                 ("confirm_prompt", PROMPT_ARGS),
                 ("select_stop", {"monitor": "monitor-3"}),
-                ("select_stop", {"monitor": "monitor-2"}),
                 ("confirm_route", {}),
                 ("launch_mission", {}),
             ))
@@ -783,7 +766,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(browser.events[1]["state"]["missionPhase"], "briefing")
         self.assertEqual(session.phase, "complete")
         self.assertEqual(session.data["score"]["reportedCount"], 1)
-        self.assertEqual(session.data["score"]["falseAlarmCount"], 2)
+        self.assertEqual(session.data["score"]["falseAlarmCount"], 0)
         self.assertTrue(browser.closed)
 
     async def test_route_intro_prefetches_before_client_ready_signal(self):

@@ -1,4 +1,4 @@
-"""Automatic capture/analysis and independent deadline processing."""
+"""Automatic capture/analysis for the confirmed single-stop mission."""
 
 import asyncio
 import logging
@@ -19,7 +19,6 @@ class MissionRunner:
         self.publish = publish
         self.sleep, self.tick_seconds = sleep, tick_seconds
         self._work = None
-        self._deadlines = None
         self._retry = asyncio.Event()
         self._terminal_task = None
 
@@ -29,7 +28,6 @@ class MissionRunner:
         outcome = self.session.launch_mission(self.vision.readiness())
         if outcome["ok"]:
             self._work = asyncio.create_task(self._run(self.session.run_id))
-            self._deadlines = asyncio.create_task(self._watch_deadlines(self.session.run_id))
         return outcome
 
     async def retry(self):
@@ -45,7 +43,7 @@ class MissionRunner:
         return outcome
 
     async def close(self):
-        tasks = [t for t in (self._work, self._deadlines, self._terminal_task)
+        tasks = [t for t in (self._work, self._terminal_task)
                  if t is not None and t is not asyncio.current_task()]
         for task in tasks:
             task.cancel()
@@ -75,19 +73,6 @@ class MissionRunner:
         elif text:
             await self.publish({"type": "mission.progress", "text": text})
 
-    async def _watch_deadlines(self, run_id):
-        while run_id == self.session.run_id and self.session.phase not in TERMINAL:
-            await self.sleep(self.tick_seconds)
-            self.session.expire()
-            if self.session.phase in TERMINAL:
-                break
-            await self._notify()
-        if self._work is not None and not self._work.done():
-            self._work.cancel()
-            await asyncio.gather(self._work, return_exceptions=True)
-        if run_id == self.session.run_id and self.session.phase in TERMINAL:
-            await self._notify_terminal()
-
     async def _operation(self, operation, label, run_id):
         while run_id == self.session.run_id and self.session.phase not in TERMINAL:
             try:
@@ -116,7 +101,6 @@ class MissionRunner:
     async def _run(self, run_id):
         try:
             for monitor in self.session.state.confirmedRoute:
-                self.session.expire()
                 if run_id != self.session.run_id or self.session.phase in TERMINAL:
                     break
                 person = self.session.person(monitor)
@@ -125,7 +109,6 @@ class MissionRunner:
                 self.session.set_operation("flying", monitor, run_id)
                 await self._notify(f"현장 {monitor[-1]}로 이동합니다.")
                 await self.sleep(self.session.scenario["travelMs"] / 1000)
-                self.session.expire()
                 # One negative recapture is the scenario's maximum; technical retries
                 # repeat the unfinished operation, not a completed negative attempt.
                 for _ in range(min(2, self.session.scenario["maxDetectionAttempts"])):
@@ -156,7 +139,7 @@ class MissionRunner:
                             unsupported_appearance=person["unsupportedAppearance"],
                             scene_context={"monitor_id": monitor, "label": person["label"],
                                            "report": person["clue"]},
-                            kind=self.session.kind)
+)
                         if self.session.apply_detection(run_id, capture.id, evidence):
                             return evidence
                         return None
@@ -172,7 +155,9 @@ class MissionRunner:
                         break
             if self.session.phase in ACTIVE:
                 self.session.set_operation("analyzing", None, run_id)
-                await self._notify("방문을 마쳤습니다. 미확인 대상의 신고 시한까지 기다립니다.")
+                self.session._finish_if_resolved()
+                if self.session.phase in ACTIVE:
+                    await self._notify("방문을 마쳤습니다. 최종 결과를 정리하고 있습니다.")
             elif self.session.phase in TERMINAL:
                 await self._notify()
         except asyncio.CancelledError:

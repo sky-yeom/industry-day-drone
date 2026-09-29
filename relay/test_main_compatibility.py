@@ -39,7 +39,7 @@ class MainCompatibilityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_existing_tools_snapshot_and_full_frame_capture_contract_is_additive(self):
         self.assertEqual({tool["name"] for tool in tools.TOOLS}, {
-            "confirm_prompt", "select_stop", "confirm_route", "clear_route",
+            "prepare_prompt", "confirm_prompt", "select_stop", "confirm_route", "clear_route",
             "launch_mission", "retry_mission", "abort_mission", "get_state"})
         session = SurveySession()
         baseline = {"phase", "draftRoute", "confirmedRoute", "runId", "revision", "missionPhase",
@@ -47,9 +47,10 @@ class MainCompatibilityTests(unittest.IsolatedAsyncioTestCase):
                     "score", "error", "promptPhase", "userPromptText",
                     "appearanceConstraints", "unsupportedAppearance"}
         self.assertTrue(baseline <= session.snapshot().keys())
-        self.assertTrue(session.confirm_prompt("green shirt")["ok"])
-        for destination in ("monitor-3", "monitor-1"):
-            self.assertTrue(session.select_stop(destination)["ok"])
+        prompt = "초록색 티셔츠를 입고 갈색 머리를 한 사람을 찾아 주세요."
+        self.assertTrue(session.prepare_prompt(prompt, [], [])["ok"])
+        self.assertTrue(session.confirm_prompt(prompt)["ok"])
+        self.assertTrue(session.select_stop("monitor-3")["ok"])
         self.assertTrue(session.confirm_route()["ok"])
         self.assertTrue(session.launch_mission()["ok"])
         self.assertTrue(session.set_operation("capturing", "monitor-3", session.run_id))
@@ -60,7 +61,7 @@ class MainCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(capture["imageUrl"].startswith("data:image/png;base64,"))
         self.assertEqual(capture["monitorId"], "monitor-3")
         self.assertEqual(capture["status"], "captured")
-        self.assertEqual(session.snapshot()["confirmedRoute"], ["monitor-3", "monitor-1", "monitor-2"])
+        self.assertEqual(session.snapshot()["confirmedRoute"], ["monitor-3"])
 
     def test_cloud_image_import_needs_schema_but_not_pc_sdk_or_navigation_package(self):
         dockerfile = (ROOT / "relay" / "Dockerfile").read_text(encoding="utf-8")

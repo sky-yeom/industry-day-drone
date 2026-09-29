@@ -60,6 +60,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this._playing = false;
     this._drainIds = [];
     this._startedIds = new Set();
+    this._endedIds = new Set();
     this._responseId = null;
     this._paused = false;
     this._heldIds = new Set();
@@ -79,6 +80,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         this._pos = 0;
         this._drainIds.length = 0;
         this._startedIds.clear();
+        this._endedIds.clear();
         this._responseId = null;
         this._paused = false;
         this._heldIds.clear();
@@ -91,6 +93,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         this._drainIds = this._drainIds.filter(id => !ids.has(id));
         for (const id of ids) {
           this._startedIds.delete(id);
+          this._endedIds.delete(id);
           this._heldIds.delete(id);
         }
         if (ids.has(this._responseId)) {
@@ -148,7 +151,21 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         this._outputEnd = (currentFrame + written) / sampleRate;
       }
       this._pos += take;
-      if (this._pos >= this._cur.length) this._cur = null;
+      if (this._pos >= this._cur.length) {
+        const finishedId = this._responseId;
+        this._cur = null;
+        // Signal that this response's own audio is fully consumed as soon as
+        // it happens, independent of whatever (possibly held) audio follows
+        // it in the queue — waiting for the whole queue to drain would
+        // deadlock while a later held response (e.g. route intro) sits
+        // behind it. Only fire once, and only once no more chunks for the
+        // same response are still queued right behind it.
+        if (finishedId && this._startedIds.has(finishedId) && !this._endedIds.has(finishedId)
+            && (this._queue.length === 0 || this._queue[0].id !== finishedId)) {
+          this._endedIds.add(finishedId);
+          this.port.postMessage({ type: 'ended', id: finishedId });
+        }
+      }
     }
     for (let i = written; i < out.length; i++) out[i] = 0;
 

@@ -86,7 +86,7 @@ for (const step of [undefined, "route", "map-intro", "images", "results", "inval
     assert.match(html, /Let(?:'|&#x27;|&#39;)s Go!/);
     const floor = html.match(/<div[^>]+class="pixel-scene-ground[^"]*"[^>]*>/)?.[0];
     assert.ok(floor);
-    assert.match(floor, /style="[^"]*height:calc\(16% \+ 35px\)/);
+    assert.match(floor, /style="[^"]*height:calc\(16% \+ (?:35px|\(35px \* var\(--ui-scale\)\))\)/);
     assert.match(floor, /z-index:50/);
     assert.match(floor, /animation-play-state:paused/);
     assert.match(floor, /pixel-scene-ground--scrolling/);

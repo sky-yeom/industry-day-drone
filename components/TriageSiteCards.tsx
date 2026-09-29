@@ -2,28 +2,15 @@
 
 import Image from "next/image";
 import type { TriageSite } from "@/data/scenario";
-import type { SecurityZone } from "@/data/security-scenario";
-import type { ConstructionZone } from "@/data/construction-scenario";
 import type { MonitorId, PersonState } from "@/lib/types";
 
-/**
- * The 3 site cards at the heart of the merged triage board: one card per
- * 119 call site (fire / sea / rubble), each showing that site's own
- * reference photo and — once Gibby has confirmed it by voice — that
- * site's own confirmed appearance description + confidence. Before
- * confirmation a card shows the site's clue as a placeholder so the
- * participant can see what's still pending. The card matching
- * `activeMonitorId` is highlighted so it's obvious which site Gibby is
- * currently asking about. Reused by both the live triage board
- * (PixelPromptScreen) and the prompt->route transition (GibbyMapTransition).
- */
 export default function TriageSiteCards({
   sites,
   people,
   activeMonitorId,
   compact = false,
 }: {
-  sites: (TriageSite | SecurityZone | ConstructionZone)[];
+  sites: TriageSite[];
   people: PersonState[];
   activeMonitorId?: MonitorId | null;
   compact?: boolean;

@@ -8,77 +8,46 @@ import VoiceTurnIndicator from "@/components/VoiceTurnIndicator";
 import type { VoiceStatus } from "@/lib/voiceClient";
 import { MAP_IMAGE_BY_KIND, MONITOR_MAP_BY_KIND, MONITORS_BY_KIND } from "@/data/monitors";
 import { BOARDING_MIRRORED, MAP_MARKER_ENTRY, MAP_MARKER_HEIGHT, MAP_MARKER_SRC, MAP_MARKER_WIDTH } from "@/lib/gibbyDroneSprite";
-import { OUTCOME_LABELS, SECURITY_OUTCOME_LABELS, CONSTRUCTION_OUTCOME_LABELS, type DashboardState } from "@/lib/types";
+import { OUTCOME_LABELS, type DashboardState } from "@/lib/types";
 
 export const MISSION_LABELS: Record<DashboardState["missionPhase"], string> = {
-  briefing: "방문 순서 선택", ready: "출발 준비 완료", flying: "자동 비행 중",
-  capturing: "현장 이미지 촬영 중", analyzing: "대상자 탐지 중",
-  paused: "기술 오류 · 시계 일시 정지", complete: "작전 종료", aborted: "작전 중단",
+  briefing: "확인 지역 선택",
+  ready: "출발 준비 완료",
+  flying: "자동 비행 중",
+  capturing: "현장 이미지 촬영 중",
+  analyzing: "대상자 탐지 중",
+  paused: "기술 오류 · 시계 일시 정지",
+  complete: "작전 종료",
+  aborted: "작전 중단",
 };
 
 export function MissionCountdownSummary({ state, elapsedMs, connected }: {
   state: DashboardState; elapsedMs: number; connected: boolean;
 }) {
-  // Triage shares one clock for the whole mission (there's only one real
-  // person to save; the other 2 sites are false alarms), so it gets a
-  // single combined countdown instead of a per-site timer in each card —
-  // matches the "one timer to save that person" framing directly.
-  const realPerson = state.kind === "triage"
-    ? state.people.find((person) => !person.falseAlarm) : null;
-  const sharedRemaining = realPerson
-    ? Math.max(0, realPerson.deadlineMs - (realPerson.resolvedAtMs ?? elapsedMs)) : null;
-  return <section aria-label="119 신고 시한과 현재 작전 상태" className="space-y-1">
-    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+  const selectedMonitorId = state.confirmedRoute[0] ?? state.draftRoute[0] ?? state.activeMonitorId ?? null;
+  const selectedMonitor = selectedMonitorId ? MONITOR_MAP_BY_KIND[state.kind][selectedMonitorId] : null;
+  const selectedPerson = selectedMonitorId
+    ? state.people.find((person) => person.monitorId === selectedMonitorId)
+    : undefined;
+  const statusLabel = selectedPerson?.outcome
+    ? (selectedPerson.falseAlarm && selectedPerson.outcome === "report_missed"
+      ? (selectedPerson.falseAlarmReveal ?? "오경보")
+      : OUTCOME_LABELS[selectedPerson.outcome])
+    : selectedMonitor ? `확인 중: ${selectedMonitor.label}` : "확인 지역 대기 중";
+
+  return <section aria-label="현재 작전 상태" className="space-y-2">
+    <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#091f2c]">
       <strong>{MISSION_LABELS[state.missionPhase]}{state.activeMonitorId ? ` · ${MONITOR_MAP_BY_KIND[state.kind][state.activeMonitorId].label}` : ""}</strong>
       <span className="tabular-nums">
         경과 {(elapsedMs / 1000).toFixed(1)}초 · {state.clockRunning ? connected ? "진행 중" : "연결 끊김 · 마지막 수신 상태" : "정지"}
       </span>
     </div>
-    {sharedRemaining !== null && !realPerson?.outcome && (
-      <p className="pixel-panel bg-[#fde4e4] px-2 py-1 text-xs font-bold tabular-nums text-[#7a1f1f]">
-        구조 시한 · 남은 {(sharedRemaining / 1000).toFixed(1)}초
-      </p>
-    )}
-    <div className="grid grid-cols-3 gap-2">
-      {state.people.map((person) => {
-        const remaining = Math.max(0, person.deadlineMs - (person.resolvedAtMs ?? elapsedMs));
-        return <div key={person.id} className={`pixel-panel px-2 py-1 ${state.activeMonitorId === person.monitorId ? "bg-[#f0ebf7]" : "bg-white"}`}>
-          <p className="text-xs font-semibold">{MONITOR_MAP_BY_KIND[state.kind][person.monitorId].label}{person.attempts >= 2 ? " · 2회 시도" : ""}</p>
-          <p className="text-xs font-semibold tabular-nums">{person.outcome
-            ? (person.falseAlarm && ((state.kind === "security" && person.outcome === "escaped")
-                || (state.kind === "triage" && person.outcome === "report_missed"))
-              ? (person.falseAlarmReveal ?? "오경보")
-              : state.kind === "security" ? SECURITY_OUTCOME_LABELS[person.outcome as "caught" | "escaped"]
-              : state.kind === "construction" ? CONSTRUCTION_OUTCOME_LABELS[person.outcome as "reported" | "not_found" | "unchecked"]
-              : OUTCOME_LABELS[person.outcome as "reported" | "reported_injured" | "report_missed"])
-            // Construction has no deadline mechanic; triage now shows one
-            // shared clock above instead of a per-site countdown.
-            : state.kind === "construction" ? "미확인"
-            : state.kind === "triage" ? "확인 중"
-            : `남은 ${(remaining / 1000).toFixed(1)}초`}</p>
-          {!person.outcome && remaining === 0 && state.kind !== "construction" && state.kind !== "triage" && <p className="mt-1 text-xs">서버 판정 대기 중</p>}
-        </div>;
-      })}
+    <div className={`pixel-panel px-3 py-2 text-sm font-semibold text-[#091f2c] ${selectedMonitor ? "bg-[#f0ebf7]" : "bg-white"}`}>
+      {statusLabel}
     </div>
   </section>;
 }
 
-/**
- * Route step: a real map (MAP_IMAGE_BY_KIND — one background per scenario:
- * the triage island, the security facility floor plan, the construction
- * site) instead of the old abstract dot-field/blob background. Each site
- * gets a location-pin.png pin positioned exactly over its spot on that
- * scenario's map art (monitor x/y in data/monitors.ts were tuned to match
- * each map); pins stay hidden until the user picks that stop into the route,
- * then pop in, and a dashed path connects picked pins in the order chosen.
- *
- * This screen now also persists through the whole mission (no separate
- * full-screen "images" step anymore, see app/page.tsx): once Gibby boards
- * the drone (`boarded`), a small live drone marker eases between pins on
- * the map tracking `state.activeMonitorId` in real time, and the right
- * column swaps from the clue cards below to the drone-image panel + the
- * 3 report-deadline timers.
- */
 export default function FlightPathMap({ state, boarded = false, elapsedMs, connected, departing = false, markerRef,
   voiceStatus, onMapReady, onMapError, onForceNext }: {
   state: DashboardState;
@@ -121,17 +90,8 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
     .map((monitor) => ({ monitor, order: route.indexOf(monitor.id) }))
     .filter((entry) => entry.order >= 0)
     .sort((a, b) => a.order - b.order);
-  // Live drone marker target: the site the backend is actually working
-  // (state.activeMonitorId) once boarding has finished, falling back to the
-  // first confirmed stop before the backend has reported an active site yet
-  // (e.g. right after launch, still climbing out).
   const activeMonitorId = state.activeMonitorId ?? route[0] ?? null;
   const droneMarkerMonitor = boarded && activeMonitorId ? MONITOR_MAP_BY_KIND[state.kind][activeMonitorId] : null;
-  // Entrance: mount at the off-map corner (MAP_MARKER_ENTRY, roughly where
-  // Gibby's dock overlay visually sits) then flip to the real target
-  // position one frame later, so the very first move is an actual CSS
-  // transition (flying in from the corner) rather than appearing already
-  // on the pin.
   const [markerArrived, setMarkerArrived] = useState(false);
   useEffect(() => {
     if (!boarded) {
@@ -144,13 +104,6 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
   const markerPos = markerArrived && droneMarkerMonitor ? droneMarkerMonitor : MAP_MARKER_ENTRY;
 
   return <section
-    // Gibby's docked speech bubble (bottom-right, right:6%+161px, up to
-    // sm:max-w-xs=320px wide — see GibbyRouteDock.tsx) only occupies the
-    // bottom-right corner, not the full section height, so clearance for
-    // it lives on the mission-images column's own bottom padding (below)
-    // instead of a full-height pr on this section — that used to reserve
-    // the bubble's width across the *entire* map+cards row and squeezed
-    // both the map and the cards column far smaller than needed.
     className={`mission-workspace relative flex h-full min-h-0 w-full flex-col gap-3 p-3 sm:p-4 ${departing ? "mission-workspace--exiting" : ""}`}
     inert={departing} aria-hidden={departing || undefined}>
     {onForceNext && <ForceNextButton onClick={onForceNext} />}
@@ -172,12 +125,6 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
           }} />
         <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="pointer-events-none absolute inset-0 z-10 h-full w-full" aria-hidden="true">
           <defs>
-            {/* userSpaceOnUse (not the default objectBoundingBox) — a
-                perfectly horizontal or vertical route line has a zero-height
-                or zero-width bounding box, and objectBoundingBox percentages
-                degenerate to a zero-area filter region for those, which
-                makes the browser silently clip the whole line. Fixed
-                viewBox-space bounds avoid that regardless of a line's angle. */}
             <filter id="route-glow" filterUnits="userSpaceOnUse" x="-10" y="-10" width="120" height="120">
               <feGaussianBlur stdDeviation="0.55" result="blur" />
               <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
@@ -223,7 +170,7 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
         )}
       </div>
 
-      {boarded && <div className={`mission-images flex min-h-0 flex-col gap-2`}>
+      {boarded && <div className="mission-images flex min-h-0 flex-col gap-2">
         <div className="pixel-panel shrink-0 bg-white p-3">
           <MissionCountdownSummary state={state} elapsedMs={elapsedMs} connected={connected} />
         </div>
@@ -231,6 +178,6 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
       </div>}
     </div>
 
-    {state.promptPhase === "confirmed" && state.missionPhase === "briefing" && <p className="mission-workspace-heading shrink-0 text-[0.6875rem] leading-4 text-[#091f2c] [text-shadow:1px_1px_0_#fff]">첫 두 방문지를 음성으로 선택하세요. 출발에 동의하면 자동 비행을 시작합니다.</p>}
+    {state.promptPhase === "confirmed" && state.missionPhase === "briefing" && <p className="mission-workspace-heading shrink-0 text-[0.6875rem] leading-4 text-[#091f2c] [text-shadow:1px_1px_0_#fff]">세 곳의 신고 중 확인할 지역 한 곳을 음성으로 선택하세요. 선택하면 곧바로 그 위치로 자동 비행을 시작합니다.</p>}
   </section>;
 }

@@ -1,4 +1,4 @@
-"""Real mission evidence adapter; scenario selection, deadlines and scoring stay in SurveySession."""
+"""Real mission evidence adapter; scoring stays in SurveySession."""
 from __future__ import annotations
 
 import asyncio
@@ -65,6 +65,7 @@ class LiveMissionRunner(MissionRunner):
         self.drone = drone_client
         self._launch_lock = asyncio.Lock()
         self._execute_id, self._stop_id = str(uuid4()), str(uuid4())
+        self._deadlines = None
         self._execute_task = self._stop_task = None
         self._attempted = self._closing = False
         self._route = []
@@ -149,16 +150,21 @@ class LiveMissionRunner(MissionRunner):
                 if type(destinations) is not list:
                     raise DroneError("INVALID_CAPABILITIES")
                 for item in destinations:
-                    if (type(item) is not dict or type(item.get("destination_id")) is not str
-                            or item.get("monitor_id") not in self.session.state.confirmedRoute
-                            or item["monitor_id"] in mapping or item["destination_id"] in mapping.values()):
+                    if type(item) is not dict or type(item.get("destination_id")) is not str:
                         raise DroneError("INVALID_CAPABILITIES")
-                    mapping[item["monitor_id"]] = item["destination_id"]
+                    monitor_id = item.get("monitor_id")
+                    if monitor_id not in self.session.state.confirmedRoute:
+                        continue
+                    if monitor_id in mapping or item["destination_id"] in mapping.values():
+                        raise DroneError("INVALID_CAPABILITIES")
+                    mapping[monitor_id] = item["destination_id"]
                 if set(mapping) != set(self.session.state.confirmedRoute):
                     raise DroneError("INVALID_CAPABILITIES")
                 self._route = [mapping[mid] for mid in self.session.state.confirmedRoute]
                 self._monitor_by_destination = {destination: monitor for monitor, destination in mapping.items()}
-                if self._route not in caps.get("supported_ordered_sequences", []):
+                supported_sequences = caps.get("supported_ordered_sequences", [])
+                if len(self._route) > 1 and not any(type(seq) is list and seq[:len(self._route)] == self._route
+                                                    for seq in supported_sequences):
                     raise DroneError("ROUTE_UNSUPPORTED", "확인한 방문 순서는 현장 드론 프로파일에서 지원하지 않습니다.")
                 status = self._live_response(await self.drone.call("drone_get_status", {}))
                 if self.expected_mode == "live":
@@ -190,7 +196,6 @@ class LiveMissionRunner(MissionRunner):
                     await self._stop_hardware()
                     return outcome
                 self._work = asyncio.create_task(self._run_live(self.session.run_id))
-                self._deadlines = asyncio.create_task(self._watch_deadlines(self.session.run_id))
                 self._lease = asyncio.create_task(self._renew_lease())
                 return result(True, "MOCK 도구 실행: 확정 경로와 PC 모의 캡처를 요청했습니다. 실제 비행은 없습니다."
                     if self.expected_mode == "mock" else
@@ -337,30 +342,6 @@ class LiveMissionRunner(MissionRunner):
                 log.warning("Mission lease read hit %s; retrying inside the lease", exc.code)
                 await asyncio.sleep(0.3)
 
-    async def _watch_deadlines(self, run_id):
-        expired_terminal = False
-        while run_id == self.session.run_id and self.session.phase not in TERMINAL:
-            await self.sleep(self.tick_seconds)
-            changed = self.session.expire()
-            if self.session.phase in TERMINAL:
-                expired_terminal = changed
-                break
-            await self._notify()
-        if self.session.phase == "aborted":
-            await self._stop_hardware()
-            if self._work and not self._work.done():
-                self._work.cancel()
-                await asyncio.gather(self._work, return_exceptions=True)
-        elif expired_terminal and self._work and not self._work.done():
-            # Running out of report time ends the scoring, not the flight. The
-            # aircraft still owns a route that finishes on its own landing pad,
-            # and cutting its authority here would strand it hovering indoors.
-            # _run_live is already waiting for that landing, so wait with it and
-            # let the debrief below be the thing that reports a finished flight.
-            await asyncio.gather(self._work, return_exceptions=True)
-        if run_id == self.session.run_id and self.session.phase in TERMINAL:
-            await self._notify_terminal()
-
     async def _run_live(self, run_id):
         try:
             for index, destination in enumerate(self._route):
@@ -435,8 +416,7 @@ class LiveMissionRunner(MissionRunner):
                         # aircraft. Stopping here would leave it hovering wherever a
                         # cloud call happened to fail; the safest place for it is its
                         # own landing pad at the end of the route. Keep the photo
-                        # unjudged, tell the operator, and fly on. The report deadline
-                        # is untouched, so an unjudged person still times out honestly.
+                        # unjudged, tell the operator, and fly on.
                         log.warning("analysis reached no verdict for %s (%s: %s); continuing the route",
                                     monitor, type(exc).__name__,
                                     getattr(exc, "model_reason", None) or exc)

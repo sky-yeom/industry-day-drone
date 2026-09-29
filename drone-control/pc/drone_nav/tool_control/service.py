@@ -49,6 +49,7 @@ class MockAdapter:
     home_tag_id = 6
     floor_tag_id = 0
     target_height_m = 1.4
+    supported_ordered_sequences = [[destination] for destination in destination_ids] + [list(order) for order in itertools.permutations(destination_ids)]
 
     def status(self):
         return {"connected": True, "ground_verified": True, "is_flying": False,
@@ -190,7 +191,7 @@ class MissionService:
                 "monitor_id": "monitor-" + d.split("-")[-1],
                 "physical_definition": {"type": "apriltag", "marker_id": int(d.split("-")[-1])}}
                 for d in ids], supported_ordered_sequences=getattr(self.adapter, "supported_ordered_sequences",
-                    [list(p) for p in itertools.permutations(ids)]),
+                    [[destination] for destination in ids] + [list(p) for p in itertools.permutations(ids)]),
             **({"adapter": self.adapter.adapter_name} if hasattr(self.adapter, "adapter_name") else {}),
             **({"mock_capture_ready": True} if getattr(self.adapter, "mock_capture_ready", False) else {}))
 
@@ -293,7 +294,7 @@ class MissionService:
         if args["profile_id"] != caps["profile_id"] or args["site_revision"] != caps["site_revision"]:
             raise ToolError("SITE_MISMATCH", "Profile/site revision changed; read capabilities again")
         if args["destination_ids"] not in caps["supported_ordered_sequences"]:
-            raise ToolError("UNSUPPORTED_ROUTE", "Route must visit each registered destination exactly once")
+            raise ToolError("UNSUPPORTED_ROUTE", "Route must match one supported ordered sequence")
         if self.mode == "live" and not self.adapter.live_ready:
             raise ToolError("LIVE_NOT_READY", "A configured physical profile is required")
         if self._active():

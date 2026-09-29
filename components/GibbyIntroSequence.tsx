@@ -180,7 +180,6 @@ export default function GibbyIntroSequence({
         <PixelPromptScreen
           briefing={scenario.briefing}
           state={state}
-          scenarioKind={scenario.kind}
           voiceStatus={phase === "done" ? voiceStatus : undefined}
           error={phase === "done" ? error : null}
           onRetry={onRetry}

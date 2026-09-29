@@ -73,12 +73,7 @@ DRONE_REMOTE_SINGLE_REPLICA = os.getenv("DRONE_REMOTE_SINGLE_REPLICA", "0") == "
 RELAY_OPERATOR_TOKEN = os.getenv("RELAY_OPERATOR_TOKEN", "").strip()
 RELAY_PUBLIC_ORIGIN = os.getenv("RELAY_PUBLIC_ORIGIN", "").strip()
 RELAY_LOCAL_DIRECT = os.getenv("RELAY_LOCAL_DIRECT", "0") == "1"
-# The scenario file carries both the triage deadlines and, through them, the
-# route the operator confirms. The committed default is tuned to the mock
-# timeline (travelMs + captureMs + mockAnalysisMs, about 30s for three visits).
-# A real flight takes 77-100s, so pointing this at a live scenario is the only
-# supported way to change those numbers; editing the default in place would
-# break the mock demo and the scenario contract test.
+# The scenario file carries the single triage briefing and monitor layout used by the relay.
 SCENARIO_FILE = Path(
     os.getenv("RELAY_SCENARIO_FILE", "").strip()
     or Path(__file__).resolve().parents[1] / "data" / "emergency-triage.json"
@@ -87,25 +82,6 @@ if not SCENARIO_FILE.is_file():
     # Without this the miss surfaces as a FileNotFoundError from inside an
     # unrelated import, which is a poor thing to debug on a flight line.
     raise SystemExit(f"RELAY_SCENARIO_FILE does not point at a file: {SCENARIO_FILE}")
-# The "security" scenario kind (Security Breach: one suspect, three alarm
-# zones, two false positives) is a second, independently selectable scenario
-# picked per-session (see SurveySession(kind=...) in survey.py), not via a
-# process-wide mode switch like SCENARIO_FILE above.
-SECURITY_SCENARIO_FILE = Path(
-    os.getenv("RELAY_SECURITY_SCENARIO_FILE", "").strip()
-    or Path(__file__).resolve().parents[1] / "data" / "security-breach.json"
-)
-if not SECURITY_SCENARIO_FILE.is_file():
-    raise SystemExit(f"RELAY_SECURITY_SCENARIO_FILE does not point at a file: {SECURITY_SCENARIO_FILE}")
-# The "construction" scenario kind (Construction Site Safety: hot-pink
-# workwear without a hard hat, three zones, no deadline mechanic) is a
-# third, independently selectable scenario, same pattern as SECURITY above.
-CONSTRUCTION_SCENARIO_FILE = Path(
-    os.getenv("RELAY_CONSTRUCTION_SCENARIO_FILE", "").strip()
-    or Path(__file__).resolve().parents[1] / "data" / "construction-safety.json"
-)
-if not CONSTRUCTION_SCENARIO_FILE.is_file():
-    raise SystemExit(f"RELAY_CONSTRUCTION_SCENARIO_FILE does not point at a file: {CONSTRUCTION_SCENARIO_FILE}")
 AZURE_VISION_ENDPOINT = os.getenv("AZURE_VISION_ENDPOINT", "").strip()
 AZURE_VISION_DEPLOYMENT = os.getenv("AZURE_VISION_DEPLOYMENT", "").strip()
 AZURE_VISION_API_VERSION = os.getenv("AZURE_VISION_API_VERSION", "v1").strip()

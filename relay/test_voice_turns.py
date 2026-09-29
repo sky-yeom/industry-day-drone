@@ -351,20 +351,26 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((await self.call("prepare_prompt", PROMPT_ARGS, turn))["ok"])
         self.assertTrue(turn.consumed)
 
-    async def test_only_one_stop_per_reply_and_only_third_stop_is_automatic(self):
+    async def test_only_one_stop_per_reply_and_immediate_auto_launch(self):
         for _ in range(len(MONITOR_IDS)):
             self.session.confirm_prompt(**PROMPT_ARGS)
         first = participant_turn(self.bridge, "먼저 바다부터 가자")
         self.assertTrue((await self.call("select_stop", {"monitor": "monitor-1"}, first))["ok"])
-        self.assertFalse((await self.call("select_stop", {"monitor": "monitor-2"}, first))["ok"])
         self.assertEqual(self.session.state.draftRoute, ["monitor-1"])
-        second = participant_turn(self.bridge, "잔해 아래 사람")
-        self.assertTrue((await self.call("select_stop", {"monitor": "monitor-2"}, second))["ok"])
-        self.assertEqual(self.session.state.confirmedRoute, ["monitor-1", "monitor-2", "monitor-3"])
-        self.assertEqual(self.session.phase, "ready")
-        with patch.object(self.bridge.runner, "launch", new_callable=AsyncMock) as launch:
-            self.assertFalse((await self.call("launch_mission", {}, second))["ok"])
-            launch.assert_not_awaited()
+        self.assertEqual(self.session.state.confirmedRoute, ["monitor-1"])
+        # Selecting a single destination now cascades straight through
+        # confirm_route and launch_mission with no separate agreement step.
+        self.assertEqual(self.session.state.phase, "confirmed")
+        self.assertEqual(self.session.phase, "flying")
+        self.assertTrue(self.session.data["clockRunning"])
+        second = participant_turn(self.bridge, "잔해도 확인해")
+        self.assertFalse((await self.call("select_stop", {"monitor": "monitor-2"}, second))["ok"])
+        self.assertEqual(self.session.state.draftRoute, ["monitor-1"])
+        # A direct (non-cascaded) voice launch_mission call is still blocked
+        # by the authorize() safety gate — the real launch always happens
+        # automatically as part of the select_stop cascade instead.
+        outcome = await self.call("launch_mission", {}, second)
+        self.assertFalse(outcome["ok"])
 
     async def test_agent_cannot_substitute_another_stop_or_reuse_prompt_consent(self):
         self.session.confirm_prompt(**PROMPT_ARGS)
@@ -390,32 +396,22 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue((await self.call("launch_mission", {}, turn))["ok"])
             launch.assert_awaited_once()
 
-    async def test_selection_reply_is_not_route_readback_and_cancelled_readback_does_not_count(self):
+    async def test_selection_no_longer_triggers_a_route_readback_and_launches_immediately(self):
         for _ in range(len(MONITOR_IDS)):
             self.session.confirm_prompt(**PROMPT_ARGS)
         first = participant_turn(self.bridge, "바다")
-        await self.call("select_stop", {"monitor": "monitor-1"}, first)
-        self.bridge._response_active = False
-        second = participant_turn(self.bridge, "잔해")
-        await self.call("select_stop", {"monitor": "monitor-2"}, second)
+        outcome = await self.call("select_stop", {"monitor": "monitor-1"}, first)
+        self.assertTrue(outcome["ok"])
+        # The old "이 경로로 출발할까?" readback-then-reconfirm step is gone:
+        # select_stop cascades straight through to launch, so no
+        # routeReadback response is ever created.
         readbacks = [event["response"] for event in self.bridge.upstream.sent
                      if event["type"] == "response.create" and
                      event["response"].get("metadata", {}).get("routeReadback") == "true"]
-        self.assertEqual(len(readbacks), 1)
-        self.assertIn("이 경로로 출발할까?", readbacks[0]["instructions"])
-        spoken_reply(self.bridge)
+        self.assertEqual(len(readbacks), 0)
         self.assertFalse(self.bridge.voice_turns.confirmed_route_replied)
-        self.bridge.upstream.incoming = [
-            {"type": "response.created", "response": {
-                "id": "route-readback", "metadata": readbacks[0]["metadata"]}},
-            {"type": "response.audio.delta", "response_id": "route-readback", "delta": "audio"},
-            {"type": "response.done", "response": {"id": "route-readback", "status": "cancelled"}},
-        ]
-        await self.bridge.pump_upstream()
-        with patch.object(self.bridge.runner, "launch", new_callable=AsyncMock) as launch:
-            turn = participant_turn(self.bridge, "응")
-            self.assertFalse((await self.call("launch_mission", {}, turn))["ok"])
-            launch.assert_not_awaited()
+        self.assertEqual(self.session.data["missionPhase"], "flying")
+        self.assertTrue(self.session.data["clockRunning"])
 
     async def test_departure_waits_for_matching_browser_playback_acknowledgement(self):
         ready(self.session)

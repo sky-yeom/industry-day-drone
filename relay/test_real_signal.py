@@ -11,7 +11,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 from relay import config
 from relay.drone_client import DroneClient
 from relay.live_mission import LiveMissionRunner
-from relay.survey import MONITOR_IDS, SurveySession
+from relay.survey import SurveySession
 from relay.test_mission_runner import FakeVision
 from relay.camera import LiveCaptureCamera
 
@@ -35,7 +35,7 @@ class RealSignalTests(unittest.IsolatedAsyncioTestCase):
                 if name == "drone_get_capabilities":
                     response.update(live_ready=True, profile_id="wire-fixture", site_revision="v1",
                         destinations=[{"destination_id": f"tag-{n}", "monitor_id": f"monitor-{n}"} for n in (1,2,3)],
-                        supported_ordered_sequences=[["tag-2","tag-3","tag-1"]])
+                        supported_ordered_sequences=[["tag-2"]])
                 elif name == "drone_get_status":
                     response.update(connected=True, ground_verified=True, active_mission_id=None)
                 elif name == "drone_execute_route":
@@ -81,10 +81,8 @@ class RealSignalTests(unittest.IsolatedAsyncioTestCase):
                 return original_opener.open(recorded, timeout=timeout)
 
         session = SurveySession(mode="azure", drone_control_mode="live")
-        for _ in MONITOR_IDS:
-            session.confirm_prompt("wire fixture only")
+        session.confirm_prompt("wire fixture only")
         session.select_stop("monitor-2")
-        session.select_stop("monitor-3")
         session.confirm_route()
         events = []
         async def publish(event):
@@ -111,7 +109,7 @@ class RealSignalTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(normalized["authorization"], "Bearer " + token)
             self.assertEqual(envelope["arguments"], {
                 "profile_id": "wire-fixture", "site_revision": "v1",
-                "destination_ids": ["tag-2","tag-3","tag-1"],
+                "destination_ids": ["tag-2"],
             })
             self.assertEqual(envelope["caller_id"], "real-wire-test")
             self.assertTrue(envelope["request_id"])

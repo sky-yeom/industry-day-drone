@@ -18,8 +18,8 @@ const FILES = Object.fromEntries(['tools.json', 'contract.schema.json'].map(name
   [`/${name}`, readFileSync(new URL(name, import.meta.url), 'utf8')]));
 const TOOL_NAMES = tools.map(tool => tool.name);
 const DESTINATIONS = ['tag-1', 'tag-2', 'tag-3'];
-const ROUTES = DESTINATIONS.flatMap(a => DESTINATIONS.filter(b => b !== a)
-  .map(b => [a, b, DESTINATIONS.find(c => c !== a && c !== b)]));
+const ROUTES = [...DESTINATIONS.map(a => [a]), ...DESTINATIONS.flatMap(a => DESTINATIONS.filter(b => b !== a)
+  .map(b => [a, b, DESTINATIONS.find(c => c !== a && c !== b)]))];
 const base = { schema_version: 1, execution_mode: 'mock', physical_execution: false };
 const success = fields => ({ ...base, ok: true, status: 'ok', ...fields });
 const detached = value => structuredClone(value);

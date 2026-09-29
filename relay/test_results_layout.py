@@ -49,7 +49,8 @@ function loader(react = React, browser = {}) {
 
 const ResultsPanel = loader()(path.resolve("components/ResultsPanel.tsx")).default;
 const state = {
-  missionPhase: "complete", score: {total: 3, reportedCount: 2}, kind: "triage",
+  missionPhase: "complete", score: {total: 1, reportedCount: 1}, kind: "triage",
+  confirmedRoute: ["monitor-1"],
   people: [1, 2, 3].map(id => ({
     id: `person-${id}`, monitorId: `monitor-${id}`, label: `사람 ${id}`, outcome: null,
   })),
@@ -62,14 +63,12 @@ for (const visible of [undefined, true, false]) {
   const html = renderResults(visible);
   const reveal = html.indexOf('transition-opacity');
   assert.ok(reveal > html.indexOf("처음으로"), "reset remains outside reveal");
-  for (const text of ["구조 성공", "사람 1", "사람 2", "사람 3",
-                      "최종 작전 설명", "확정한 탐지 프롬프트"]) {
+  for (const text of ["구조 성공", "확인한 지역"]) {
     assert.ok(html.indexOf(text) > reveal, `${text} belongs to the shared reveal`);
   }
   assert.match(html, /motion-reduce:transition-none/);
-  assert.match(html, /grid-rows-2 sm:grid-cols-2 sm:grid-rows-1/);
-  assert.match(html, /grid min-h-0 flex-1 items-start/);
   assert.doesNotMatch(html, /overflow-(auto|scroll)|pixel-bubble/);
+  assert.doesNotMatch(html, /사람 1|사람 2|사람 3/, "the per-monitor grid is gone; only the single result card remains");
   if (visible === false) assert.match(html, /aria-hidden="true" inert=""[^>]*opacity-0/);
   else assert.match(html, /opacity-100/);
 }
@@ -108,23 +107,15 @@ function find(element, predicate) {
 }
 renderPanel();
 let panelTree = renderPanel();
-const grid = element => typeof element.props?.className === "string"
-  && element.props.className.startsWith("grid min-h-0 flex-1");
-assert.match(find(panelTree, grid).props.className, /grid-cols-2 grid-rows-1/,
-  "short narrow containers use two readable columns instead of overflowing stacked rows");
-panel.clientHeight = 600; resizePanel(); panelTree = renderPanel();
-assert.match(find(panelTree, grid).props.className, /grid-cols-1 grid-rows-2 sm:/);
 panel.clientWidth = 1024; panel.clientHeight = 257; resizePanel(); panelTree = renderPanel();
 const banner = find(panelTree, element => element.type === "div"
   && element.props.children?.[0]?.props?.children === "119 신고 작전 종료");
 assert.match(banner.props.className, /w-full.*flex-col/,
   "the summary stays a full-width, two-line banner even in short wide regions");
 assert.equal(banner.props.children[1].props.children, "구조 성공");
-assert.ok(find(panelTree, element => element.props?.className === "grid shrink-0 grid-cols-3 items-start gap-2"),
-  "the three people stay in their own row below the summary");
 assert.doesNotMatch(panelTree.props.className, /sm:p-3/);
 assert.match(find(panelTree, element => element.type === "button").props.className, /py-1 leading-5/);
-const card = find(panelTree, element => element.props?.title === "최종 작전 설명");
+const card = find(panelTree, element => element.props?.title === "확인한 지역 · 바다");
 assert.equal(card.props.compact, true, "short-wide text cards trim chrome, never their readable text");
 card.props.onSpaceChange(card.props.label, true);
 assert.ok(find(renderPanel(), element => element.props?.role === "status"),
@@ -132,14 +123,8 @@ assert.ok(find(renderPanel(), element => element.props?.role === "status"),
 card.props.onSpaceChange(card.props.label, false);
 assert.equal(find(renderPanel(), element => element.props?.role === "status"), undefined);
 card.props.onHeightChange("최종 작전 설명", 120);
-card.props.onHeightChange("결과의 탐지 프롬프트", 80);
-for (const title of ["최종 작전 설명", "확정한 탐지 프롬프트"]) {
-  assert.equal(find(renderPanel(), element => element.props?.title === title).props.sharedHeight, 120,
-    "both text cards use the larger natural height instead of stretching to fill the screen");
-}
-card.props.onHeightChange("최종 작전 설명", 60);
-assert.equal(find(renderPanel(), element => element.props?.title === "최종 작전 설명").props.sharedHeight, 80,
-  "paired cards can shrink again after text or viewport changes");
+assert.equal(find(renderPanel(), element => element.props?.title === "확인한 지역 · 바다").props.sharedHeight, 120,
+  "the single result card's measured height flows back in as its shared height");
 
 // A tiny hook/DOM harness runs the actual effect and handlers. Layout metrics model
 // wrapping at fixed readable line-height, including Korean, emoji and explicit newlines.

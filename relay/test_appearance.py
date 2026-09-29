@@ -103,20 +103,14 @@ class AppearanceTests(unittest.TestCase):
             with self.subTest(prompt=prompt), self.assertRaises(ValueError):
                 fixture_prompt_constraints(prompt)
 
-    def test_person_reference_is_accepted_in_every_scenario_kind(self):
-        """A description with at least a person/gender reference (even with
-        no other assessable feature) is accepted end-to-end in all 3
-        scenario kinds (triage, security, construction) — this gate is
-        shared, unbranched code, not per-scenario."""
+    def test_person_reference_is_accepted_in_triage_session(self):
         from relay.survey import SurveySession
-        for kind in ("triage", "security", "construction"):
-            with self.subTest(kind=kind):
-                session = SurveySession(kind=kind)
-                outcome = session.confirm_prompt(
-                    prompt_text="키 큰 남자를 찾아줘",
-                    appearance_constraints=[], unsupported_appearance=[])
-                self.assertTrue(outcome["ok"], outcome)
-                self.assertEqual(session.data["promptPhase"], "confirmed")
+        session = SurveySession()
+        outcome = session.confirm_prompt(
+            prompt_text="키 큰 남자를 찾아줘",
+            appearance_constraints=[], unsupported_appearance=[])
+        self.assertTrue(outcome["ok"], outcome)
+        self.assertEqual(session.data["promptPhase"], "confirmed")
 
     def test_validation_does_not_fill_omitted_features(self):
         actual, unsupported = validate_constraints([condition("hairColor", " BROWN ")], [])
@@ -177,54 +171,6 @@ class AppearanceTests(unittest.TestCase):
         # attribute the observation doesn't carry.
         with self.assertRaises(ValueError):
             matches_appearance({"shirtColor": "pink"}, conditions, [])
-
-    def test_construction_kind_validates_policy_violation_field(self):
-        for present in (False, True):
-            evidence = validate_analysis({
-                "matchesPrompt": present, "assessable": True, "policyViolation": present, "confidence": 80,
-                "violatorCount": 1 if present else 0,
-                "description": ("핑크색 작업복을 입고 안전모를 쓰지 않은 사람이 통로에 있습니다." if present
-                                else "요청한 조건에 맞는 사람이 보이지 않습니다."),
-                "box": None,
-            }, kind="construction")
-            self.assertEqual(evidence["targetPresent"], present)
-            self.assertEqual(evidence["violatorCount"], 1 if present else 0)
-        # A "needsRescue"-shaped payload is rejected under kind="construction"
-        # (wrong field name), and vice versa — the two kinds' schemas are
-        # not interchangeable even though they share the same six-field shape.
-        with self.assertRaises(VisionError):
-            validate_analysis({"matchesPrompt": True, "assessable": True, "needsRescue": True,
-                               "confidence": 80, "description": "사람", "box": None}, kind="construction")
-
-    def test_construction_kind_counts_every_violator_not_just_one(self):
-        """When the vision model reports 2 confirmed violators in one image,
-        that count must survive validation and normalization intact, not
-        collapse to a single boolean match."""
-        evidence = validate_analysis({
-            "matchesPrompt": True, "assessable": True, "policyViolation": True, "confidence": 88,
-            "violatorCount": 2,
-            "description": "핑크색 작업복을 입고 안전모를 쓰지 않은 사람 2명이 통로 양쪽에 있습니다.",
-            "box": None,
-        }, kind="construction")
-        self.assertEqual(evidence["violatorCount"], 2)
-        # A confirmed violation with violatorCount=0 (model forgot to count)
-        # still reports at least the one matched candidate, never zero.
-        under_counted = validate_analysis({
-            "matchesPrompt": True, "assessable": True, "policyViolation": True, "confidence": 88,
-            "violatorCount": 0,
-            "description": "핑크색 작업복을 입고 안전모를 쓰지 않은 사람이 통로에 있습니다.",
-            "box": None,
-        }, kind="construction")
-        self.assertEqual(under_counted["violatorCount"], 1)
-        # A non-violation with a nonzero violatorCount is self-contradictory
-        # and rejected rather than silently accepted.
-        with self.assertRaises(VisionError):
-            validate_analysis({
-                "matchesPrompt": False, "assessable": True, "policyViolation": False, "confidence": 20,
-                "violatorCount": 1,
-                "description": "요청한 조건에 맞는 사람이 보이지 않습니다.",
-                "box": None,
-            }, kind="construction")
 
     def test_expanded_color_vocabulary_is_recognized(self):
         """Colors beyond the original set (silver/purple/navy/mint/beige/

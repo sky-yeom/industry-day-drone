@@ -22,7 +22,9 @@ FRESH_S = .5
 # instead: half the tilt is roughly half the cruise, which the same 0.6 deg
 # brake stops in about 1.4 s, inside its window, and it doubles the number of
 # detections per metre travelled on the long direct legs.
-SEEK_MAX_DEG = .3
+# 20260929T210405: 0.3 deg still slid past ID2's edge undetected; 0.27 slows
+# the cruise a little. Not lower: the airframe rests at about -0.5 deg roll.
+SEEK_MAX_DEG = .27
 # Corrections are continuous, re-evaluated on every fresh frame, with the same
 # tilt authority as the seek. The 14:51 flight showed that 0.25 deg pulses of
 # 0.25 s barely move this aircraft (about 0.04 m/s^2 for a quarter second),

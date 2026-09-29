@@ -1219,7 +1219,7 @@ class DispatchBoundaryTests(StandaloneTestCase):
                 self.assertFalse([c for c in client.calls if c[0] == "attitude"])
                 self.assertIs(client.events[-1][1]["sent"], False)
 
-    def test_edge_prebrake_brakes_once_against_travel_only_at_the_edge_while_moving(self):
+    def test_edge_prebrake_brakes_once_against_travel_at_the_first_edge_sighting(self):
         def tag(x):
             return shuttle.PixelTag(1, (x, 540.), ((x+50, 490), (x-50, 490), (x-50, 590), (x+50, 590)), 60., 0)
         def run(direction, x, speed):
@@ -1241,12 +1241,36 @@ class DispatchBoundaryTests(StandaloneTestCase):
         sent, ticks, _ = run("left", 150., .4)
         self.assertTrue(sent)
         self.assertTrue(all(axes == (0., shuttle.EDGE_PREBRAKE_DEG, 0., 0.) for axes in ticks))
-        # Not at the travel-side edge, or already still: no brake.
-        for direction, x, speed in (("right", 960., .4), ("right", 150., .4), ("right", 1700., .05)):
-            with self.subTest(direction=direction, x=x, speed=speed):
-                sent, ticks, _ = run(direction, x, speed)
+        # 20260929T205025: speed read exactly 0.1 m/s at every first sighting; still brakes.
+        for speed in (.1, 0., None):
+            with self.subTest(speed=speed):
+                sent, ticks, _ = run("right", 1700., speed)
+                self.assertTrue(sent)
+                self.assertTrue(ticks)
+        # Not at the travel-side edge: no brake.
+        for direction, x in (("right", 960.), ("right", 150.), ("left", 1700.)):
+            with self.subTest(direction=direction, x=x):
+                sent, ticks, _ = run(direction, x, .4)
                 self.assertFalse(sent)
                 self.assertFalse(ticks)
+
+    def test_timed_tilt_refreshes_telemetry_before_the_flight_check(self):
+        # 20260929T205025: the first pulse tick after the ID3 photo checked
+        # >0.5 s old telemetry and ended the mission ("Fresh airborne state lost").
+        clock = [100.]
+        client = FakeClient()
+        client.phase = "lateral"
+        checks = []
+        def require(client):
+            last = client.calls[-1] if client.calls else None
+            checks.append(last == "zero" or (isinstance(last, tuple) and last[0] == "status"))
+        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .15))
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                patch.object(shuttle, "_require_flight", require):
+            shuttle._timed_tilt(client, limiter, profile(), None, None, .25, 0., .8)
+            shuttle._settle_and_measure(client, limiter, None, None, 1)
+        self.assertTrue(checks)
+        self.assertTrue(all(checks))
 
     def test_edge_height_uses_vertical_sides_in_any_corner_order(self):
         corners = ((923.8, 361.2), (702.6, 359.5), (701.5, 580.3), (922.3, 582.0))

@@ -383,6 +383,9 @@ def _timed_tilt(client, limiter, profile, stream, detector, forward, right, dura
     try:
         while time.monotonic() < end:
             limiter.wait()
+            # Refresh telemetry first: right after a photo save it is >0.5 s old
+            # and the 20:50 flight ended here on that stale age alone.
+            client.status("standalone_timed_tilt")
             _require_flight(client)
             if stream is not None and detector is not None:
                 # The dispatch guard checks the last *detected* frame. Nothing
@@ -408,8 +411,8 @@ def _settle_and_measure(client, limiter, stream, detector, tag_id):
     end = time.monotonic() + CAPTURE_PULL_SETTLE_S
     while time.monotonic() < end:
         limiter.wait()
-        _require_flight(client)
         client.zero()
+        _require_flight(client)
         if stream is None or detector is None:
             continue
         tags, age = stream.detect_latest(detector, FRESH_S)
@@ -455,19 +458,21 @@ def capture_forward_pulse(client, limiter, tag, profile, stream=None, detector=N
 
 
 def edge_prebrake(client, limiter, profile, direction, tag, frame_width, stream=None, detector=None):
-    """Brake once when the expected tag first appears at the travel-side edge while moving."""
+    """Brake once when the expected tag first appears at the travel-side edge.
+
+    No speed gate: the leg is already moving toward the tag, and the 20:50
+    flight reported exactly 0.1 m/s (quantized) so a `> 0.1` gate never braked.
+    """
     travel = 1. if direction == "right" else -1.
     x = tag.center_px[0] / frame_width if _number(frame_width, 1., 100000.) else None
     at_edge = x is not None and (x >= 1. - EDGE_PREBRAKE_BAND if travel > 0 else x <= EDGE_PREBRAKE_BAND)
-    speed, velocity_age = _horizontal_motion_evidence(client)
-    moving = (speed is not None and _number(velocity_age, 0., FLIGHT_STATE_FRESH_S)
-              and speed > RETURN_STILL_MPS)
+    speed, _ = _horizontal_motion_evidence(client)
     right = -travel * EDGE_PREBRAKE_DEG
     client.log_event("standalone_edge_prebrake", {
         "tag_id": getattr(tag, "tag_id", None), "center_x_fraction": x, "at_edge": at_edge,
-        "horizontal_speed_mps": speed, "sent": bool(at_edge and moving),
-        "right_tilt_deg": right if at_edge and moving else 0., "duration_s": EDGE_PREBRAKE_S})
-    if not (at_edge and moving):
+        "horizontal_speed_mps": speed, "sent": bool(at_edge),
+        "right_tilt_deg": right if at_edge else 0., "duration_s": EDGE_PREBRAKE_S})
+    if not at_edge:
         return False
     sent, stale = _timed_tilt(client, limiter, profile, stream, detector, 0., right, EDGE_PREBRAKE_S)
     client.log_event("standalone_edge_prebrake_done", {"tag_id": getattr(tag, "tag_id", None),

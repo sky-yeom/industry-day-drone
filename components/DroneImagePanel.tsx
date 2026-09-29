@@ -17,9 +17,14 @@ export default function DroneImagePanel({ captures, kind = "triage" }: { capture
   const current = captures.find((capture) => capture.id === selectedId) ?? captures.at(-1);
   const index = current ? captures.indexOf(current) : -1;
   const ratio = dimensions.id === current?.id ? dimensions.ratio : 1.6;
-  const box = current?.evidence?.box;
-  const validBox = box && box.every(Number.isFinite) && box[0] >= 0 && box[1] >= 0 &&
+  // `boxes` covers every matched person when the mock vision engine found
+  // more than one; fall back to the single `box` for older/singular results
+  // so every detected person gets highlighted, not just the first match.
+  const boxes = current?.evidence?.boxes ?? (current?.evidence?.box ? [current.evidence.box] : []);
+  const isValidBox = (box: [number, number, number, number]) =>
+    box.every(Number.isFinite) && box[0] >= 0 && box[1] >= 0 &&
     box[2] > 0 && box[3] > 0 && box[0] + box[2] <= 1 && box[1] + box[3] <= 1;
+  const validBoxes = boxes.filter(isValidBox);
   return <section className="flex h-full min-h-0 flex-col gap-2 p-3 sm:p-4">
     <div className="flex shrink-0 items-center justify-between gap-3">
       <div>
@@ -48,8 +53,10 @@ export default function DroneImagePanel({ captures, kind = "triage" }: { capture
                   setDimensions({ id: current.id, ratio: image.naturalWidth / image.naturalHeight });
                 }
               }} />
-            {validBox && <div aria-label="탐지 근거에 포함된 대상자 위치" className="pointer-events-none absolute border-[0.1875rem] border-emerald-400"
-              style={{ left: `${box[0] * 100}%`, top: `${box[1] * 100}%`, width: `${box[2] * 100}%`, height: `${box[3] * 100}%` }} />}
+            {validBoxes.map((box, boxIndex) => (
+              <div key={boxIndex} aria-label="탐지 근거에 포함된 대상자 위치" className="pointer-events-none absolute border-[0.1875rem] border-emerald-400"
+                style={{ left: `${box[0] * 100}%`, top: `${box[1] * 100}%`, width: `${box[2] * 100}%`, height: `${box[3] * 100}%` }} />
+            ))}
           </div>
         </div>}
       </div>

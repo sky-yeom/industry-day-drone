@@ -295,44 +295,41 @@ class SurveySession:
                 f"{self.labels[p['monitorId']]}: {p['clue']}" for p in self.data["people"])
             if self.kind == "construction":
                 orders = suggested_orders_construction(self.data["people"])
-                first_text = names(orders["dangerOrder"], self.labels)
+                # dangerOrder is still stored for the on-screen comparison
+                # card (PixelPromptScreen), it's just no longer read aloud —
+                # a single spoken recommendation keeps the briefing short.
                 second_text = names(orders["vulnerableAdjustedOrder"], self.labels)
                 self.data["dangerOrder"] = orders["dangerOrder"]
                 self.data["vulnerableAdjustedOrder"] = orders["vulnerableAdjustedOrder"]
                 outcome = result(True,
                               f"세 구역의 점검 내용을 모두 확인했습니다. 구역별 내용: {cases}. "
-                              f"눈에 띄는 정도만 보면 확인 순서는 {first_text}. "
-                              f"실제 위험도를 분석하면 추천 순서는 {second_text}.",
-                              "먼저 세 구역의 점검 내용을 모두 설명하고, 이어서 두 추천 순서를 각각 설명한 뒤 "
+                              f"추천 순서는 {second_text}.",
+                              "먼저 세 구역의 점검 내용을 모두 설명하고, 이어서 추천 순서 하나를 설명한 뒤 "
                               "참가자에게 직접 어떤 순서로 확인하고 싶은지 물어볼 것")
                 outcome["confidence"] = confidence
                 outcome["confidenceReason"] = reasoning
                 return outcome
             if self.kind == "triage":
                 orders = suggested_orders_security(self.data["people"])
-                dramatic_text = names(orders["dangerOrder"], self.labels)
                 clue_text = names(orders["vulnerableAdjustedOrder"], self.labels)
                 self.data["dangerOrder"] = orders["dangerOrder"]
                 self.data["vulnerableAdjustedOrder"] = orders["vulnerableAdjustedOrder"]
                 outcome = result(True,
                               f"세 곳의 신고 내용을 모두 확인했습니다. 장소별 신고 내용: {cases}. "
-                              f"다급하게 들리는 순서만 보면 확인 순서는 {dramatic_text}. "
-                              f"신고 내용을 분석하면 추천 순서는 {clue_text}.",
-                              "먼저 세 곳의 신고 내용을 모두 설명하고, 이어서 두 추천 순서를 각각 설명한 뒤 "
+                              f"추천 순서는 {clue_text}.",
+                              "먼저 세 곳의 신고 내용을 모두 설명하고, 이어서 추천 순서 하나를 설명한 뒤 "
                               "참가자에게 직접 어떤 순서로 신고하고 싶은지 물어볼 것")
                 outcome["confidence"] = confidence
                 outcome["confidenceReason"] = reasoning
                 return outcome
             orders = suggested_orders_security(self.data["people"])
-            dramatic_text = names(orders["dangerOrder"], self.labels)
             clue_text = names(orders["vulnerableAdjustedOrder"], self.labels)
             self.data["dangerOrder"] = orders["dangerOrder"]
             self.data["vulnerableAdjustedOrder"] = orders["vulnerableAdjustedOrder"]
             outcome = result(True,
                           f"세 구역의 경보 내용을 모두 확인했습니다. 구역별 경보 내용: {cases}. "
-                          f"자극적인 상황만 보면 확인 순서는 {dramatic_text}. "
-                          f"단서를 분석하면 추천 순서는 {clue_text}.",
-                          "먼저 세 구역의 경보 내용을 모두 설명하고, 이어서 두 추천 순서를 각각 설명한 뒤 "
+                          f"추천 순서는 {clue_text}.",
+                          "먼저 세 구역의 경보 내용을 모두 설명하고, 이어서 추천 순서 하나를 설명한 뒤 "
                           "참가자에게 직접 어떤 순서로 확인하고 싶은지 물어볼 것")
             outcome["confidence"] = confidence
             outcome["confidenceReason"] = reasoning

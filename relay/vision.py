@@ -265,7 +265,11 @@ def _parse_json(content: str | bytes | bytearray) -> object:
 
 def validate_evidence(value: object, *, structured_verdict: bool = False) -> dict:
     base_keys = {"targetPresent", "description", "confidence", "box"}
-    if not isinstance(value, dict) or set(value) not in (base_keys, base_keys | {"violatorCount"}):
+    allowed_key_sets = (
+        base_keys, base_keys | {"violatorCount"},
+        base_keys | {"boxes"}, base_keys | {"violatorCount", "boxes"},
+    )
+    if not isinstance(value, dict) or set(value) not in allowed_key_sets:
         raise VisionError("이미지 분석 응답의 필수 항목이나 형식이 잘못되었습니다.")
     present, description, box = value["targetPresent"], value["description"], value["box"]
     confidence = value["confidence"]
@@ -298,27 +302,41 @@ def validate_evidence(value: object, *, structured_verdict: bool = False) -> dic
     if box is not None:
         if not present:
             raise VisionError("대상을 찾지 못한 분석에 탐지 영역이 포함되어 있습니다.")
-        if (
-            not isinstance(box, list)
-            or len(box) != 4
-            or any(
-                type(number) not in (int, float)
-                or not 0 <= number <= 1
-                or not math.isfinite(number)
-                for number in box
-            )
-        ):
-            raise VisionError("탐지 영역은 유한한 숫자 네 개로 구성되어야 합니다.")
-        x, y, width, height = box
-        if not (
-            0 <= x <= 1 and 0 <= y <= 1 and 0 < width <= 1 and 0 < height <= 1
-            and x + width <= 1 and y + height <= 1
-        ):
-            raise VisionError("탐지 영역이 이미지 범위를 벗어났거나 크기가 잘못되었습니다.")
+        _validate_box(box)
+    boxes = value.get("boxes")
+    if "boxes" in value:
+        if not present:
+            raise VisionError("대상을 찾지 못한 분석에 탐지 영역이 포함되어 있습니다.")
+        if not isinstance(boxes, list) or not boxes or any(candidate is None for candidate in boxes):
+            raise VisionError("탐지 영역 목록은 최소 한 개 이상의 좌표로 구성되어야 합니다.")
+        for candidate in boxes:
+            _validate_box(candidate)
     evidence = {"targetPresent": present, "description": description.strip(), "confidence": confidence, "box": box}
     if "violatorCount" in value:
         evidence["violatorCount"] = violator_count
+    if "boxes" in value:
+        evidence["boxes"] = [list(candidate) for candidate in boxes]
     return evidence
+
+
+def _validate_box(box):
+    if (
+        not isinstance(box, list)
+        or len(box) != 4
+        or any(
+            type(number) not in (int, float)
+            or not 0 <= number <= 1
+            or not math.isfinite(number)
+            for number in box
+        )
+    ):
+        raise VisionError("탐지 영역은 유한한 숫자 네 개로 구성되어야 합니다.")
+    x, y, width, height = box
+    if not (
+        0 <= x <= 1 and 0 <= y <= 1 and 0 < width <= 1 and 0 < height <= 1
+        and x + width <= 1 and y + height <= 1
+    ):
+        raise VisionError("탐지 영역이 이미지 범위를 벗어났거나 크기가 잘못되었습니다.")
 
 
 def validate_analysis(value: object, *, kind: str = "triage") -> dict:
@@ -455,6 +473,11 @@ class MockVision:
                 "confidence": 92,
                 "box": list(matches[0]["box"]),
             }
+            if len(matches) > 1:
+                # Every matched person's box, not just the first — otherwise
+                # the browser can only ever highlight one detected person even
+                # when several people in the same image match the prompt.
+                evidence["boxes"] = [list(match["box"]) for match in matches]
             if kind == "construction":
                 evidence["violatorCount"] = len(matches)
             return validate_evidence(evidence)

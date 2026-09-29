@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "tag_id": 1,
-  "arrival_center_x_fraction": [0.10, 0.40],
+  "arrival_center_x_fraction": [0.60, 0.90],
   "roi_tag_bounds": {
-    "x_min": -0.406036,
-    "x_max": 6.090921,
+    "x_min": -5.090921,
+    "x_max": 1.406036,
     "y_min": -1.011650,
     "y_max": 2.623666
   },
@@ -13,7 +13,7 @@
   "source": "user_reference_screenshot_20260910",
   "source_viewport_px": [396, 108, 1728, 972],
   "source_decoded_size_px": [1920, 1080],
-  "reference_kind": "predicted_planar_footprint_mock_right_of_ID1",
+  "reference_kind": "predicted_planar_footprint_mock_left_of_ID1",
   "physical_metric_pose_used": false,
   "tv_visibility_verified": false,
   "policy_validation": "unvalidated_field_trial"

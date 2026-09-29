@@ -95,8 +95,9 @@ class Frames:
                                  self.sequence, self.clock[0], image)
         self.frames[snapshot.key] = image
         self.last_detection_snapshot = snapshot
-        # The pair sits at the arrival band edge; the band follows the booth mirror.
-        x = 320. if client.expected == 6 else (576. if shuttle.OUTBOUND_DIRECTION == "left" else 64.)
+        # The pair sits at the far edge of the arrival band for the outbound travel.
+        band = REFERENCE["arrival_center_x_fraction"]
+        x = 320. if client.expected == 6 else 640.*(band[1] if shuttle.OUTBOUND_DIRECTION == "left" else band[0])
         tag = shuttle.PixelTag(client.expected, (x, 180.),
             ((x - 12, 168.), (x + 12, 168.), (x + 12, 192.), (x - 12, 192.)), 80., 0)
         return ([] if self.missing or client.leg_frame == 1 else [tag]), 0.

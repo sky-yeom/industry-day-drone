@@ -40,9 +40,10 @@ from bounded_sonar_climb import CLIMB_TIMEOUT_S, climb_command
 
 DEFAULT_PROFILE = Path(__file__).with_name("profiles") / "standalone_tag_6321236.json"
 DEFAULT_PAIR_REFERENCE = Path(__file__).with_name("profiles") / "id1_tv_pair_reference.json"
-# 2026-09-29 booth: mirrored left-to-right. Home ID6 is now the leftmost wall
-# tag and each mock sits to the right of its tag. Every leg direction is read
-# off this order, so the order is the only place the mirror is stated.
+# 2026-09-29 booth: the wall order is mirrored left-to-right, so home ID6 is now
+# the leftmost wall tag; each monitor still sits to the left of its tag. Every
+# leg direction is read off this order, so the order is the only place the
+# mirror is stated.
 WALL_IDS = [6, 1, 2, 3]
 ROUTE_IDS = [6, 1, 2, 3, 2, 1, 6]
 OUTBOUND_DIRECTION = "left" if WALL_IDS.index(1) < WALL_IDS.index(6) else "right"

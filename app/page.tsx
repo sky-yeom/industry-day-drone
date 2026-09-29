@@ -266,11 +266,22 @@ export default function Home() {
     window.setTimeout(() => { forcePromptPendingRef.current = false; }, 500);
     session.interruptCurrentSpeech();
     const kind = SCENARIOS[scenarioId].kind;
-    const description = kind === "security" ? SECURITY_TARGET_APPEARANCE.description
-      : kind === "construction" ? CONSTRUCTION_TARGET_APPEARANCE.description
-      : TARGET_APPEARANCE.description;
+    const appearance = kind === "security" ? SECURITY_TARGET_APPEARANCE
+      : kind === "construction" ? CONSTRUCTION_TARGET_APPEARANCE
+      : TARGET_APPEARANCE;
+    // Build real appearance_constraints from the scenario's own known
+    // shirtColor/hairColor/garment/headwear fields (the same ground-truth
+    // attributes a participant describing the reference photo would state),
+    // instead of sending an empty list. An empty list makes the relay think
+    // "no distinguishing features were given at all", which tanks
+    // promptConfidence and makes Gibby ask the participant to describe the
+    // appearance again mid-비행경로 instead of just stating the confidence.
+    const appearanceFields = appearance as unknown as Record<string, string | undefined>;
+    const appearanceConstraints = (["shirtColor", "hairColor", "garment", "headwear"] as const)
+      .filter((attribute) => appearanceFields[attribute])
+      .map((attribute) => ({ attribute, operator: "include" as const, values: [appearanceFields[attribute] as string] }));
     session.sendCommand("confirm_prompt", {
-      prompt_text: description, appearance_constraints: [], unsupported_appearance: [],
+      prompt_text: appearance.description, appearance_constraints: appearanceConstraints, unsupported_appearance: [],
     });
   }, [scenarioId, state.promptPhase]);
 

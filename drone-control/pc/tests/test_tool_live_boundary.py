@@ -171,6 +171,16 @@ class LiveTransportBoundaryTest(unittest.TestCase):
         client.disarm()
         self.assertEqual([r["type"] for r in raw.writes], ["land", "zero", "disarm"])
 
+    def test_attitude_ack_wait_survives_hotspot_rtt_but_stays_under_phone_release(self):
+        with patch("drone_nav.tool_control.live.time.perf_counter", lambda: 100.):
+            client, raw = self.client(FakeSocket(AIRBORNE))
+            client._armed, client._armed_since = True, 0.
+            client.send("attitude", {"forward_tilt_deg": 0, "right_tilt_deg": 0,
+                                     "up_mps": 0, "yaw_rate_rps": 0})
+            self.assertEqual(client._socket.deadline, 100.8)
+        self.assertEqual([r["type"] for r in raw.writes], ["attitude"])
+        self.assertFalse(client.failed)
+
     def test_only_landing_and_disarm_may_acknowledge_with_authority_handed_back(self):
         handback = {**AIRBORNE, "armed": False, "vs_enabled": False, "vs_authority": "RC"}
         for command, payload in [("gimbal", {"pitch_deg": -90}), ("status", {"state": "offline"}),

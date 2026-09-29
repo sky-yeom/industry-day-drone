@@ -610,6 +610,19 @@ export class VoiceSession {
     return true;
   }
 
+  // Operator-only manual override support: stop whatever Gibby is currently
+  // saying (or holding, buffered but not yet released) right away, so a
+  // force-next button press never lets stale narration bleed into the next
+  // screen. Pure client-side playback stop - no server message needed.
+  interruptCurrentSpeech(): void {
+    if (this.responseId) {
+      this.playbackNode?.port.postMessage({ type: "discard", ids: [this.responseId] });
+      this.interruptedResponses.add(this.responseId);
+      this.speech.delete(this.responseId);
+    }
+    this.retireRouteIntro();
+  }
+
   // Called after the actual route screen is visible, not just its preceding animation.
   sendRouteIntroReady(): boolean {
     this.routeVisible = true;

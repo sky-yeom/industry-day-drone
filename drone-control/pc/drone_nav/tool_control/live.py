@@ -29,6 +29,7 @@ BUILD_ID = "5.18-connectivity.20260913.3"
 # ~3.3s in the field). Treat a vs_authority/armed mismatch as fatal only once this
 # grace period has elapsed since arm(), instead of aborting on the very first read.
 AUTHORITY_HANDOFF_GRACE_S = 4.0
+MOTION_KEEPALIVE_S = .45
 
 
 def fresh(raw, key, max_ms=500):
@@ -168,6 +169,7 @@ class MissionClient(NDJSONClient):
         self.received = 0.0
         self.ever_connected = False
         self.write_started = False
+        self.last_motion_write = None
 
     def _scrub(self, value):
         if isinstance(value, dict):
@@ -208,6 +210,16 @@ class MissionClient(NDJSONClient):
             raise InterruptedError("Mission cancelled/deadline reached; no resume")
         if kind == "stick_mode" and payload.get("mode") != "advanced_angle":
             raise ValueError("This site uses Advanced BODY ANGLE only")
+        # The phone releases Virtual Stick after 1s without an attitude/zero, and
+        # a status read does not reset that timer. On the 0929 hotspot flights a
+        # single status ACK took up to 765ms and a loop sends three in a row, so
+        # the gap between stick commands reached 1.2-1.3s and authority was lost
+        # mid-route. The phone already zeroes the setpoint 300ms after the last
+        # command, so a zero here changes no motion; it only keeps authority.
+        if (kind == "status" and self._armed and not self.cleaning
+                and self.last_motion_write is not None
+                and time.perf_counter() - self.last_motion_write > MOTION_KEEPALIVE_S):
+            self.send("zero", {})
         if self._file.buffer:
             self.failed = True
             raise ConnectionError("Unsolicited ACK; new action refused")
@@ -259,6 +271,8 @@ class MissionClient(NDJSONClient):
                 if elapsed_ms < 0 or not ground_verified(proof):
                     raise PermissionError("Fresh motors-off ground proof expired before takeoff write")
             self.write_started = True
+            if kind in {"attitude", "zero"}:
+                self.last_motion_write = time.perf_counter()
             # A ground acknowledgement mutates no aircraft state, so it must not
             # count as an attempted flight action in the post-run report.
             if kind not in {"status", "zero", "disarm", "ground_ack"}:

@@ -9,7 +9,7 @@ from test_standalone_tag_shuttle import FakeClient, StandaloneTestCase, config, 
 
 
 class ClimbFreshnessTests(StandaloneTestCase):
-    def exercise(self, *, refreshed_age=.01, refresh_rtt=.04, post_zero=None):
+    def exercise(self, *, refreshed_age=.01, refresh_rtt=.04, post_zero=None, target=1.6, height=1.6):
         clock, client, logger = [100.], FakeClient(), MagicMock()
         client.raw.update(is_flying=True, are_motors_on=True, armed=True,
                           vs_enabled=True, vs_advanced_enabled=True, vs_authority="MSDK")
@@ -23,7 +23,7 @@ class ClimbFreshnessTests(StandaloneTestCase):
                 passes[0] += 1
                 clock[0] += refresh_rtt(passes[0]) if callable(refresh_rtt) else refresh_rtt
             original_status(state)
-            client.last_telemetry.height_m = 1.6
+            client.last_telemetry.height_m = height
             client.last_telemetry.height_age_s = refreshed_age if state == "standalone_climb_after_video" else .318
         def detect(detector, max_age):
             old = stream.last_detection_snapshot
@@ -48,9 +48,22 @@ class ClimbFreshnessTests(StandaloneTestCase):
         self.client, self.zero_times, self.confirmation = client, zero_times, confirmation
         with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
                 patch.object(shuttle.time, "perf_counter", lambda: clock[0]), \
-                patch.object(shuttle, "_visual_floor_height_m", return_value=1.6), \
+                patch.object(shuttle, "_visual_floor_height_m", return_value=height), \
                 redirect_stdout(io.StringIO()):
-            shuttle._climb(client, limiter, stream, None, logger, config(), 1.6)
+            shuttle._climb(client, limiter, stream, None, logger, config(), target)
+
+    def test_coasting_one_display_step_past_the_target_still_confirms(self):
+        """2026-09-29 14:29: zeroed at 1.5 m, coasted, read 1.6 m and aborted."""
+        self.exercise(target=1.5, height=1.6)
+        self.assertTrue(self.confirmation)
+        self.assertEqual(self.confirmation[0][1]["height_m"], 1.6)
+        self.assertFalse(any(isinstance(call, tuple) and call[0] == "attitude" for call in self.client.calls))
+
+    def test_two_display_steps_past_the_target_still_aborts_without_descent(self):
+        with self.assertRaisesRegex(RuntimeError, "already above ascent target"):
+            self.exercise(target=1.5, height=1.7)
+        self.assertEqual(self.confirmation, [])
+        self.assertFalse(any(isinstance(call, tuple) and call[0] == "attitude" for call in self.client.calls))
 
     def test_detection_delay_refreshes_height_and_confirms_target_1_6(self):
         self.exercise()

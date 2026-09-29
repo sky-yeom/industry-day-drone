@@ -46,6 +46,10 @@ DEFAULT_PAIR_REFERENCE = Path(__file__).with_name("profiles") / "id1_tv_pair_ref
 WALL_IDS = [6, 1, 2, 3]
 ROUTE_IDS = [6, 1, 2, 3, 2, 1, 6]
 OUTBOUND_DIRECTION = "left" if WALL_IDS.index(1) < WALL_IDS.index(6) else "right"
+# 2026-09-29 14:29: the climb zeroed at a 1.5 m display, coasted, and the next
+# 0.1 m display step read 1.6 m, which aborted the mission. One display step
+# above the target is arrival, not a reason to stop; beyond it still aborts.
+CLIMB_OVERSHOOT_M = .151
 CONFIRM_S = .3
 CENTER_TOLERANCE_PX = 80.
 FRESH_S = .5
@@ -1040,7 +1044,8 @@ def _climb(client, limiter, stream, detector, logger, config, target, profile=No
             raise InterruptedError("RC override during climb; no resume")
         elapsed = time.perf_counter() - client.received
         age = None if telemetry.height_age_s is None else telemetry.height_age_s + elapsed
-        return telemetry, elapsed, climb_command(telemetry.height_m, age, target)
+        return telemetry, elapsed, climb_command(telemetry.height_m, age, target,
+                                                 overshoot_m=CLIMB_OVERSHOOT_M)
     while time.monotonic() < deadline:
         limiter.wait()
         client.status("standalone_bounded_sonar_climb")

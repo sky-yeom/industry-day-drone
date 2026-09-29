@@ -58,6 +58,8 @@ export default function Home() {
   const confidenceNarrationDoneRef = useRef(false);
   const mapIntroFallbackTimerRef = useRef<number | null>(null);
   const routeIntroEarlyTriggeredRef = useRef(false);
+  const forcePromptPendingRef = useRef(false);
+  const forceRoutePendingRef = useRef(false);
   const streamingRef = useRef<{ user: string | null; agent: string | null }>({ user: null, agent: null });
   const state = snapshot.state;
   const missionLaunched = state.clockRunning || state.elapsedMs > 0 || ["paused", "complete"].includes(state.missionPhase);
@@ -137,6 +139,8 @@ export default function Home() {
     promptConfirmedRef.current = false;
     confidenceNarrationDoneRef.current = false;
     routeIntroEarlyTriggeredRef.current = false;
+    forcePromptPendingRef.current = false;
+    forceRoutePendingRef.current = false;
     if (mapIntroFallbackTimerRef.current !== null) {
       window.clearTimeout(mapIntroFallbackTimerRef.current);
       mapIntroFallbackTimerRef.current = null;
@@ -272,7 +276,10 @@ export default function Home() {
 
   const forceConfirmPrompt = useCallback(() => {
     const session = sessionRef.current;
-    if (!session || state.promptPhase === "confirmed") return;
+    if (!session || state.promptPhase === "confirmed" || forcePromptPendingRef.current) return;
+    forcePromptPendingRef.current = true;
+    window.setTimeout(() => { forcePromptPendingRef.current = false; }, 500);
+    session.interruptCurrentSpeech();
     session.sendCommand("confirm_prompt", {
       prompt_text: TARGET_APPEARANCE.description, appearance_constraints: [], unsupported_appearance: [],
     });
@@ -280,7 +287,9 @@ export default function Home() {
 
   const forceConfirmRoute = useCallback(() => {
     const session = sessionRef.current;
-    if (!session) return;
+    if (!session || forceRoutePendingRef.current) return;
+    forceRoutePendingRef.current = true;
+    session.interruptCurrentSpeech();
     const targetMonitorId = TRIAGE_REAL_MONITOR_ID;
     const targetMonitor = MONITORS_BY_KIND.triage.find((monitor) => monitor.id === targetMonitorId) ?? MONITORS_BY_KIND.triage[0];
     if (targetMonitor) session.sendCommand("select_stop", { monitor: targetMonitor.id });

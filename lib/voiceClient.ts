@@ -648,6 +648,26 @@ export class VoiceSession {
     return true;
   }
 
+  /** Operator "다음으로 넘어가기" override support: stop whatever Gibby is
+   * currently saying (or has queued but not yet released, e.g. held route-
+   * intro audio) so the force-next buttons move on immediately instead of
+   * leaving old narration playing over the next screen. Only discards
+   * local playback/state — the underlying tool call the button sends
+   * right after this proceeds normally. */
+  interruptCurrentSpeech(): void {
+    const ids = new Set<string>();
+    if (this.responseId) ids.add(this.responseId);
+    if (this.confidenceResponseId) ids.add(this.confidenceResponseId);
+    if (ids.size) {
+      this.playbackNode?.port.postMessage({ type: "discard", ids: [...ids] });
+      for (const id of ids) {
+        this.interruptedResponses.add(id);
+        this.speech.delete(id);
+      }
+    }
+    this.retireRouteIntro();
+  }
+
   // Called after the actual route screen is visible, not just its preceding animation.
   sendRouteIntroReady(): boolean {
     this.routeVisible = true;

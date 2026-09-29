@@ -7,7 +7,7 @@
   ],
   "travelMs": 7000,
   "captureMs": 1000,
-  "mockAnalysisMs": 2000,
+  "mockAnalysisMs": 800,
   "maxDetectionAttempts": 2,
   "people": [
     {

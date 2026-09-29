@@ -4,7 +4,7 @@ import { Press_Start_2P } from "next/font/google";
 import { useCallback, useEffect, useState } from "react";
 import PixelGround from "@/components/PixelGround";
 import PixelPromptScreen from "@/components/PixelPromptScreen";
-import { SCENARIO_LIST, SCENARIOS, type ScenarioConfig, type ScenarioId } from "@/data/scenarios";
+import { SCENARIOS, type ScenarioConfig, type ScenarioId } from "@/data/scenarios";
 import { useTypewriter } from "@/lib/useTypewriter";
 import type { MissionState } from "@/lib/types";
 import type { VoiceStatus } from "@/lib/voiceClient";
@@ -16,7 +16,6 @@ const pixelFont = Press_Start_2P({ weight: "400", subsets: ["latin"] });
 
 const GIBBY_TITLE = "감사관 기비";
 const GIBBY_LINE = "오늘은 내가 감사관이야! 이상한 낌새가 없는지 같이 확인해보자.";
-const CHOOSING_TITLE = "시나리오 골라줘!";
 
 // How long Gibby smiles (row 1, frame 2 of the sprite sheet) before he
 // resets back to a neutral idle pose and then sets off walking.
@@ -29,25 +28,22 @@ const RESET_DURATION_MS = 250;
 // (2.6s) settles into place, keeping both paced together.
 const SLIDE_TO_EXIT_MS = 1100;
 
-// idle -> (pick "Let's Go!") -> smiling -> resetting -> choosing (pick a
-// scenario) -> smiling -> resetting -> walking -> sliding -> exiting -> done.
-// "smiling"/"resetting" are re-entered twice (once before the scenario
-// picker, once after a scenario is chosen); `confirmed` (below) tracks
-// which pass we're on so `resetting` knows whether to land on `choosing`
-// or `walking` next.
-type Phase = "idle" | "smiling" | "resetting" | "choosing" | "walking" | "sliding" | "exiting" | "done";
+// idle -> (press "Let's Go!") -> smiling -> resetting -> walking -> sliding
+// -> exiting -> done. The scenario picker step has been removed; the single
+// remaining scenario ("saving-people") is locked in as soon as "Let's Go!"
+// is pressed.
+type Phase = "idle" | "smiling" | "resetting" | "walking" | "sliding" | "exiting" | "done";
 
 /**
  * Pixel-art opening screen + the choreographed handoff into the "prompt"
- * step. Pressing "Let's Go!" plays idle -> smile -> idle, then a
- * center-screen bubble asks the user which scenario to look out for (3
- * buttons). Picking one smiles Gibby again and starts the walk-in;
- * onReady starts voice once docked. Once Gibby reaches center, the ground
- * starts scrolling and the prompt screen's content slides in from the
- * right; when it's nearly in place the ground stops and Gibby walks off to
- * his docked bottom-right spot while the content settles. Stays mounted
- * for the whole prompt step so there's no remount/flash between the
- * transition and the live prompt screen.
+ * step. Pressing "Let's Go!" locks in the (single) scenario, plays
+ * idle -> smile -> idle, then starts the walk-in; onReady starts voice once
+ * docked. Once Gibby reaches center, the ground starts scrolling and the
+ * prompt screen's content slides in from the right; when it's nearly in
+ * place the ground stops and Gibby walks off to his docked bottom-right
+ * spot while the content settles. Stays mounted for the whole prompt step
+ * so there's no remount/flash between the transition and the live prompt
+ * screen.
  */
 export default function GibbyIntroSequence({
   onReady,
@@ -73,20 +69,12 @@ export default function GibbyIntroSequence({
   onForceNext?: () => void;
 }) {
   const [phase, setPhase] = useState<Phase>("idle");
-  const [scenario, setScenario] = useState<ScenarioConfig>(SCENARIOS["saving-people"]);
-  const [confirmed, setConfirmed] = useState(false);
+  const [scenario] = useState<ScenarioConfig>(SCENARIOS["saving-people"]);
   const typed = useTypewriter(agentText);
 
   const handleGo = useCallback(() => {
     if (phase !== "idle") return;
-    setPhase("smiling");
-  }, [phase]);
-
-  const handlePickScenario = useCallback((id: ScenarioId) => {
-    if (phase !== "choosing") return;
-    setScenario(SCENARIOS[id]);
-    onScenarioChosen?.(id);
-    setConfirmed(true);
+    onScenarioChosen?.("saving-people");
     setPhase("smiling");
   }, [phase, onScenarioChosen]);
 
@@ -98,9 +86,9 @@ export default function GibbyIntroSequence({
 
   useEffect(() => {
     if (phase !== "resetting") return;
-    const id = window.setTimeout(() => setPhase(confirmed ? "walking" : "choosing"), RESET_DURATION_MS);
+    const id = window.setTimeout(() => setPhase("walking"), RESET_DURATION_MS);
     return () => window.clearTimeout(id);
-  }, [phase, confirmed]);
+  }, [phase]);
 
   // Once the ground+slide-in beat has been running a while, Gibby peels off
   // toward the corner while the content finishes settling.
@@ -121,7 +109,6 @@ export default function GibbyIntroSequence({
   }, [phase, onReady]);
 
   const showIdleCard = phase === "idle";
-  const showChoosingCard = phase === "choosing";
   const isWalkingSprite = phase === "walking" || phase === "sliding" || phase === "exiting";
   const travelClass =
     phase === "walking" || phase === "sliding" ? "gibby-travel--center"
@@ -182,28 +169,6 @@ export default function GibbyIntroSequence({
             >
               Let&apos;s Go!
             </button>
-          </div>
-        </div>
-      )}
-
-      {showChoosingCard && (
-        <div className="relative z-10 flex flex-1 items-center justify-center p-5">
-          <div className="pixel-bubble pixel-bubble--gibby relative w-full max-w-3xl px-8 pb-8 pt-10 sm:px-14 sm:pt-12">
-            <div className="ml-[1.25rem]">
-              <h2 className="text-2xl font-bold tracking-[0.05em] text-[#463668] sm:text-3xl">{CHOOSING_TITLE}</h2>
-            </div>
-            <div className="ml-[1.25rem] mt-8 flex flex-wrap items-stretch justify-between gap-3">
-              {SCENARIO_LIST.map((option) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  onClick={() => handlePickScenario(option.id)}
-                  className="pixel-button flex-1 basis-0 whitespace-nowrap bg-[#ffd23f] px-5 py-3 text-xs font-bold tracking-[0.03em] text-[#091f2c] sm:text-sm"
-                >
-                  {option.buttonLabel}
-                </button>
-              ))}
-            </div>
           </div>
         </div>
       )}

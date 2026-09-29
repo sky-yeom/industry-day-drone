@@ -113,11 +113,18 @@ CENTER_CONFIRM_FRAMES = 2
 # A tag that is gone for longer than that was not missed by the decoder, it was
 # flown past: the same flight ran ID6 from 484 px right of centre to 423 px left
 # of it and then held station for the whole twenty second timeout, because this
-# loop had no way to go back. Recovery reverses the last travel it commanded,
-# under the bounded pulse budget every other search here already uses.
-CENTER_RECOVERY_DEG = .4
-CENTER_RECOVERY_PULSE_S = .6
-MAX_CENTER_RECOVERIES = 3
+# loop had no way to go back. The 2026-09-28 14:48 flight lost ID6 during the
+# arrival brake (1035 -> 676 -> 356 px) before centring even started, so a
+# "reverse my own travel" rule never fired (recovery_pulses 0). The seek now
+# slides toward the side the tag was last seen on - from this loop or from the
+# route's own observations just before it - under a bounded time budget.
+HOME_SEEK_DEG = .25
+HOME_SEEK_MAX_S = 8.
+HOME_SEEK_HINT_MAX_AGE_S = 30.
+# Field request 2026-09-30: centring overshot, so it steers gentler than the
+# 0.4 deg the landing gains saturate at, and a tag re-found by the seek gets
+# the same first-sighting brake + image stillness check as the route legs.
+HOME_CENTER_MAX_DEG = .3
 # Indoor drift pushes the aircraft backwards between the last wall capture and
 # the gimbal drop, which slides ID0 off the top of the downward view. A blind
 # search that only hovers can never recover that; short pulses walk the tag back
@@ -1069,9 +1076,29 @@ def _observe(client, stream, detector, logger, phase, expected, direction=None):
         observer = getattr(client, "observe_frame", None)
         if observer is not None:
             observer(stream.last_detection_snapshot)
+        _note_sightings(client, stream.last_detection_snapshot, tags)
     logger.observations(tags, time.monotonic(), phase=phase, expected_id=expected,
                         frame_age_s=age, telemetry=client.last_telemetry, direction=direction)
     return tags, age
+
+
+def _note_sightings(client, snapshot, tags):
+    """Remember where each tag was last decoded: {tag_id: (x_fraction, monotonic_s)}."""
+    shape = getattr(getattr(snapshot, "frame", None), "shape", ())
+    if len(shape) < 2 or not shape[1]:
+        return
+    seen = getattr(client, "tag_last_seen", None)
+    if seen is None:
+        seen = {}
+        try:
+            client.tag_last_seen = seen
+        except AttributeError:
+            return
+    now = time.monotonic()
+    for found in tags:
+        center = getattr(found, "center_px", None)
+        if center:
+            seen[getattr(found, "tag_id", None)] = (center[0] / float(shape[1]), now)
 
 
 def _require_flight(client):
@@ -1510,13 +1537,29 @@ def _center_home_tag(client, limiter, stream, detector, logger, config, tag_id=6
     deadline = time.monotonic() + HOME_CENTER_TIMEOUT_S
     centered_since, centered_frames, last_key = None, 0, None
     last_error, last_center = None, None
-    missing_since, travelled_sign = None, 0.
-    recoveries, recovery_until = 0, None
+    missing_since = None
+    # Side of the frame the tag was last seen on (+1 right, -1 left); seeded
+    # from the route's own sightings so a tag lost before this loop still has
+    # a direction to seek in.
+    last_side, hint = 0., (getattr(client, "tag_last_seen", None) or {}).get(tag_id)
+    if hint and _number(time.monotonic() - hint[1], 0., HOME_SEEK_HINT_MAX_AGE_S) and hint[0] != .5:
+        last_side = math.copysign(1., hint[0] - .5)
+    seek_sign, seek_s, seek_tick, seeks, reacquire_brakes = 0., 0., None, 0, 0
+    seek_moving_since = None
 
     def confirmed(now):
         """Distinct in-box decodes that have also held for the confirm time."""
         return (centered_since is not None and centered_frames >= CENTER_CONFIRM_FRAMES
                 and now - centered_since >= patrol.landing_confirm_s)
+
+    def steer(right_tilt):
+        try:
+            client.attitude(0., right_tilt, 0., 0.)
+            return True
+        except FramingCorrectionDeferred:
+            # A stale frame/telemetry tick sent nothing; hold and re-observe.
+            client.zero()
+            return False
 
     while time.monotonic() < deadline:
         limiter.wait()
@@ -1529,7 +1572,7 @@ def _center_home_tag(client, limiter, stream, detector, logger, config, tag_id=6
         now = time.monotonic()
         if home is None or box is None or key is None or not _number(age, 0., FRESH_S):
             missing_since = now if missing_since is None else missing_since
-            if now - missing_since < CENTER_MISS_GRACE_S:
+            if now - missing_since < CENTER_MISS_GRACE_S and not seek_sign:
                 # A decode gap is not a lost tag. Hold the aircraft and the
                 # confirmation still and let the next decode settle both.
                 client.zero()
@@ -1537,20 +1580,46 @@ def _center_home_tag(client, limiter, stream, detector, logger, config, tag_id=6
                     break
                 continue
             centered_since, centered_frames, last_key = None, 0, None
-            if recovery_until is not None and now < recovery_until:
-                client.attitude(0., -travelled_sign*CENTER_RECOVERY_DEG, 0., 0.)
-            elif travelled_sign and recoveries < MAX_CENTER_RECOVERIES:
-                recoveries += 1
-                recovery_until = now + CENTER_RECOVERY_PULSE_S
-                client.log_event("standalone_home_recovery_pulse", {
-                    "tag_id": tag_id, "pulse_index": recoveries, "missing_s": now-missing_since,
-                    "right_tilt_deg": -travelled_sign*CENTER_RECOVERY_DEG,
-                    "reason": "ID6_left_the_frame_reverse_the_travel_that_lost_it"})
-                client.attitude(0., -travelled_sign*CENTER_RECOVERY_DEG, 0., 0.)
+            if seek_tick is not None:
+                seek_s += now - seek_tick
+            if last_side and seek_s < HOME_SEEK_MAX_S:
+                if not seek_sign:
+                    seek_sign, seeks = last_side, seeks + 1
+                    client.log_event("standalone_home_seek", {
+                        "tag_id": tag_id, "seek_index": seeks, "missing_s": now - missing_since,
+                        "right_tilt_deg": seek_sign*HOME_SEEK_DEG, "seek_s_used": seek_s,
+                        "reason": "tag_left_the_frame_slide_toward_last_seen_side"})
+                seek_tick = now
+                if steer(seek_sign*HOME_SEEK_DEG) and seek_moving_since is None:
+                    seek_moving_since = now
             else:
+                if seek_sign:
+                    client.log_event("standalone_home_seek_exhausted", {
+                        "tag_id": tag_id, "seek_s": seek_s, "budget_s": HOME_SEEK_MAX_S})
+                seek_sign, seek_tick, seek_moving_since = 0., None, None
                 client.zero()
             continue
-        missing_since, recovery_until = None, None
+        missing_since, seek_tick = None, None
+        if seek_sign:
+            # First sighting after a seek: stop the slide before steering, or
+            # the aircraft coasts past the tag again (field request 2026-09-30).
+            # A seek whose ticks were all refused never moved, and a short one
+            # built little speed, so the brake is no longer than the slide.
+            moved_s = 0. if seek_moving_since is None else now - seek_moving_since
+            duration = min(EDGE_PREBRAKE_S, moved_s)
+            brake = -seek_sign*EDGE_PREBRAKE_DEG
+            client.log_event("standalone_home_reacquire_brake", {
+                "tag_id": tag_id, "center_px": list(home.center_px), "seek_s": seek_s,
+                "right_tilt_deg": brake, "duration_s": duration, "sent": duration > 0.})
+            seek_sign, seek_moving_since = 0., None
+            if duration > 0.:
+                reacquire_brakes += 1
+                _timed_tilt(client, limiter, {}, stream, detector, 0., brake, duration)
+                confirm_image_stop(client, limiter, {}, stream, detector, tag_id)
+                client.phase = "lateral"
+                client.motion_valid_until_s = None
+                last_key = None
+                continue
         if key == last_key:
             client.zero()
             if confirmed(now):
@@ -1559,6 +1628,8 @@ def _center_home_tag(client, limiter, stream, detector, logger, config, tag_id=6
         last_key = key
         (center_x, _center_y), (half_width, _half_height) = box
         last_error, last_center = home.center_px[0] - center_x, list(home.center_px)
+        if last_error:
+            last_side = math.copysign(1., last_error)
         if abs(last_error) <= half_width:
             centered_since = now if centered_since is None else centered_since
             centered_frames += 1
@@ -1568,21 +1639,19 @@ def _center_home_tag(client, limiter, stream, detector, logger, config, tag_id=6
             continue
         centered_since, centered_frames = None, 0
         _forward, right = _floor_alignment_velocity(last_error, 0., patrol)
-        if right:
-            travelled_sign = math.copysign(1., right)
-        client.attitude(0., right*scale, 0., 0.)
+        steer(max(-HOME_CENTER_MAX_DEG, min(HOME_CENTER_MAX_DEG, right*scale)))
     else:
         client.zero()
         client.log_event("standalone_home_centering_gave_up", {
             "tag_id": tag_id, "error_px": last_error, "timeout_s": HOME_CENTER_TIMEOUT_S,
-            "recovery_pulses": recoveries})
+            "seeks": seeks, "seek_s": seek_s, "reacquire_brakes": reacquire_brakes})
         print(f"ID{tag_id} centering timed out; landing search starts from here", flush=True)
         return False
     client.zero()
     client.log_event("standalone_home_centered", {
         "tag_id": tag_id, "error_px": last_error, "box_fraction": HOME_CENTER_BOX_FRACTION,
         "center_px": last_center, "confirm_frames": centered_frames,
-        "recovery_pulses": recoveries})
+        "seeks": seeks, "seek_s": seek_s, "reacquire_brakes": reacquire_brakes})
     print(f"ID{tag_id} centered: error={last_error:.0f}px", flush=True)
     return True
 

@@ -1405,21 +1405,31 @@ class HomeCentringDecodeGapTests(StandaloneTestCase):
 
     BOX = ((960., 540.), (240., 135.))
 
-    def drive(self, *, decode_gap_s, error_px, vanish_after_s=None, tick_s=.1):
+    def drive(self, *, decode_gap_s, error_px, vanish_after_s=None, tick_s=.1,
+              reappear_after_s=None, hint=None, brakes=None):
         clock = [1000.]
         state = {"decoded_at": None, "index": 0}
         client = FakeClient()
         client.raw.update(is_flying=True, are_motors_on=True, armed=True,
                           vs_enabled=True, vs_advanced_enabled=True, vs_authority="MSDK")
+        if hint is not None:
+            client.tag_last_seen = {6: (hint, clock[0])}
 
         def observe(_client, _stream, _detector, _logger, _phase, _expected, direction=None):
             now = clock[0]
             if state["decoded_at"] is None or now - state["decoded_at"] >= decode_gap_s:
                 state["decoded_at"], state["index"] = now, state["index"] + 1
             age = now - state["decoded_at"]
-            if vanish_after_s is not None and now - 1000. >= vanish_after_s:
+            gone = vanish_after_s is not None and now - 1000. >= vanish_after_s
+            back = reappear_after_s is not None and now - 1000. >= reappear_after_s
+            if gone and not back:
                 return [], age
             return [tag(6, x=960. + error_px, y=540.)], age
+
+        def timed_tilt(_client, _limiter, _profile, _stream, _detector, forward, right, duration_s):
+            (brakes if brakes is not None else []).append((forward, right, duration_s))
+            clock[0] += duration_s
+            return 1, 0
 
         with ExitStack() as stack:
             stack.enter_context(patch.object(shuttle.time, "monotonic", lambda: clock[0]))
@@ -1429,6 +1439,9 @@ class HomeCentringDecodeGapTests(StandaloneTestCase):
                                              lambda _d, _f: self.BOX))
             stack.enter_context(patch.object(shuttle, "_snapshot_key",
                                              lambda _s: (1, state["index"])))
+            stack.enter_context(patch.object(shuttle, "_timed_tilt", timed_tilt))
+            stack.enter_context(patch.object(shuttle, "confirm_image_stop",
+                                             lambda *_a, **_k: True))
             stack.enter_context(redirect_stdout(io.StringIO()))
             limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + tick_s))
             centred = shuttle._center_home_tag(client, limiter, SimpleNamespace(),
@@ -1452,7 +1465,7 @@ class HomeCentringDecodeGapTests(StandaloneTestCase):
         # Wall-clock alone must not confirm: distinct decodes carry the verdict.
         self.assertGreaterEqual(confirmations[0]["confirm_frames"],
                                 shuttle.CENTER_CONFIRM_FRAMES)
-        self.assertEqual(confirmations[0]["recovery_pulses"], 0)
+        self.assertEqual(confirmations[0]["seeks"], 0)
 
     def test_a_tag_outside_the_box_still_cannot_confirm_across_a_decode_gap(self):
         # The grace must not turn into a blind pass: an off-centre tag decoded
@@ -1465,21 +1478,59 @@ class HomeCentringDecodeGapTests(StandaloneTestCase):
         self.assertTrue(tilts)
         self.assertTrue(all(tilt > 0. for tilt in tilts))
 
-    def test_losing_the_tag_reverses_the_travel_that_lost_it(self):
-        # ID6 ran from 484 px right of centre to 423 px left of it and then out
-        # of frame, and the old loop held station for the whole timeout because
-        # it had no way back. A lost tag now reverses the last travel, under a
-        # bounded pulse budget.
+    def test_losing_the_tag_seeks_toward_the_side_it_was_last_seen(self):
+        # ID6 was last decoded 600 px right of centre, so it left the frame on
+        # the right: the seek slides right, gently, and within its budget.
         _centred, client, _elapsed = self.drive(decode_gap_s=.625, error_px=600.,
                                                 vanish_after_s=3.)
-        pulses = [data for event, data in client.events
-                  if event == "standalone_home_recovery_pulse"]
-        self.assertTrue(pulses)
-        self.assertLessEqual(len(pulses), shuttle.MAX_CENTER_RECOVERIES)
-        approach = [entry[1][1] for entry in client.calls
-                    if isinstance(entry, tuple) and entry[0] == "attitude" and entry[1][1]][0]
-        self.assertLess(pulses[0]["right_tilt_deg"]*approach, 0.)
-        self.assertLessEqual(abs(pulses[0]["right_tilt_deg"]), .6)
+        seeks = [data for event, data in client.events if event == "standalone_home_seek"]
+        self.assertEqual(len(seeks), 1)
+        self.assertEqual(seeks[0]["right_tilt_deg"], shuttle.HOME_SEEK_DEG)
+        seek_ticks = [entry for entry in client.calls if isinstance(entry, tuple)
+                      and entry[0] == "attitude" and entry[1][1] == shuttle.HOME_SEEK_DEG]
+        self.assertTrue(seek_ticks)
+        self.assertLessEqual(len(seek_ticks)*.1, shuttle.HOME_SEEK_MAX_S + .2)
+        self.assertTrue([e for e, _d in client.events if e == "standalone_home_seek_exhausted"])
+
+    def test_tag_lost_before_centring_seeks_from_the_route_sighting(self):
+        # 2026-09-28 14:48: ID6 slid 1035 -> 356 px during the arrival brake and
+        # was gone before centring began (error_px null, 0 recovery pulses).
+        # The route's own last sighting (left side) now gives the direction,
+        # and the first sighting after the slide brakes against it.
+        brakes = []
+        _centred, client, _elapsed = self.drive(decode_gap_s=.625, error_px=-100.,
+                                                vanish_after_s=0., reappear_after_s=4.,
+                                                hint=356./1920., brakes=brakes)
+        seeks = [data for event, data in client.events if event == "standalone_home_seek"]
+        self.assertEqual(seeks[0]["right_tilt_deg"], -shuttle.HOME_SEEK_DEG)
+        reacquired = [data for event, data in client.events
+                      if event == "standalone_home_reacquire_brake"]
+        self.assertEqual(len(reacquired), 1)
+        self.assertTrue(reacquired[0]["sent"])
+        self.assertEqual(brakes[0][1], shuttle.EDGE_PREBRAKE_DEG)
+        self.assertLessEqual(brakes[0][2], shuttle.EDGE_PREBRAKE_S)
+        self.assertGreater(brakes[0][2], 0.)
+
+    def test_no_sighting_anywhere_holds_instead_of_guessing(self):
+        _centred, client, _elapsed = self.drive(decode_gap_s=.625, error_px=0.,
+                                                vanish_after_s=0.)
+        self.assertFalse([e for e, _d in client.events if e == "standalone_home_seek"])
+        self.assertFalse([entry for entry in client.calls if isinstance(entry, tuple)
+                          and entry[0] == "attitude" and entry[1][1]])
+
+    def test_centring_tilt_is_capped_below_the_landing_saturation(self):
+        _centred, client, _elapsed = self.drive(decode_gap_s=.625, error_px=600.)
+        tilts = [entry[1][1] for entry in client.calls
+                 if isinstance(entry, tuple) and entry[0] == "attitude" and entry[1][1]]
+        self.assertTrue(tilts)
+        self.assertLessEqual(max(abs(t) for t in tilts), shuttle.HOME_CENTER_MAX_DEG)
+
+    def test_sightings_are_recorded_as_frame_fractions(self):
+        client = SimpleNamespace()
+        snapshot = SimpleNamespace(frame=SimpleNamespace(shape=(1080, 1920, 3)))
+        with patch.object(shuttle.time, "monotonic", lambda: 50.):
+            shuttle._note_sightings(client, snapshot, [tag(3, x=480., y=540.)])
+        self.assertEqual(client.tag_last_seen[3], (.25, 50.))
 
     def test_blind_floor_search_covers_both_lateral_axes_not_only_forward(self):
         # Eight forward pulses cannot undo a sideways offset, which is why the

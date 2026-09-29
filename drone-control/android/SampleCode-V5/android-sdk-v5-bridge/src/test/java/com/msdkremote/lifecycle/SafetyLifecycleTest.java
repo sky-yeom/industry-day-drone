@@ -62,9 +62,10 @@ public class SafetyLifecycleTest {
         CommandWatchdog watchdog=new CommandWatchdog();assertEquals(CommandWatchdog.Decision.RELEASE,watchdog.at(0));
         watchdog.accepted(0);
         for(int now=0;now<300;now++)assertEquals(CommandWatchdog.Decision.SEND,watchdog.at(now));
-        assertEquals(CommandWatchdog.Decision.ZERO,watchdog.at(300));assertEquals(CommandWatchdog.Decision.RELEASE,watchdog.at(1000));
-        watchdog.accepted(1100);assertEquals(CommandWatchdog.Decision.SEND,watchdog.at(1100));
-        assertEquals(CommandWatchdog.Decision.RELEASE,watchdog.at(1099));
+        assertEquals(CommandWatchdog.Decision.ZERO,watchdog.at(300));assertEquals(CommandWatchdog.Decision.ZERO,watchdog.at(2999));
+        assertEquals(CommandWatchdog.Decision.RELEASE,watchdog.at(3000));
+        watchdog.accepted(3100);assertEquals(CommandWatchdog.Decision.SEND,watchdog.at(3100));
+        assertEquals(CommandWatchdog.Decision.RELEASE,watchdog.at(3099));
     }
     @Test public void unsafeIntentAndPendingMutationSurviveDisconnect() {
         MaintenanceGate gate=new MaintenanceGate();gate.sourceChanged(1);gate.controlState(false,false,false);

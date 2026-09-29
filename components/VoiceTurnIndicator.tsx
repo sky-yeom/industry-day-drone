@@ -13,8 +13,8 @@ const LABELS: Record<VoiceStatus, string> = {
 
 export default function VoiceTurnIndicator({ status }: { status: VoiceStatus }) {
   return <span role="status" aria-live="polite" aria-atomic="true" data-voice-status={status}
-    className={`inline-flex items-center gap-2 rounded border-2 border-[#091f2c] px-2 py-1 text-xs font-semibold text-[#091f2c] ${status === "listening" ? "bg-[#d6f4cf]" : "bg-white"}`}>
-    <span aria-hidden className={`h-2 w-2 rounded-full ${status === "listening" ? "bg-[#24773a]" : "bg-[#697780]"}`} />
+    className={`inline-flex items-center gap-2 rounded border-2 border-[#091f2c] px-3 py-1.5 text-sm font-semibold text-[#091f2c] ${status === "listening" ? "bg-[#d6f4cf]" : "bg-white"}`}>
+    <span aria-hidden className={`h-2.5 w-2.5 rounded-full ${status === "listening" ? "bg-[#24773a]" : "bg-[#697780]"}`} />
     {LABELS[status]}
   </span>;
 }

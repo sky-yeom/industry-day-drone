@@ -52,6 +52,11 @@ export interface DetectionEvidence {
   description: string;
   confidence: number | null;
   box: [number, number, number, number] | null;
+  // Present only when the mock vision engine matched more than one person
+  // in the same capture: every matched person's box, so all of them (not
+  // just the first, which `box` above still holds for backward compat) can
+  // be highlighted on screen.
+  boxes?: [number, number, number, number][];
   // Present only for the "construction" scenario kind: count of distinct
   // people confirmed matching the prompt with a hard-hat violation in this
   // capture (can be 2+ when a zone holds multiple violators).

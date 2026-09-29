@@ -48,6 +48,9 @@ class FakeClient:
     # it stands in for; the zero bound is a profile without height_hold.
     hold_up_bound = 0.
     hold_down_bound = 0.
+    hold_forward_bound = 0.
+    wall_ref_px = None
+    wall_size_sample = None
     hold_up = shuttle.ShuttleClient.hold_up
 
     def __init__(self):
@@ -1016,6 +1019,53 @@ class DispatchBoundaryTests(StandaloneTestCase):
             self.assertEqual(client.hold_up(-.06), 0.)
             client.phase = "climb"
             self.assertEqual(client.hold_up(-.05), 0.)
+
+    def test_wall_distance_hold_pushes_toward_the_wall_only_on_fresh_whole_tags(self):
+        # 20260929T165318: ID6 266 px at home, ID1 170 px on arrival with every
+        # forward command zero; a wall stands behind the aircraft.
+        def square(tag_id, x, size, y=540.):
+            h = size / 2
+            return shuttle.PixelTag(tag_id, (x, y), ((x-h, y-h), (x+h, y-h), (x+h, y+h), (x-h, y+h)), 50., 0)
+        frame = (1080, 1920, 3)
+        client = SimpleNamespace(hold_forward_bound=shuttle.WALL_HOLD_MAX_DEG, wall_ref_px=266.,
+                                 wall_size_sample=None, phase="lateral")
+        # Farther than home -> tilt toward the wall, capped.
+        self.assertAlmostEqual(shuttle.wall_distance_forward_deg(client, [square(1, 960, 170)], frame, 10.),
+                               shuttle.WALL_HOLD_MAX_DEG)
+        self.assertEqual(shuttle.wall_distance_forward_deg(client, [square(1, 960, 250)], frame, 10.), 0.)
+        self.assertAlmostEqual(shuttle.wall_distance_forward_deg(client, [square(1, 960, 240)], frame, 10.),
+                               (266/240 - 1) * shuttle.WALL_HOLD_GAIN_DEG)
+        # Closer than home -> back away.
+        self.assertLess(shuttle.wall_distance_forward_deg(client, [square(2, 960, 320)], frame, 10.), 0.)
+        # The last fresh sample holds for WALL_HOLD_STALE_S, then nothing.
+        self.assertLess(shuttle.wall_distance_forward_deg(client, [], frame, 10.5), 0.)
+        self.assertEqual(shuttle.wall_distance_forward_deg(client, [], frame, 11.5), 0.)
+        # Edge-of-frame, cropped, floor and unknown tags are not measured.
+        for tag in (square(1, 100, 170), square(1, 1900, 170), square(0, 960, 170), square(9, 960, 170)):
+            with self.subTest(tag=tag.tag_id, x=tag.center_px[0]):
+                self.assertEqual(shuttle.wall_distance_forward_deg(client, [tag], frame, 20.), 0.)
+        # The closest tag wins when two are in view.
+        self.assertLess(shuttle.wall_distance_forward_deg(
+            client, [square(1, 700, 170), square(2, 1300, 320)], frame, 30.), 0.)
+        # No reference, no bound, or another phase: exactly zero.
+        for change in ({"wall_ref_px": None}, {"hold_forward_bound": 0.}, {"phase": "hover"}):
+            other = SimpleNamespace(**{**vars(client), "wall_size_sample": None, **change})
+            with self.subTest(change=change):
+                self.assertEqual(shuttle.wall_distance_forward_deg(other, [square(1, 960, 170)], frame, 40.), 0.)
+
+    def test_lateral_guard_admits_forward_only_within_the_wall_hold_bound(self):
+        clock = [100.]
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]):
+            client = self.client(clock)
+            client.phase = "lateral"
+            payload = {"forward_tilt_deg": .3, "right_tilt_deg": -.6, "up_mps": 0., "yaw_rate_rps": 0.}
+            with self.assertRaises(PermissionError):
+                client._guard_dispatch("attitude", dict(payload))
+            client.hold_forward_bound = shuttle.WALL_HOLD_MAX_DEG
+            client._guard_dispatch("attitude", dict(payload))
+            client._guard_dispatch("attitude", {**payload, "forward_tilt_deg": -.4})
+            with self.assertRaises(PermissionError):
+                client._guard_dispatch("attitude", {**payload, "forward_tilt_deg": .41})
 
     def test_video_generation_stays_pinned_across_phases(self):
         clock = [100.]

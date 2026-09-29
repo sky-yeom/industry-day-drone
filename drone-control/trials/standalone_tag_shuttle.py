@@ -242,14 +242,15 @@ def phase_timeout_s(profile, name, fallback):
 
 
 def height_hold_up_mps(client, profile):
-    """Vertical speed that cancels the sink a wall leg accumulates.
+    """Vertical speed that holds the cruise height on a wall leg.
 
-    The legs only ever commanded zero on this axis, so the aircraft drifted down
-    under its own weight and carried the target out of the top of the frame. This
-    only ever pushes back up: sinking is the failure that was observed, and a
-    downward term would fight the operator rather than hold the hover. A profile
-    without height_hold, a telemetry read without a height, or any height at or
-    above the cruise band all command exactly zero.
+    The legs only ever commanded zero on this axis. On the 9/28 floor the
+    aircraft sank under its own weight; on the 9/29 black foam floor it rose
+    instead (20260929T150253: zero commanded, 1.4 -> 1.9 m and the 1.8 m
+    corridor guard ended the leg at ID2). So the hold now pushes back toward the
+    target from either side, bounded by the same max speed. A profile without
+    height_hold, a telemetry read without a height, or any height inside the
+    deadband all command exactly zero.
     """
     hold = profile.get("height_hold")
     telemetry = client.last_telemetry
@@ -258,10 +259,10 @@ def height_hold_up_mps(client, profile):
     height = getattr(telemetry, "height_m", None)
     if not _number(height, -1e3, 1e3):
         return 0.
-    sink = profile["target_height_m"] - height
-    if sink < hold["deadband_m"]:
+    error = profile["target_height_m"] - height
+    if abs(error) < hold["deadband_m"]:
         return 0.
-    return min(hold["max_up_mps"], sink * hold["gain_mps_per_m"])
+    return max(-hold["max_up_mps"], min(hold["max_up_mps"], error * hold["gain_mps_per_m"]))
 
 
 def load_profile(path):
@@ -587,7 +588,7 @@ class ShuttleClient(MissionClient):
         anything the guard would not admit becomes a plain zero and the leg
         keeps its own axis.
         """
-        if self.phase != "lateral" or not _number(value, 0., self.hold_up_bound):
+        if self.phase != "lateral" or not _number(value, -self.hold_up_bound, self.hold_up_bound):
             return 0.
         return value
 
@@ -600,11 +601,11 @@ class ShuttleClient(MissionClient):
         if self.phase == "climb":
             permitted = forward == right == yaw == 0. and _number(up, 0., MAX_SETPOINT_UP_MPS)
         elif self.phase == "lateral":
-            # The cruise hold only ever pushes up, and never past the profile's
-            # own ceiling, so a profile without height_hold leaves this bound at
-            # zero and admits exactly the same commands as before.
+            # The cruise hold never exceeds the profile's own speed either way,
+            # so a profile without height_hold leaves this bound at zero and
+            # admits exactly the same commands as before.
             permitted = (forward == yaw == 0. and _number(right, *self.lateral_bounds)
-                         and _number(up, 0., self.hold_up_bound))
+                         and _number(up, -self.hold_up_bound, self.hold_up_bound))
         elif self.phase == "landing":
             # Floor alignment is the one phase that steers both horizontal axes:
             # the downward camera reports the home tag's offset in x and y, and

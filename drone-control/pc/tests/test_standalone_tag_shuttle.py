@@ -956,6 +956,19 @@ class DispatchBoundaryTests(StandaloneTestCase):
                 with self.subTest(error=error):
                     client._guard_dispatch("attitude", dict(payload))
 
+    def test_height_hold_pushes_back_toward_the_target_from_either_side(self):
+        # 20260929T150253: zero commanded on every leg, sonar 1.4 -> 1.9 m and
+        # the 1.8 m corridor guard ended the flight on the way to ID2.
+        profile = {"target_height_m": 1.4,
+                   "height_hold": {"deadband_m": .08, "gain_mps_per_m": .4, "max_up_mps": .18}}
+        for height, expected in ((1.4, 0.), (1.45, 0.), (1.35, 0.), (1.5, -.04), (1.7, -.12),
+                                 (1.9, -.18), (1.3, .04), (0.9, .18)):
+            client = SimpleNamespace(last_telemetry=SimpleNamespace(height_m=height))
+            with self.subTest(height=height):
+                self.assertAlmostEqual(shuttle.height_hold_up_mps(client, profile), expected, places=6)
+        client = SimpleNamespace(last_telemetry=SimpleNamespace(height_m=1.9))
+        self.assertEqual(shuttle.height_hold_up_mps(client, {"target_height_m": 1.4}), 0.)
+
     def test_cruise_hold_admits_bounded_lift_and_never_ends_a_lateral_leg(self):
         # The 15:30 flight reached ID6 and then died on the first framing tick
         # that asked for +0.04 m/s: the lateral axis was fine, the assist was
@@ -964,12 +977,12 @@ class DispatchBoundaryTests(StandaloneTestCase):
         with patch.object(shuttle.time, "monotonic", lambda: clock[0]):
             client = self.client(clock)
             client.phase, client.hold_up_bound = "lateral", .18
-            for up in (0., .04, .18):
+            for up in (0., .04, .18, -.04, -.18):
                 payload = {"forward_tilt_deg": 0., "right_tilt_deg": -.6,
                            "up_mps": up, "yaw_rate_rps": 0.}
                 with self.subTest(up=up):
                     client._guard_dispatch("attitude", dict(payload))
-            for up in (.19, -.04, None):
+            for up in (.19, -.19, None):
                 payload = {"forward_tilt_deg": 0., "right_tilt_deg": -.6,
                            "up_mps": up, "yaw_rate_rps": 0.}
                 with self.subTest(rejected=up), self.assertRaises(PermissionError):
@@ -978,6 +991,7 @@ class DispatchBoundaryTests(StandaloneTestCase):
                 # so the leg keeps flying on its own axis.
                 self.assertEqual(client.hold_up(up), 0.)
             self.assertEqual(client.hold_up(.04), .04)
+            self.assertEqual(client.hold_up(-.04), -.04)
             # A profile without height_hold leaves the bound at zero: the leg
             # then dispatches exactly the commands it always did.
             client.hold_up_bound = 0.

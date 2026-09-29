@@ -189,6 +189,20 @@ HEIGHT_HOLD_BOUNDS = (("deadband_m", .02, .5), ("gain_mps_per_m", .05, 1.5),
 # already counts as at the ceiling.
 CEILING_HEIGHT_M = 1.7
 CEILING_DOWN_MPS = .05
+# Backward-drift pull. Advanced ANGLE control holds pitch level, not position,
+# so with every forward command zero the aircraft drifts away from the wall
+# (20260929T172657: ID1 edge height 180 -> 156 px in 12 s; ID6 236 -> 221 px
+# while hovering at home). Only while framing a tag for its photo, a tag near
+# the image centre that looks shorter than ID6 did at home adds a small forward
+# tilt. It never commands backward. Vertical edge height is used, not width or
+# mean side: moving sideways shrank ID6's width 241 -> 199 px near the frame
+# edge on 20260929T170717 and the older width-based hold pulled toward the wall.
+DRIFT_PULL_DEADBAND = .08
+DRIFT_PULL_GAIN_DEG = 1.5
+DRIFT_PULL_MAX_DEG = .25
+DRIFT_PULL_STALE_S = .5
+DRIFT_PULL_CENTER_BAND = (.25, .75)
+DRIFT_PULL_REF_PX = (60., 600.)
 PROFILE_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 
@@ -274,6 +288,60 @@ def height_hold_up_mps(client, profile):
     if sink < hold["deadband_m"]:
         return 0.
     return min(hold["max_up_mps"], sink * hold["gain_mps_per_m"])
+
+
+def tag_edge_height_px(tag):
+    """Mean length of a tag's two near-vertical sides, or None without four corners."""
+    corners = getattr(tag, "corners_px", None)
+    if not corners or len(corners) != 4:
+        return None
+    try:
+        sides = [(corners[i], corners[(i + 1) % 4]) for i in range(4)]
+        vertical = [math.dist(a, b) for a, b in sides if abs(b[1] - a[1]) > abs(b[0] - a[0])]
+    except (TypeError, ValueError, IndexError):
+        return None
+    if len(vertical) != 2 or not all(_number(side, 1., 1e4) for side in vertical):
+        return None
+    return sum(vertical) / 2
+
+
+def drift_pull_forward_deg(client, tags, ids, frame_shape, now=None):
+    """Small forward tilt when a measured tag looks farther than ID6 at home.
+
+    ids is the tag ID (or IDs) allowed to measure. Never negative. Zero without
+    a home reference, an enabled bound, a whole such tag near the image centre,
+    or a sample fresher than DRIFT_PULL_STALE_S.
+    """
+    ids = {ids} if isinstance(ids, int) else set(ids)
+    bound = getattr(client, "hold_forward_bound", 0.)
+    reference = getattr(client, "drift_ref_px", None)
+    if not bound or not reference or getattr(client, "phase", None) != "lateral":
+        return 0.
+    now = time.monotonic() if now is None else now
+    if len(frame_shape) >= 2:
+        height, width = frame_shape[0], frame_shape[1]
+        sizes = []
+        for tag in tags:
+            if getattr(tag, "tag_id", None) not in ids or tag.tag_id not in WALL_IDS:
+                continue
+            size = tag_edge_height_px(tag)
+            if size is None:
+                continue
+            if not all(0 <= x <= width and 0 <= y <= height for x, y in tag.corners_px):
+                continue
+            if not DRIFT_PULL_CENTER_BAND[0]*width <= tag.center_px[0] <= DRIFT_PULL_CENTER_BAND[1]*width:
+                continue
+            sizes.append(size)
+        if sizes:
+            # The largest (closest-looking) tag decides, so the pull stays small.
+            client.drift_size_sample = (max(sizes), now)
+    sample = getattr(client, "drift_size_sample", None)
+    if sample is None or not 0 <= now - sample[1] <= DRIFT_PULL_STALE_S:
+        return 0.
+    error = reference / sample[0] - 1.
+    if error < DRIFT_PULL_DEADBAND:
+        return 0.
+    return min(bound, error * DRIFT_PULL_GAIN_DEG)
 
 
 def load_profile(path):
@@ -483,6 +551,11 @@ class ShuttleClient(MissionClient):
         # before the cruise hold dispatched.
         self.hold_up_bound = 0.
         self.hold_down_bound = 0.
+        # Zero keeps forward == 0 on a lateral leg unless run() enables the
+        # backward-drift pull; it only ever admits forward (positive) tilt.
+        self.hold_forward_bound = 0.
+        self.drift_ref_px = None
+        self.drift_size_sample = None
         # Set at arm so a watchdog handback can be undone without the caller
         # having to thread the token back through every phase.
         self._confirmation_token = None
@@ -616,7 +689,8 @@ class ShuttleClient(MissionClient):
             # The cruise hold pushes up to the profile's speed and down only at
             # the slow ceiling speed; a profile without height_hold leaves both
             # bounds at zero and admits exactly the same commands as before.
-            permitted = (forward == yaw == 0. and _number(right, *self.lateral_bounds)
+            permitted = (yaw == 0. and _number(right, *self.lateral_bounds)
+                         and _number(forward, 0., self.hold_forward_bound)
                          and _number(up, -self.hold_down_bound, self.hold_up_bound))
         elif self.phase == "landing":
             # Floor alignment is the one phase that steers both horizontal axes:
@@ -1464,6 +1538,12 @@ def acquire_wall_home(client, limiter, stream, detector, logger, config):
                 phase=PatrolPhase.WALL_HOME, expected_id=6, frame_age_s=age,
                 telemetry=client.last_telemetry, direction=None))
             logger.save_confirmation_photo(stream, confirmed, phase=PatrolPhase.WALL_HOME)
+            if getattr(client, "drift_ref_px", None) is None:
+                size = tag_edge_height_px(confirmed)
+                client.drift_ref_px = size if _number(size, *DRIFT_PULL_REF_PX) else None
+                client.drift_size_sample = None
+                client.log_event("standalone_drift_pull_reference", {
+                    "tag_id": 6, "edge_height_px": size, "reference_px": client.drift_ref_px})
             return confirmed
     raise TimeoutError("Wall home ID6 was not fully visible in fresh images; no lateral movement")
 
@@ -1516,6 +1596,10 @@ def traverse_horizontal(client, limiter, stream, detector, logger, config, profi
             elif speed >= RETURN_CRUISE_MPS and abs(right) > RETURN_CRUISE_TILT_DEG:
                 right, speed_control = travel * RETURN_CRUISE_TILT_DEG, "cruise_hold"
         up = client.hold_up(height_hold_up_mps(client, profile))
+        # Any centred wall tag measures the distance here: the return passes
+        # ID2 and ID1 on its way to ID6, and 20260929T174039 came home with ID6
+        # at 148 px against 229 px at departure.
+        forward = drift_pull_forward_deg(client, tags, WALL_IDS, frame_shape)
         client.log_event("standalone_horizontal_sample", {
             "expected_id": expected, "visible_ids": [tag.tag_id for tag in tags],
             "frame_age_s": age, "frame_key": _snapshot_key(stream),
@@ -1524,14 +1608,15 @@ def traverse_horizontal(client, limiter, stream, detector, logger, config, profi
             "expected_center_px": gate.expected_center_px, "framing_action": gate.framing_action,
             "view_bounds_fraction": wall_view_bounds(config.patrol),
             "frame_size_px": [frame_shape[1], frame_shape[0]] if len(frame_shape) >= 2 else None,
-            "forward_tilt_deg": 0., "up_mps": up, "yaw_rate_rps": 0.,
+            "forward_tilt_deg": forward, "up_mps": up, "yaw_rate_rps": 0.,
+            "drift_ref_px": getattr(client, "drift_ref_px", None),
             "height_m": None if client.last_telemetry is None else client.last_telemetry.height_m,
         })
-        # The sole motion-producing call in the wall traversal has one horizontal
-        # axis; the vertical term only ever holds the declared cruise height.
-        if right or up:
+        # The sole motion-producing call in the wall traversal. The vertical term
+        # only holds the cruise height; the forward term only undoes backward drift.
+        if right or up or forward:
             try:
-                client.attitude(0., right, up, 0.)
+                client.attitude(forward, right, up, 0.)
             except FramingCorrectionDeferred as exc:
                 # Refused before the wire write: hold still and re-observe. The
                 # leg deadline still bounds a camera that never recovers.
@@ -1654,17 +1739,20 @@ def capture_id1_pair(client, limiter, stream, detector, logger, config, profile,
                                        shape, speed, velocity_age)
         diagnostic = dict(gate.diagnostic)
         up = client.hold_up(height_hold_up_mps(client, profile))
+        forward = drift_pull_forward_deg(client, tags, expected, shape)
         client.log_event("id1_pair_framing_sample", {**diagnostic, "tag_id": expected,
             "visible_ids": [tag.tag_id for tag in tags], "right_tilt_deg": right,
             "frame_key": _snapshot_key(stream), "frame_age_s": age,
             "horizontal_speed_mps": speed, "velocity_age_s": velocity_age,
-            "up_mps": up,
+            "up_mps": up, "forward_tilt_deg": forward,
+            "drift_ref_px": getattr(client, "drift_ref_px", None),
+            "drift_size_sample": getattr(client, "drift_size_sample", None),
             "height_m": None if client.last_telemetry is None else client.last_telemetry.height_m})
         pulse_deadline = diagnostic.get("motion_valid_until_s")
         client.motion_valid_until_s = pulse_deadline
-        if right or up:
+        if right or up or forward:
             try:
-                client.attitude(0., right, up, 0.)
+                client.attitude(forward, right, up, 0.)
                 if pulse_deadline is not None:
                     # This is the requested PC pulse duration. An ACK delay can
                     # outlast it; physical duration is not asserted from this timer.
@@ -1830,6 +1918,7 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
     client.arm_authority_timeout_s = phase_timeout_s(profile, "arm_authority_s", ARM_AUTHORITY_TIMEOUT_S)
     client.hold_up_bound = float((profile.get("height_hold") or {}).get("max_up_mps") or 0.)
     client.hold_down_bound = CEILING_DOWN_MPS if profile.get("height_hold") else 0.
+    client.hold_forward_bound = DRIFT_PULL_MAX_DEG
     ground_proof_s = phase_timeout_s(profile, "ground_proof_s", GROUND_PROOF_TIMEOUT_S)
     stream = logger = None
     visited, completed, error, diagnostic_errors = [], False, None, []

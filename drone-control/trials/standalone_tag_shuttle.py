@@ -55,7 +55,10 @@ CONFIRM_S = .3
 CENTER_TOLERANCE_PX = 80.
 FRESH_S = .5
 GIMBAL_LEVEL_RETRY_S = 2.
-GIMBAL_LEVEL_MAX_RETRIES = 3
+# 20260929T175105: the gimbal needed a fourth level command and ID6 appeared
+# 0.6 s after the extended deadline; 2-3 retries occur on about half the flights.
+GIMBAL_LEVEL_MAX_RETRIES = 6
+GIMBAL_LEVEL_WAIT_S = 8.
 # Wall legs outside pair framing (the ->6 return). Telemetry speed is
 # quantized to 0.1 m/s.
 RETURN_CRUISE_MPS = .2
@@ -1526,7 +1529,7 @@ def acquire_wall_home(client, limiter, stream, detector, logger, config):
                     "attempt": level_retries, "floor_visible_s": now-floor_since})
                 client.gimbal(0.)
                 floor_since = None
-                deadline = max(deadline, now + GIMBAL_LEVEL_RETRY_S*2)
+                deadline = max(deadline, now + GIMBAL_LEVEL_WAIT_S)
                 continue
         else:
             floor_since = None

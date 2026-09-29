@@ -1094,8 +1094,24 @@ class DispatchBoundaryTests(StandaloneTestCase):
         self.assertTrue(all(axes == (shuttle.CAPTURE_PULL_DEG, 0., 0., 0.) for axes in pushes))
         self.assertLessEqual(len(pushes), int(shuttle.CAPTURE_PULL_S / .15) + 1)
         self.assertEqual(far.calls[-1], "zero")
-        self.assertEqual(far.events[-1][0], "standalone_capture_forward_pulse")
-        self.assertIs(far.events[-1][1]["sent"], True)
+        started = [e for e in far.events if e[0] == "standalone_capture_forward_pulse"]
+        self.assertIs(started[-1][1]["sent"], True)
+        self.assertEqual(far.events[-1][0], "standalone_capture_forward_pulse_done")
+        self.assertEqual(far.events[-1][1]["sent_ticks"], len(pushes))
+        # 20260929T200917: a stale frame after the photo ended the mission; now it only skips a tick.
+        stale_ticks = [0]
+        real_attitude = FakeClient.attitude
+        def flaky(self, *axes):
+            stale_ticks[0] += 1
+            if stale_ticks[0] == 1:
+                raise shuttle.FramingCorrectionDeferred("Detected camera frame expired before command dispatch")
+            return real_attitude(self, *axes)
+        with patch.object(FakeClient, "attitude", flaky):
+            stale = run(160.)
+        self.assertEqual(stale.events[-1][0], "standalone_capture_forward_pulse_done")
+        self.assertEqual(stale.events[-1][1]["stale_ticks"], 1)
+        self.assertGreaterEqual(stale.events[-1][1]["sent_ticks"], 1)
+        self.assertEqual(stale.calls[-1], "zero")
         # At home distance, closer, without a reference or with the bound off: nothing.
         for height, changes in ((280., {}), (320., {}), (160., {"drift_ref_px": None}),
                                 (160., {"hold_forward_bound": 0.})):

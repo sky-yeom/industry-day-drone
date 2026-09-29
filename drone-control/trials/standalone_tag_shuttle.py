@@ -382,13 +382,23 @@ def capture_forward_pulse(client, limiter, tag, profile):
         return
     client.motion_valid_until_s = None
     end = time.monotonic() + CAPTURE_PULL_S
+    sent = stale = 0
     try:
         while time.monotonic() < end:
             limiter.wait()
             _require_flight(client)
-            client.attitude(forward, 0., client.hold_up(height_hold_up_mps(client, profile)), 0.)
+            try:
+                client.attitude(forward, 0., client.hold_up(height_hold_up_mps(client, profile)), 0.)
+                sent += 1
+            except FramingCorrectionDeferred:
+                # The 20:09 flight ended here on one stale frame after the photo;
+                # an optional nudge must only skip a tick, never end the mission.
+                stale += 1
+                client.zero()
     finally:
         client.zero()
+        client.log_event("standalone_capture_forward_pulse_done",
+                         {"tag_id": getattr(tag, "tag_id", None), "sent_ticks": sent, "stale_ticks": stale})
 
 
 def load_profile(path):

@@ -40,6 +40,12 @@ READ_RETRY_BUDGET_S = 6.0
 TRANSIENT_READINESS_CODES = {"FLIGHT_CONTROLLER_UNAVAILABLE", "AIRCRAFT_LINK_ASLEEP"}
 READINESS_RECOVERY_BUDGET_S = 30.0
 READINESS_RECOVERY_INTERVAL_S = 2.0
+# 2026-09-29 15:19 and 16:24: scoring completed while the aircraft was still on
+# its return leg, the results screen closed the voice session ~19 s later, and
+# close() stopped the flight between ID1 and home. Once scoring is complete the
+# route only ends on the landing pad, so a closing session waits this long for
+# that landing before it falls back to the stop.
+RETURN_LANDING_WAIT_S = 180.0
 log = logging.getLogger("relay.tool_mission")
 PREFLIGHT_FAILURES = {
     "RuntimeError: Fresh video not confirmed before takeoff": (
@@ -76,6 +82,7 @@ class LiveMissionRunner(MissionRunner):
         self._last_pushed_revision = -1
         self.stop_verify_seconds = stop_verify_seconds
         self.lease_seconds = lease_seconds
+        self.return_landing_wait_seconds = RETURN_LANDING_WAIT_S
         self._lease = None
 
     def _live_response(self, response):
@@ -518,9 +525,31 @@ class LiveMissionRunner(MissionRunner):
             self.session.touch()
             await self._push()
 
+    async def _await_return_landing(self):
+        work = self._work
+        if (self.session.phase != "complete" or self._stop_task is not None or work is None
+                or work.done() or work is asyncio.current_task()):
+            return
+        # _run_live and the lease keep running only while _closing is False, so
+        # this wait must happen before it is set. Any flight failure still
+        # stops through _run_live's own handler.
+        log.warning("Session closing after scoring; waiting up to %.0fs for the return landing",
+                    self.return_landing_wait_seconds)
+        try:
+            await asyncio.wait_for(asyncio.shield(work), self.return_landing_wait_seconds)
+        except asyncio.TimeoutError:
+            log.warning("Return landing not confirmed in time; stopping the flight")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+
     async def close(self):
-        self._closing = True
-        await self._stop_hardware()
+        try:
+            await self._await_return_landing()
+        finally:
+            self._closing = True
+            await self._stop_hardware()
         if self._lease and self._lease is not asyncio.current_task():
             self._lease.cancel()
             await asyncio.gather(self._lease, return_exceptions=True)

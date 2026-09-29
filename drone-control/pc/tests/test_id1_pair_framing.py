@@ -535,6 +535,25 @@ class GateTests(unittest.TestCase):
         self.assertEqual(commanded_right, 0)
         self.assertGreater(commanded_left, 60)
 
+    def test_rightward_approach_short_of_the_band_keeps_going_right(self):
+        """2026-09-29 mirrored booth [6, 1, 2, 3]: outbound travel is rightward."""
+        mirrored = dict(REFERENCE, roi_tag_bounds=dict(REFERENCE["roi_tag_bounds"],
+                        x_min=1.-REFERENCE["roi_tag_bounds"]["x_max"],
+                        x_max=1.-REFERENCE["roi_tag_bounds"]["x_min"]))
+        self.gate = PairFramingGate(mirrored, direction="right", arrival_band=(.10, .25),
+                                    layout=(6, 1, 2, 3))
+        self.update(0., tag(1920.-400.-130., 300., 130.))  # centre 76%: far short of .25 from the right.
+        commanded_right, commanded_left = 0, 0
+        for step in range(1, 121):
+            right, _ = self.update(step*.1, tags=[tag(tag_id=2)])
+            commanded_right += right > 0.
+            commanded_left += right < 0.
+        self.assertEqual(self.gate.diagnostic["layout_direction_sign"], -1.)
+        self.assertEqual(self.gate.diagnostic["last_tag_observation"]["recovery_sign"], 1.)
+        self.assertIn("still_ahead", self.gate.diagnostic["last_tag_observation"]["evidence"])
+        self.assertEqual(commanded_left, 0)
+        self.assertGreater(commanded_right, 60)
+
     def test_wall_order_stays_ambiguous_when_neighbours_sit_on_both_sides(self):
         gate = PairFramingGate(REFERENCE, arrival_band=(.85, .95), layout=(3, 2, 1, 6))
         self.assertEqual(gate._layout_direction([2]), 1.)

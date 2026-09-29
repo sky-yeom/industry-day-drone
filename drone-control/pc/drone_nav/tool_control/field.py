@@ -108,13 +108,13 @@ class FieldAdapter(LiveAdapter):
                 or site["layout_confirmed"] is not True or site["field_setup_confirmed"] is not True):
             raise ValueError("Private field site requires explicit layout and this-PC setup confirmation")
         low, high = self.target_height_band_m
-        if (site["wall_ids_left_to_right"] != [3, 2, 1, 6]
+        if (site["wall_ids_left_to_right"] != shuttle.WALL_IDS
                 or any(type(tag) is not int for tag in site["wall_ids_left_to_right"])
                 or type(site["floor_tag_id"]) is not int or site["floor_tag_id"] != 0
                 or type(site["home_tag_id"]) is not int or site["home_tag_id"] != 6
                 or site["expected_bridge_build_id"] != BUILD_ID):
             raise ValueError(f"Field site requires {BUILD_ID}, floor0, Home6 "
-                             f"and left-to-right [3,2,1,6]")
+                             f"and left-to-right {shuttle.WALL_IDS}")
         self.profile_id = identifier(site["profile_id"])
         self.site_revision = identifier(site["site_revision"])
         self.profile = shuttle.load_profile(profile_path)

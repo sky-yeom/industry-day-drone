@@ -24,7 +24,7 @@ from drone_nav.tool_control.live import DeadlineTransport
 
 def profile(**changes):
     return {"schema_version": 3, "profile_id": "field-ordered-v1",
-            "wall_ids_left_to_right": [3, 2, 1, 6],
+            "wall_ids_left_to_right": list(shuttle.WALL_IDS),
             "floor_tag_id": 0, "home_tag_id": 6, "route_ids": [6, 1, 2, 3, 2, 1, 6],
             "target_height_m": 1.4, "max_tilt_deg": 1.5,
             "visit_pause_s": 3., "leg_timeout_s": 45., "total_timeout_s": 240.,
@@ -124,7 +124,9 @@ class PlanAndConfigurationTests(StandaloneTestCase):
     def test_exact_corrected_route_directions_follow_confirmed_wall_positions(self):
         p = shuttle.plan(profile())
         self.assertEqual(p["profile"]["route_ids"], [6, 1, 2, 3, 2, 1, 6])
-        self.assertEqual([leg["direction"] for leg in p["legs"]], ["left"] * 3 + ["right"] * 3)
+        back = "right" if shuttle.OUTBOUND_DIRECTION == "left" else "left"
+        self.assertEqual([leg["direction"] for leg in p["legs"]],
+                         [shuttle.OUTBOUND_DIRECTION] * 3 + [back] * 3)
         self.assertEqual(p["finish"], "hover_release_to_RC_manual_landing")
         with self.assertRaises(ValueError):
             shuttle.planned_direction(6, 3)
@@ -347,9 +349,14 @@ class HorizontalGateTests(StandaloneTestCase):
         entering the view band rather than on first sighting.
         """
         inside = shuttle.WallViewAction.INSIDE.value
-        unseen = (([],) * 7 + ([tag(6, 1150.)],) + ([tag(6)],) * 8,
+        # The return runs opposite to the outbound leg; ID6 enters from the
+        # edge it is approached from and every tilt sign follows the travel.
+        rightward = shuttle.OUTBOUND_DIRECTION == "left"
+        travel = 1. if rightward else -1.
+        edge = (lambda x: x) if rightward else (lambda x: 1280. - x)
+        unseen = (([],) * 7 + ([tag(6, edge(1150.))],) + ([tag(6)],) * 8,
                   (0., .1, .2, .3, .2, .1, .1, .3, .3, .3, .3, .2, .1, .0, .0, .0))
-        edge_from_start = (([tag(6, 1250.)],) * 20 + ([tag(6)],) * 10,
+        edge_from_start = (([tag(6, edge(1250.))],) * 20 + ([tag(6)],) * 10,
                            (.1, .2) * 10 + (.2, .2, .2, .1, 0.))
         for departure, route, (frames, speeds) in ((3, [6, 1, 2, 3, 6], unseen),
                                                    (2, [6, 1, 3, 2, 6], unseen),
@@ -367,15 +374,15 @@ class HorizontalGateTests(StandaloneTestCase):
                     if speed >= shuttle.RETURN_COAST_MPS:
                         self.assertEqual(s["right_tilt_deg"], 0.)
                     elif speed >= shuttle.RETURN_CRUISE_MPS:
-                        self.assertTrue(0. < s["right_tilt_deg"] <= shuttle.RETURN_CRUISE_TILT_DEG)
+                        self.assertTrue(0. < travel*s["right_tilt_deg"] <= shuttle.RETURN_CRUISE_TILT_DEG)
                     elif not s["target_seen"]:
                         # 15:25: a cap at 0.2 m/s left 0 tilt down to 0.1 m/s
                         # and stopped the return 7 times; below 0.2 it pushes.
-                        self.assertGreater(s["right_tilt_deg"], 0.)
+                        self.assertGreater(travel*s["right_tilt_deg"], 0.)
                 brakes = [s for s in samples if s["speed_control"] == "arrival_brake"]
                 self.assertTrue(brakes)
                 self.assertTrue(all(s["framing_action"] == inside and
-                                    s["right_tilt_deg"] == -shuttle.RETURN_BRAKE_DEG for s in brakes))
+                                    s["right_tilt_deg"] == -travel*shuttle.RETURN_BRAKE_DEG for s in brakes))
                 rights = [call[1][1] for call in client.calls if isinstance(call, tuple) and call[0] == "attitude"]
                 self.assertTrue(all(abs(right) <= max(profile()["max_tilt_deg"], shuttle.RETURN_BRAKE_DEG)
                                     for right in rights))

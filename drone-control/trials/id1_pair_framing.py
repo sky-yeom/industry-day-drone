@@ -399,11 +399,15 @@ class PairFramingGate:
             # at once. When the target's own last sighting was still short of
             # the arrival band it is ahead in the route direction, so a layout
             # sign pointing back would abandon an approach that never finished.
+            last_fraction = None if observation is None else observation["center_fraction"]
+            # A tag short of the band sits on the side it enters from: the left
+            # edge on leftward legs, the right edge on rightward legs.
+            short_of_band = last_fraction is not None and (
+                last_fraction < (.5 if self.arrival_band is None else self.arrival_band[0])
+                if self.direction == "left" else
+                last_fraction > (.5 if self.arrival_band is None else self.arrival_band[1]))
             still_ahead = (layout_sign is not None and layout_sign*self._planned < 0.
-                           and observation is not None
-                           and observation["center_fraction"] is not None
-                           and observation["center_fraction"] < (
-                               .5 if self.arrival_band is None else self.arrival_band[0]))
+                           and short_of_band)
             if still_ahead:
                 sign = self._planned
             if sign is None or self._recovery_pulses >= MAX_RECOVERY_PULSES:

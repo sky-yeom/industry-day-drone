@@ -36,7 +36,7 @@ REAL_LOGGER = shuttle.ShuttleDetectionLogger
 REFERENCE = json.loads(shuttle.DEFAULT_PAIR_REFERENCE.read_text(encoding="utf-8"))
 SITE = {
     "schema_version": 2, "profile_id": "field-ordered-v1", "site_revision": "offline-20260910",
-    "wall_ids_left_to_right": [3, 2, 1, 6], "floor_tag_id": 0, "home_tag_id": 6,
+    "wall_ids_left_to_right": list(shuttle.WALL_IDS), "floor_tag_id": 0, "home_tag_id": 6,
     "expected_bridge_build_id": shuttle.BUILD_ID,
     "layout_confirmed": True, "field_setup_confirmed": True,
 }
@@ -95,7 +95,8 @@ class Frames:
                                  self.sequence, self.clock[0], image)
         self.frames[snapshot.key] = image
         self.last_detection_snapshot = snapshot
-        x = 320. if client.expected == 6 else 576.
+        # The pair sits at the arrival band edge; the band follows the booth mirror.
+        x = 320. if client.expected == 6 else (576. if shuttle.OUTBOUND_DIRECTION == "left" else 64.)
         tag = shuttle.PixelTag(client.expected, (x, 180.),
             ((x - 12, 168.), (x + 12, 168.), (x + 12, 192.), (x - 12, 192.)), 80., 0)
         return ([] if self.missing or client.leg_frame == 1 else [tag]), 0.
@@ -343,7 +344,7 @@ class FieldTests(unittest.TestCase):
                         self.assertEqual(capture["mission_id"], mid)
                         self.assertFalse(capture["tv_visibility_verified"])
                         self.assertFalse(capture["simulated"])
-                        self.assertEqual(capture["arrival_band_fraction"], [.85, .95])
+                        self.assertEqual(capture["arrival_band_fraction"], REFERENCE["arrival_center_x_fraction"])
                         self.assertEqual(capture["framing_diagnostic"]["motion_valid_until_s"], None)
                         raw = base64.b64decode(capture["image_base64"])
                         actual = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
@@ -363,7 +364,11 @@ class FieldTests(unittest.TestCase):
                     for call in client.calls:
                         if isinstance(call, tuple) and call[0] == "attitude":
                             forward, right, up, yaw = call[1]
-                            self.assertEqual((forward, up, yaw), (0., 0., 0.))
+                            # ID0 is never in these frames, so the landing search
+                            # walks its bounded pattern; _guard_dispatch refuses a
+                            # forward axis in every other phase.
+                            self.assertIn(forward, (0., shuttle.SEARCH_NUDGE_DEG, -shuttle.SEARCH_NUDGE_DEG))
+                            self.assertEqual((up, yaw), (0., 0.))
                             self.assertLessEqual(abs(right), .6)
                     self.assertLess(steps.index("_wait_takeoff_settled"), steps.index("_climb"))
                     self.assertTrue(stream.closed)
@@ -379,7 +384,8 @@ class FieldTests(unittest.TestCase):
     def test_external_route_extension_does_not_relax_standalone_defaults(self):
         with self.assertRaises(ValueError):
             shuttle.planned_direction(6, 3)
-        self.assertEqual(shuttle.external_direction([6, 3, 1, 2, 6], 3, 1), "right")
+        back = "right" if shuttle.OUTBOUND_DIRECTION == "left" else "left"
+        self.assertEqual(shuttle.external_direction([6, 3, 1, 2, 6], 3, 1), back)
         for route in ([6, 1, 1, 3, 6], [6, 1, 2, 3], [0, 1, 2, 3, 6], [6, True, 2, 3, 6]):
             with self.assertRaises(ValueError):
                 shuttle.validate_external_route(route)

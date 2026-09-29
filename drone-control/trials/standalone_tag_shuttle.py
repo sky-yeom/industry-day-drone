@@ -40,8 +40,12 @@ from bounded_sonar_climb import CLIMB_TIMEOUT_S, climb_command
 
 DEFAULT_PROFILE = Path(__file__).with_name("profiles") / "standalone_tag_6321236.json"
 DEFAULT_PAIR_REFERENCE = Path(__file__).with_name("profiles") / "id1_tv_pair_reference.json"
-WALL_IDS = [3, 2, 1, 6]
+# 2026-09-29 booth: mirrored left-to-right. Home ID6 is now the leftmost wall
+# tag and each mock sits to the right of its tag. Every leg direction is read
+# off this order, so the order is the only place the mirror is stated.
+WALL_IDS = [6, 1, 2, 3]
 ROUTE_IDS = [6, 1, 2, 3, 2, 1, 6]
+OUTBOUND_DIRECTION = "left" if WALL_IDS.index(1) < WALL_IDS.index(6) else "right"
 CONFIRM_S = .3
 CENTER_TOLERANCE_PX = 80.
 FRESH_S = .5
@@ -308,7 +312,7 @@ def plan(profile, pair_reference=None, continue_patrol=False):
     if pair_reference is not None:
         result.pop("wall_capture_bounds_fraction", None)
         result.update(mission_scope="ID1_and_TV_pair_capture_only", active_route_ids=[6, 1],
-            legs=[{"from": 6, "to": 1, "direction": "left"}],
+            legs=[{"from": 6, "to": 1, "direction": OUTBOUND_DIRECTION}],
             finish="hover_at_ID1_release_to_RC_manual_landing",
             framing_reference=pair_reference, approach_tilt_limit_deg=.6,
             right_correction_limit_deg=.6, tv_visibility_verified=False,
@@ -356,7 +360,7 @@ def configure_execution(config, profile, host=None):
     # need no map entry, so the new home ID6 is never assigned a made-up size.
     return replace(config,
         network=replace(config.network, host=address, rate_hz=10.),
-        patrol=replace(config.patrol, route_ids=tuple(ROUTE_IDS[:4]), outbound_direction="left", obstacle_stop_m=0.,
+        patrol=replace(config.patrol, route_ids=tuple(ROUTE_IDS[:4]), outbound_direction=OUTBOUND_DIRECTION, obstacle_stop_m=0.,
             cruise_altitude_m=profile["target_height_m"],
             angle_deg=profile["max_tilt_deg"], recovery_max_angle_deg=profile["max_tilt_deg"],
             leg_timeout_s=profile["leg_timeout_s"], acquire_timeout_s=12.,
@@ -1405,7 +1409,7 @@ def _pause(client, limiter, stream, detector, logger, seconds, phase, expected):
 def acquire_wall_home(client, limiter, stream, detector, logger, config):
     """Confirm visible ID6 while stationary; no center alignment is required."""
     client.phase = "hover"
-    gate = HorizontalGate(6, "left", config.camera.cx, config.patrol.angle_deg,
+    gate = HorizontalGate(6, OUTBOUND_DIRECTION, config.camera.cx, config.patrol.angle_deg,
                           config.patrol, stationary_home=True)
     deadline = time.monotonic() + config.patrol.acquire_timeout_s
     floor_since, level_retries = None, 0
@@ -1566,7 +1570,7 @@ def _horizontal_motion_evidence(client):
 def capture_id1_pair(client, limiter, stream, detector, logger, config, profile, gate,
                      *, departure=6, expected=1, external_route=None,
                      on_capture=None, capture_count=1):
-    """Frame the expected wall tag with its left-hand mock and capture.
+    """Frame the expected wall tag with the mock beside it and capture.
 
     Used for every outbound visit (ID1, ID2, ID3): the first photo of each
     tag must include the whole mock beside it. The caller then advances.
@@ -1589,7 +1593,7 @@ def capture_id1_pair(client, limiter, stream, detector, logger, config, profile,
     first_id1_recorded = False
     client.log_event("standalone_leg", {"from": departure, "to": expected, "direction": direction,
         "phase_scope": f"first_ID{expected}_pair_framing"})
-    print(f"ID{departure} -> ID{expected}: frame ID{expected} and the entire left-hand mock", flush=True)
+    print(f"ID{departure} -> ID{expected}: frame ID{expected} and the entire mock beside it", flush=True)
     blind_images, blind_last_s = 0, 0.
     while time.monotonic() < deadline:
         limiter.wait()
@@ -1792,7 +1796,8 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
     if pair_reference is not None:
         from id1_pair_framing import PairFramingGate
         first_tag = 1 if external_route is None else external_route[1]
-        pair_gate = PairFramingGate(pair_reference, direction="left",
+        pair_gate = PairFramingGate(pair_reference, direction=(OUTBOUND_DIRECTION if external_route is None
+                else external_direction(external_route, 6, first_tag)),
             arrival_band=pair_reference.get("arrival_center_x_fraction"), tag_id=first_tag,
             layout=WALL_IDS)
         profile = {**profile, "max_tilt_deg": .6}
@@ -1882,7 +1887,7 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
             if pair_gate is not None and phase is PatrolPhase.OUTBOUND:
                 # First visit of every wall tag: frame the tag with its mock.
                 # Return visits only need the tag in the broad view.
-                direction = ("left" if external_route is None
+                direction = (planned_direction(departure, expected) if external_route is None
                              else external_direction(external_route, departure, expected))
                 gate = pair_gate if index == 0 else PairFramingGate(
                     pair_reference, direction=direction,
@@ -2008,7 +2013,7 @@ def main(argv=None):
                           if args.id1_pair else None)
         if args.id1_pair:
             from id1_pair_framing import PairFramingGate
-            PairFramingGate(pair_reference, direction="left", layout=WALL_IDS,
+            PairFramingGate(pair_reference, direction=OUTBOUND_DIRECTION, layout=WALL_IDS,
                 arrival_band=pair_reference.get("arrival_center_x_fraction") if isinstance(pair_reference, dict) else None)
         if not args.execute and not args.check:
             print(json.dumps(plan(profile, pair_reference, args.continue_patrol), ensure_ascii=False, indent=2))
@@ -2020,7 +2025,7 @@ def main(argv=None):
             MixedDetector(config)
             if pair_reference is not None:
                 from id1_pair_framing import PairFramingGate
-                PairFramingGate(pair_reference, direction="left", layout=WALL_IDS,
+                PairFramingGate(pair_reference, direction=OUTBOUND_DIRECTION, layout=WALL_IDS,
                     arrival_band=pair_reference.get("arrival_center_x_fraction"))
             import av
             print(json.dumps({"mode": "offline_check", "setup_ready": True,

@@ -2,10 +2,10 @@
     "schema_version":  3,
     "profile_id":  "field-ordered-v1",
     "wall_ids_left_to_right":  [
-                                   3,
-                                   2,
+                                   6,
                                    1,
-                                   6
+                                   2,
+                                   3
                                ],
     "floor_tag_id":  0,
     "home_tag_id":  6,

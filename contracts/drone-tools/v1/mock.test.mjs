@@ -129,18 +129,20 @@ test('seven frozen tools, static documents and explicitly nonphysical capabiliti
   assert.equal(health.hardware_connected, false); assert.equal(health.physical_execution, false);
 });
 
-test('all six routes return home with two distinct attributed, decodable PNGs per visit', async t => {
+test('all nine routes land after two distinct attributed, decodable PNGs per visit', async t => {
   const api = await fixture(t);
   const routes = (await api.call('drone_get_capabilities')).body.supported_ordered_sequences;
+  assert.equal(routes.length, 9);
+  assert.deepEqual(routes.slice(0, 3), [['tag-1'], ['tag-2'], ['tag-3']]);
   const allHashes = new Set(), allIds = new Set();
   for (const ids of routes) {
     const admission = await api.execute(ids);
     const { mission } = await api.poll(admission.mission_id, m => m.state === 'completed');
-    assert.deepEqual(mission.visited_ids, [6, ...ids.map(id => Number(id.slice(-1))), 6]);
+    assert.deepEqual(mission.visited_ids, [6, ...ids.map(id => Number(id.slice(-1)))]);
     assert.equal(mission.route_completed, true); assert.equal(mission.ground_verified, true);
     assert.equal(mission.verification_pending, false);
     const captures = (await api.call('drone_get_captures', { mission_id: mission.mission_id })).body.captures;
-    assert.equal(captures.length, 6);
+    assert.equal(captures.length, 2 * ids.length);
     for (const [index, visit] of mission.visits.entries()) {
       assert.equal(visit.state, 'captured'); assert.equal(visit.arrival_confirmed, true);
       assert.equal(visit.capture_ids.length, 2);
@@ -155,8 +157,8 @@ test('all six routes return home with two distinct attributed, decodable PNGs pe
       }
     }
   }
-  assert.equal(allHashes.size, 36);
-  assert.equal((await api.send('/mock/status')).body.run_count, 6);
+  assert.equal(allHashes.size, 2 * (3 * 1 + 6 * 3));
+  assert.equal((await api.send('/mock/status')).body.run_count, 9);
 });
 
 test('observable finite stages, original admission lookup and write idempotency never replay', async t => {
@@ -397,7 +399,7 @@ test('bounded memory refuses new admissions explicitly without evicting original
   assert.equal((await api.call('drone_execute_route', routeArgs())).body.error.code, 'HISTORY_LIMIT');
   assert.equal((await api.send(`/requests/${CALLER}/${request}`)).body.mission.mission_id, m.mission_id);
   const requests = await fixture(t, { maxRequests: 1 });
-  const first = await requests.execute(undefined, request);
+  const first = await requests.execute(routeArgs().destination_ids, request);
   await requests.poll(first.mission_id, mission => mission.state === 'completed');
   assert.equal((await requests.call('drone_execute_route', routeArgs())).code, 429);
   assert.equal((await requests.call('drone_execute_route', routeArgs(), request)).code, 200);

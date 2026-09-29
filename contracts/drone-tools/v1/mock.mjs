@@ -192,7 +192,7 @@ export function createMockServer(options = {}) {
       });
     }
     steps.push(() => phase('returning'), () => {
-      mission.visited_ids.push(6);
+      // The field route lands on the last monitor's floor tag; no return to ID6.
       mission.route_completed = mission.visits.every(visit => visit.capture_ids.length === 2);
       relinquish(mission, 'awaiting_rc_landing');
     });

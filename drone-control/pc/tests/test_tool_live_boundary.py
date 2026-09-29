@@ -171,6 +171,54 @@ class LiveTransportBoundaryTest(unittest.TestCase):
         client.disarm()
         self.assertEqual([r["type"] for r in raw.writes], ["land", "zero", "disarm"])
 
+    def test_status_reads_keep_stick_authority_alive_after_a_slow_gap(self):
+        clock = [100.]
+        with patch("drone_nav.tool_control.live.time.perf_counter", lambda: clock[0]):
+            client, raw = self.client(FakeSocket(AIRBORNE))
+            client._armed, client._armed_since = True, 0.
+            client.send("attitude", {"forward_tilt_deg": 0, "right_tilt_deg": .3,
+                                     "up_mps": 0, "yaw_rate_rps": 0})
+            clock[0] = 100.2
+            client.status("fast_read")
+            clock[0] = 100.8
+            client.status("after_slow_ack")
+            clock[0] = 101.0
+            client.status("right_after_keepalive")
+            client.cleaning = True
+            clock[0] = 102.0
+            client.status("cleanup_read")
+        # The late read is answered by the keep-alive zero itself.
+        self.assertEqual([r["type"] for r in raw.writes],
+                         ["attitude", "status", "zero", "status", "status"])
+        self.assertFalse(client.failed)
+
+    def test_status_before_any_motion_or_arm_sends_no_keepalive(self):
+        client, raw = self.client(FakeSocket(AIRBORNE))
+        client.status("unarmed_read")
+        client._armed, client._armed_since = True, time.perf_counter()
+        client.status("armed_before_motion")
+        self.assertEqual([r["type"] for r in raw.writes], ["status", "status"])
+
+    def test_attitude_ack_wait_survives_venue_wifi_spike_but_stays_under_phone_release(self):
+        with patch("drone_nav.tool_control.live.time.perf_counter", lambda: 100.):
+            client, raw = self.client(FakeSocket(AIRBORNE))
+            client._armed, client._armed_since = True, 0.
+            client.send("attitude", {"forward_tilt_deg": 0, "right_tilt_deg": 0,
+                                     "up_mps": 0, "yaw_rate_rps": 0})
+            self.assertEqual(client._socket.deadline, 102.)
+        self.assertEqual([r["type"] for r in raw.writes], ["attitude"])
+        self.assertFalse(client.failed)
+
+    def test_disarm_ack_wait_survives_venue_wifi_spike(self):
+        with patch("drone_nav.tool_control.live.time.perf_counter", lambda: 100.):
+            client, raw = self.client(FakeSocket({**AIRBORNE, "armed": False,
+                                                  "vs_enabled": False, "vs_authority": "RC"}))
+            client._armed, client._armed_since = True, 0.
+            client.disarm()
+            self.assertEqual(client._socket.deadline, 102.)
+        self.assertEqual([r["type"] for r in raw.writes], ["disarm"])
+        self.assertFalse(client.failed)
+
     def test_only_landing_and_disarm_may_acknowledge_with_authority_handed_back(self):
         handback = {**AIRBORNE, "armed": False, "vs_enabled": False, "vs_authority": "RC"}
         for command, payload in [("gimbal", {"pitch_deg": -90}), ("status", {"state": "offline"}),

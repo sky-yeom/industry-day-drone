@@ -86,6 +86,15 @@ class CaptureProofFreshnessTests(unittest.TestCase):
             proof(velocity_north_mps=.2)
         self.assertIn("stationary", str(caught.exception))
 
+    def test_drift_before_publication_defers_to_the_framing_gate(self):
+        """2026-09-29: a pre-photo drift re-settles the frame instead of ending the mission."""
+        with self.assertRaises(field.shuttle.FramingCorrectionDeferred):
+            proof(velocity_north_mps=.2)
+
+    def test_wifi_stall_height_age_is_admitted(self):
+        """Venue Wi-Fi stalled up to 1.16 s between status reads."""
+        proof(height_age_s=.9, elapsed=.1)
+
     def test_rc_override_is_still_refused(self):
         with self.assertRaises(InterruptedError) as caught:
             proof(rc_override_age_ms=1000.)

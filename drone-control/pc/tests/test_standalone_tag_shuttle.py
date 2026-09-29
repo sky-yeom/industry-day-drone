@@ -24,7 +24,7 @@ from drone_nav.tool_control.live import DeadlineTransport
 
 def profile(**changes):
     return {"schema_version": 3, "profile_id": "field-ordered-v1",
-            "wall_ids_left_to_right": [3, 2, 1, 6],
+            "wall_ids_left_to_right": list(shuttle.WALL_IDS),
             "floor_tag_id": 0, "home_tag_id": 6, "route_ids": [6, 1, 2, 3, 2, 1, 6],
             "target_height_m": 1.4, "max_tilt_deg": 1.5,
             "visit_pause_s": 3., "leg_timeout_s": 45., "total_timeout_s": 240.,
@@ -47,6 +47,10 @@ class FakeClient:
     # Bind the real implementation so this double cannot drift from the guard
     # it stands in for; the zero bound is a profile without height_hold.
     hold_up_bound = 0.
+    hold_down_bound = 0.
+    hold_forward_bound = 0.
+    drift_ref_px = None
+    drift_size_sample = None
     hold_up = shuttle.ShuttleClient.hold_up
 
     def __init__(self):
@@ -124,7 +128,9 @@ class PlanAndConfigurationTests(StandaloneTestCase):
     def test_exact_corrected_route_directions_follow_confirmed_wall_positions(self):
         p = shuttle.plan(profile())
         self.assertEqual(p["profile"]["route_ids"], [6, 1, 2, 3, 2, 1, 6])
-        self.assertEqual([leg["direction"] for leg in p["legs"]], ["left"] * 3 + ["right"] * 3)
+        back = "right" if shuttle.OUTBOUND_DIRECTION == "left" else "left"
+        self.assertEqual([leg["direction"] for leg in p["legs"]],
+                         [shuttle.OUTBOUND_DIRECTION] * 3 + [back] * 3)
         self.assertEqual(p["finish"], "hover_release_to_RC_manual_landing")
         with self.assertRaises(ValueError):
             shuttle.planned_direction(6, 3)
@@ -236,10 +242,12 @@ class HorizontalGateTests(StandaloneTestCase):
         self.assertIsNone(gate.update([tag(3)], .4, .01, (1, 1))[1])
         self.assertEqual(gate.update([tag(3)], .41, .01, (1, 2))[1].tag_id, 3)
 
-    def test_stale_missing_negative_and_nan_frame_age_are_rejected(self):
+    def test_stale_missing_negative_and_nan_frame_age_wait_without_motion(self):
         for age, key in ((.501, (1, 2)), (-.01, (1, 2)), (float("nan"), (1, 2)), (.01, None)):
-            with self.subTest(age=age, key=key), self.assertRaises(RuntimeError):
-                self.gate().update([tag(3)], 1., age, key)
+            with self.subTest(age=age, key=key):
+                gate = self.gate()
+                self.assertEqual(gate.update([tag(3)], 1., age, key), (0., None))
+                self.assertEqual(gate.framing_action, "stale_or_invalid_detection_frame")
 
     def test_old_frame_or_video_reconnect_cannot_complete_hold(self):
         gate = self.gate()
@@ -298,7 +306,7 @@ class HorizontalGateTests(StandaloneTestCase):
             stream.last_detection_snapshot = SimpleNamespace(key=(1, frame_id), frame=SimpleNamespace(shape=(720, 1280, 3)))
             return next(frames), .01
         stream.detect_latest = detect
-        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .11))
+        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .16))
         cfg = replace(config(), camera=replace(config().camera, cx=640.))
         with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
                 patch.object(shuttle.time, "perf_counter", lambda: clock[0]), \
@@ -312,6 +320,105 @@ class HorizontalGateTests(StandaloneTestCase):
             self.assertEqual((forward, up, yaw), (0., 0., 0.))
             self.assertLessEqual(abs(right), 1.5)
         self.assertIn("zero", client.calls)
+
+    def test_real_traversal_waits_out_stale_frame_without_aborting(self):
+        clock = [100.]
+        client, logger = FakeClient(), MagicMock()
+        client.arm("offline")
+        client.raw["is_flying"] = True
+        samples = iter((([tag(1)], .6), ([tag(1)], .01), ([tag(1)], .01),
+                        ([tag(1)], .01), ([tag(1)], .01)))
+        stream = SimpleNamespace(last_detection_snapshot=None)
+        def detect(_detector, _age):
+            frame_id = 1 if stream.last_detection_snapshot is None else stream.last_detection_snapshot.key[1] + 1
+            stream.last_detection_snapshot = SimpleNamespace(
+                key=(1, frame_id), frame=SimpleNamespace(shape=(720, 1280, 3)))
+            return next(samples)
+        stream.detect_latest = detect
+        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .11))
+        cfg = replace(config(), camera=replace(config().camera, cx=640.))
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                patch.object(shuttle.time, "perf_counter", lambda: clock[0]), \
+                redirect_stdout(io.StringIO()):
+            result = shuttle.traverse_horizontal(client, limiter, stream, None, logger, cfg, profile(),
+                                                 6, 1, shuttle.PatrolPhase.OUTBOUND)
+        self.assertEqual(result.tag_id, 1)
+        first_sample = next(data for event, data in client.events
+                            if event == "standalone_horizontal_sample")
+        self.assertEqual(first_sample["framing_action"], "stale_or_invalid_detection_frame")
+        self.assertGreaterEqual(client.calls.count("zero"), 1)
+
+    def _fly_return_leg(self, departure, route, frames, speeds):
+        clock, client, logger = [100.], FakeClient(), MagicMock()
+        client.arm("offline")
+        client.raw["is_flying"] = True
+        frames, speeds = iter(frames), iter(speeds)
+        stream = SimpleNamespace(last_detection_snapshot=None)
+        def detect(_detector, _age):
+            frame_id = 1 if stream.last_detection_snapshot is None else stream.last_detection_snapshot.key[1] + 1
+            stream.last_detection_snapshot = SimpleNamespace(key=(1, frame_id), frame=SimpleNamespace(shape=(720, 1280, 3)))
+            return next(frames), .01
+        stream.detect_latest = detect
+        def status(state):
+            FakeClient.status(client, state)
+            client.last_telemetry.velocity_north_mps = next(speeds, 0.)
+        client.status = status
+        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .11))
+        cfg = replace(config(), camera=replace(config().camera, cx=640.))
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                patch.object(shuttle.time, "perf_counter", lambda: clock[0]), \
+                redirect_stdout(io.StringIO()):
+            found = shuttle.traverse_horizontal(client, limiter, stream, None, logger, cfg, profile(),
+                                                departure, 6, shuttle.PatrolPhase.RETURN,
+                                                external_route=route)
+        self.assertEqual(found.tag_id, 6)
+        return client
+
+    def test_every_return_leg_caps_cruise_and_brakes_on_arrival(self):
+        """2026-09-28 14:48: 0.6 deg for 21 s reached 0.3 m/s and coasted past ID6.
+
+        The return may start from ID1, ID2 or ID3. From ID1 the home tag can
+        already sit at the frame edge on departure, so the brake must key on
+        entering the view band rather than on first sighting.
+        """
+        inside = shuttle.WallViewAction.INSIDE.value
+        # The return runs opposite to the outbound leg; ID6 enters from the
+        # edge it is approached from and every tilt sign follows the travel.
+        rightward = shuttle.OUTBOUND_DIRECTION == "left"
+        travel = 1. if rightward else -1.
+        edge = (lambda x: x) if rightward else (lambda x: 1280. - x)
+        unseen = (([],) * 7 + ([tag(6, edge(1150.))],) + ([tag(6)],) * 8,
+                  (0., .1, .2, .3, .2, .1, .1, .3, .3, .3, .3, .2, .1, .0, .0, .0))
+        edge_from_start = (([tag(6, edge(1250.))],) * 20 + ([tag(6)],) * 10,
+                           (.1, .2) * 10 + (.2, .2, .2, .1, 0.))
+        for departure, route, (frames, speeds) in ((3, [6, 1, 2, 3, 6], unseen),
+                                                   (2, [6, 1, 3, 2, 6], unseen),
+                                                   (1, [6, 2, 3, 1, 6], edge_from_start)):
+            with self.subTest(departure=departure):
+                client = self._fly_return_leg(departure, route, frames, speeds)
+                samples = [data for event, data in client.events if event == "standalone_horizontal_sample"]
+                cruising = [s for s in samples if s["speed_control"] != "arrival_brake"]
+                controls = [s["speed_control"] for s in cruising]
+                self.assertIn("cruise_hold", controls)
+                if any((s["horizontal_speed_mps"] or 0.) >= .3 for s in cruising):
+                    self.assertIn("cruise_cap_coast", controls)
+                for s in cruising:
+                    speed = s["horizontal_speed_mps"] or 0.
+                    if speed >= shuttle.RETURN_COAST_MPS:
+                        self.assertEqual(s["right_tilt_deg"], 0.)
+                    elif speed >= shuttle.RETURN_CRUISE_MPS:
+                        self.assertTrue(0. < travel*s["right_tilt_deg"] <= shuttle.RETURN_CRUISE_TILT_DEG)
+                    elif not s["target_seen"]:
+                        # 15:25: a cap at 0.2 m/s left 0 tilt down to 0.1 m/s
+                        # and stopped the return 7 times; below 0.2 it pushes.
+                        self.assertGreater(travel*s["right_tilt_deg"], 0.)
+                brakes = [s for s in samples if s["speed_control"] == "arrival_brake"]
+                self.assertTrue(brakes)
+                self.assertTrue(all(s["framing_action"] == inside and
+                                    s["right_tilt_deg"] == -travel*shuttle.RETURN_BRAKE_DEG for s in brakes))
+                rights = [call[1][1] for call in client.calls if isinstance(call, tuple) and call[0] == "attitude"]
+                self.assertTrue(all(abs(right) <= max(profile()["max_tilt_deg"], shuttle.RETURN_BRAKE_DEG)
+                                    for right in rights))
 
     def test_recorded_id1_overshoot_positions_complete_without_right_correction(self):
         # Actual logged positions from 20260910T135321. This is an offline
@@ -342,6 +449,45 @@ class HorizontalGateTests(StandaloneTestCase):
         self.assertEqual(motion, [])
         self.assertEqual(client.calls.count("zero"), 4)
         logger.save_confirmation_photo.assert_called_once()
+
+    def test_hover_pause_waits_out_stale_video_frames(self):
+        clock, client, logger = [100.], FakeClient(), MagicMock()
+        client.arm("offline")
+        client.raw["is_flying"] = True
+        stream = SimpleNamespace(last_detection_snapshot=None)
+        def detect(_detector, _age):
+            frame_id = 1 if stream.last_detection_snapshot is None else stream.last_detection_snapshot.key[1] + 1
+            stream.last_detection_snapshot = SimpleNamespace(
+                key=(1, frame_id), frame=SimpleNamespace(shape=(720, 1280, 3)))
+            return [], .9
+        stream.detect_latest = detect
+        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .2))
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                patch.object(shuttle.time, "perf_counter", lambda: clock[0]):
+            shuttle._pause(client, limiter, stream, None, logger, .7,
+                           shuttle.PatrolPhase.WALL_HOME, 6)
+        self.assertGreaterEqual(client.calls.count("zero"), 3)
+        self.assertTrue(any(event == "standalone_pause_frame_deferred"
+                            for event, _ in client.events))
+
+    def test_arrival_brake_deferral_holds_zero_and_finishes_the_leg(self):
+        clock, client = [100.], FakeClient()
+        client.phase = "lateral"
+        client.arm("offline")
+        client.raw["is_flying"] = True
+        client.received = clock[0]
+        client.last_telemetry.velocity_north_mps = .2
+        client.last_telemetry.velocity_age_s = .01
+        def stale_attitude(*axes):
+            raise shuttle.FramingCorrectionDeferred("Detected camera frame expired before command dispatch")
+        client.attitude = stale_attitude
+        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .1))
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                patch.object(shuttle.time, "perf_counter", lambda: clock[0]):
+            shuttle._finish_arrival_brake(client, limiter, profile(), "left", 99.)
+        self.assertIn("zero", client.calls)
+        self.assertTrue(any(event == "standalone_arrival_brake_deferred"
+                            for event, _ in client.events))
 
     def test_invalid_decoding_quality_cannot_confirm_a_wall(self):
         for changes in ({"hamming": None}, {"hamming": 3}, {"decision_margin": None},
@@ -550,7 +696,10 @@ class MissionLifecycleTests(StandaloneTestCase):
         client = FakeClient()
         client.raw.update(is_flying=True, armed=True, vs_enabled=True, vs_advanced_enabled=True, vs_authority="MSDK")
         client.raw["is_flying_age_ms"] = 0.
+        # A 1 s Wi-Fi stall (1.16 s measured at the venue) is still inside the budget.
         client.received = time.perf_counter() - 1.
+        shuttle._require_flight(client)
+        client.received = time.perf_counter() - shuttle.FLIGHT_STATE_FRESH_S - .1
         with self.assertRaises(InterruptedError):
             shuttle._require_flight(client)
 
@@ -914,6 +1063,302 @@ class DispatchBoundaryTests(StandaloneTestCase):
                 with self.subTest(phase=phase):
                     self.assertEqual(client.hold_up(.04), 0.)
 
+    def test_ceiling_eases_down_slowly_and_only_at_the_ceiling(self):
+        # 20260929T162210: zero up on legs 1->2 and 2->3, sonar 1.4 -> 1.7 m.
+        # Below the ceiling the hold stays up-only (the two-sided hold was
+        # reverted); at a 1.7 reading it eases down at 0.05 m/s.
+        profile = {"target_height_m": 1.4,
+                   "height_hold": {"deadband_m": .08, "gain_mps_per_m": .4, "max_up_mps": .18}}
+        for height, expected in ((1.3, .04), (1.4, 0.), (1.5, 0.), (1.6, 0.),
+                                 (1.7, -.05), (1.8, -.05)):
+            client = SimpleNamespace(last_telemetry=SimpleNamespace(height_m=height))
+            with self.subTest(height=height):
+                self.assertAlmostEqual(shuttle.height_hold_up_mps(client, profile), expected, places=6)
+        client = SimpleNamespace(last_telemetry=SimpleNamespace(height_m=1.8))
+        self.assertEqual(shuttle.height_hold_up_mps(client, {"target_height_m": 1.4}), 0.)
+        clock = [100.]
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]):
+            client = self.client(clock)
+            client.phase, client.hold_up_bound = "lateral", .18
+            client.hold_down_bound = shuttle.CEILING_DOWN_MPS
+            client._guard_dispatch("attitude", {"forward_tilt_deg": 0., "right_tilt_deg": -.6,
+                                                "up_mps": -.05, "yaw_rate_rps": 0.})
+            with self.assertRaises(PermissionError):
+                client._guard_dispatch("attitude", {"forward_tilt_deg": 0., "right_tilt_deg": -.6,
+                                                    "up_mps": -.06, "yaw_rate_rps": 0.})
+            self.assertEqual(client.hold_up(-.05), -.05)
+            self.assertEqual(client.hold_up(-.06), 0.)
+            client.phase = "climb"
+            self.assertEqual(client.hold_up(-.05), 0.)
+
+    def test_drift_pull_only_tilts_forward_on_a_fresh_centred_expected_tag(self):
+        # 20260929T172657: ID6 edge height ~236 px at home, ID1 156 px later with
+        # every forward command zero; a wall stands behind the aircraft.
+        def tag(tag_id, x, height, width=None, y=540.):
+            h, w = height / 2, (width or height) / 2
+            return shuttle.PixelTag(tag_id, (x, y), ((x+w, y-h), (x-w, y-h), (x-w, y+h), (x+w, y+h)), 50., 0)
+        frame = (1080, 1920, 3)
+        client = SimpleNamespace(hold_forward_bound=shuttle.DRIFT_PULL_MAX_DEG, drift_ref_px=236.,
+                                 drift_size_sample=None, phase="lateral")
+        pull = shuttle.drift_pull_forward_deg
+        nudge = shuttle.DRIFT_PULL_NUDGE_DEG
+        far = tag(1, 960, 156)
+        def fresh(**change):
+            return SimpleNamespace(**{**vars(client), "drift_size_sample": None,
+                                      "drift_nudge_start": None, **change})
+        # Far or slightly far: the same tiny nudge, not a ratio-sized pull.
+        self.assertEqual(pull(fresh(), [far], 1, frame, 10.), nudge)
+        self.assertEqual(pull(fresh(), [tag(1, 960, 212)], 1, frame, 10.), nudge)
+        # Inside the deadband, or closer than home: nothing, never backward.
+        self.assertEqual(pull(fresh(), [tag(1, 960, 225)], 1, frame, 10.), 0.)
+        self.assertEqual(pull(fresh(), [tag(1, 960, 320)], 1, frame, 10.), 0.)
+        # A narrow (obliquely seen) tag with a home-sized edge height is not "far".
+        self.assertEqual(pull(fresh(), [tag(1, 960, 236, width=150)], 1, frame, 20.), 0.)
+        # One short pulse, then a rest even while it still looks far.
+        c = fresh()
+        self.assertEqual(pull(c, [far], 1, frame, 30.), nudge)
+        self.assertEqual(pull(c, [far], 1, frame, 30.2), nudge)
+        self.assertEqual(pull(c, [far], 1, frame, 30.35), 0.)
+        self.assertEqual(pull(c, [far], 1, frame, 31.7), 0.)
+        self.assertEqual(pull(c, [far], 1, frame, 31.85), nudge)
+        # The last fresh sample holds for DRIFT_PULL_STALE_S, then nothing.
+        c = fresh()
+        pull(c, [far], 1, frame, 35.)
+        self.assertEqual(pull(c, [], 1, frame, 35.2), nudge)
+        self.assertEqual(pull(c, [], 1, frame, 35.6), 0.)
+        # Off-centre, other-ID, floor and cropped tags are not measured.
+        for other in (tag(1, 400, 156), tag(1, 1520, 156), tag(2, 960, 156), tag(0, 960, 156),
+                      tag(1, 960, 156, y=40.)):
+            with self.subTest(tag=other.tag_id, x=other.center_px[0]):
+                self.assertEqual(pull(fresh(), [other], 1, frame, 40.), 0.)
+        for change in ({"drift_ref_px": None}, {"hold_forward_bound": 0.}, {"phase": "hover"}):
+            with self.subTest(change=change):
+                self.assertEqual(pull(fresh(**change), [far], 1, frame, 50.), 0.)
+        # Return legs measure any centred wall tag; the closest-looking one decides.
+        ret = fresh()
+        self.assertEqual(pull(ret, [tag(2, 900, 156), tag(1, 1100, 230)], shuttle.WALL_IDS, frame, 60.), 0.)
+        self.assertEqual(pull(ret, [tag(2, 900, 156), tag(0, 1000, 60)], shuttle.WALL_IDS, frame, 61.),
+                         nudge)
+
+    def test_capture_forward_pulse_pushes_forward_once_after_a_far_photo(self):
+        # 20260929T193929: ID1/ID2 photographed at 158-165 px against ID6 at 286 px.
+        def tag(height):
+            h = height / 2
+            return shuttle.PixelTag(1, (1200., 560.), ((1200+h, 560-h), (1200-h, 560-h),
+                                    (1200-h, 560+h), (1200+h, 560+h)), 60., 0)
+        def run(height, stream=None, **changes):
+            clock = [100.]
+            client = FakeClient()
+            client.phase = "lateral"
+            client.hold_forward_bound = shuttle.DRIFT_PULL_MAX_DEG
+            client.drift_ref_px = 286.
+            for key, value in changes.items():
+                setattr(client, key, value)
+            limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .15))
+            with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                    patch.object(shuttle, "_require_flight", lambda client: None):
+                shuttle.capture_forward_pulse(client, limiter, tag(height), profile(),
+                                              stream, None if stream is None else object())
+            return client
+        def named(client, name):
+            return [e[1] for e in client.events if e[0] == name]
+        # No way to re-measure: one pulse, then the route continues.
+        far = run(160.)
+        pushes = [call[1] for call in far.calls if call[0] == "attitude"]
+        self.assertTrue(pushes)
+        self.assertTrue(all(axes == (shuttle.CAPTURE_PULL_DEG, 0., 0., 0.) for axes in pushes))
+        self.assertLessEqual(len(pushes), int(shuttle.CAPTURE_PULL_S / .15) + 1)
+        self.assertEqual(far.calls[-1], "zero")
+        self.assertIs(named(far, "standalone_capture_forward_pulse")[0]["sent"], True)
+        self.assertEqual(named(far, "standalone_capture_forward_pulse_done")[0]["sent_ticks"], len(pushes))
+        self.assertEqual(named(far, "standalone_capture_forward_pulse_end")[-1]["reason"], "tag_not_remeasured")
+        # 20260929T200917: a stale frame after the photo ended the mission; now it only skips a tick.
+        stale_ticks = [0]
+        real_attitude = FakeClient.attitude
+        def flaky(self, *axes):
+            stale_ticks[0] += 1
+            if stale_ticks[0] == 1:
+                raise shuttle.FramingCorrectionDeferred("Detected camera frame expired before command dispatch")
+            return real_attitude(self, *axes)
+        with patch.object(FakeClient, "attitude", flaky):
+            stale = run(160.)
+        done = named(stale, "standalone_capture_forward_pulse_done")[0]
+        self.assertEqual(done["stale_ticks"], 1)
+        self.assertGreaterEqual(done["sent_ticks"], 1)
+        self.assertEqual(stale.calls[-1], "zero")
+        # Still far after every pulse: exactly three rounds, then the route continues.
+        detections = []
+        def stream_of(heights):
+            sizes = iter(heights)
+            state = {"h": next(sizes)}
+            def detect_latest(detector, age):
+                detections.append(age)
+                return [tag(state["h"])], 0.
+            def advance():
+                state["h"] = next(sizes, state["h"])
+            return SimpleNamespace(detect_latest=detect_latest, advance=advance)
+        stuck = stream_of([160.])
+        client = run(160., stream=stuck)
+        rounds = named(client, "standalone_capture_forward_pulse")
+        self.assertEqual([r["round"] for r in rounds], [1, 2, 3])
+        self.assertTrue(all(r["sent"] for r in rounds))
+        end = named(client, "standalone_capture_forward_pulse_end")[-1]
+        self.assertEqual(end["reason"], "max_rounds_continue_route")
+        self.assertEqual(end["rounds"], shuttle.CAPTURE_PULL_MAX_ROUNDS)
+        self.assertTrue(all(c[1][0] >= 0. for c in client.calls if c[0] == "attitude"))
+        # 20260929T203613: every attitude tick is preceded by a fresh decode.
+        self.assertGreaterEqual(len(detections), len([c for c in client.calls if c[0] == "attitude"]))
+        self.assertTrue(all(age == shuttle.FRESH_S for age in detections))
+        # Reference reached after the first pulse: the second round sends nothing.
+        closer = SimpleNamespace(detect_latest=lambda detector, age: ([tag(280.)], 0.))
+        client = run(160., stream=closer)
+        rounds = named(client, "standalone_capture_forward_pulse")
+        self.assertEqual([(r["round"], r["sent"]) for r in rounds], [(1, True), (2, False)])
+        # At home distance, closer, without a reference or with the bound off: nothing.
+        for height, changes in ((280., {}), (320., {}), (160., {"drift_ref_px": None}),
+                                (160., {"hold_forward_bound": 0.})):
+            with self.subTest(height=height, changes=changes):
+                client = run(height, **changes)
+                self.assertFalse([c for c in client.calls if c[0] == "attitude"])
+                self.assertIs(client.events[-1][1]["sent"], False)
+
+    def test_edge_prebrake_brakes_once_against_travel_at_the_first_edge_sighting(self):
+        def tag(x):
+            return shuttle.PixelTag(1, (x, 540.), ((x+50, 490), (x-50, 490), (x-50, 590), (x+50, 590)), 60., 0)
+        def run(direction, x, speed, moving=True):
+            clock = [100.]
+            client = FakeClient()
+            client.phase = "lateral"
+            limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .1))
+            with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                    patch.object(shuttle, "_require_flight", lambda client: None), \
+                    patch.object(shuttle, "_horizontal_motion_evidence", lambda client: (speed, 0.)):
+                sent = shuttle.edge_prebrake(client, limiter, profile(), direction, tag(x), 1920,
+                                             moving=moving)
+            return sent, [c[1] for c in client.calls if c[0] == "attitude"], client
+        sent, ticks, client = run("right", 1700., .4)
+        self.assertTrue(sent)
+        self.assertTrue(ticks)
+        self.assertTrue(all(axes == (0., -shuttle.EDGE_PREBRAKE_DEG, 0., 0.) for axes in ticks))
+        self.assertLessEqual(len(ticks), int(shuttle.EDGE_PREBRAKE_S / .1) + 1)
+        self.assertEqual(client.calls[-1], "zero")
+        sent, ticks, _ = run("left", 150., .4)
+        self.assertTrue(sent)
+        self.assertTrue(all(axes == (0., shuttle.EDGE_PREBRAKE_DEG, 0., 0.) for axes in ticks))
+        # 20260929T205025: speed read exactly 0.1 m/s at every first sighting; still brakes.
+        for speed in (.1, 0., None):
+            with self.subTest(speed=speed):
+                sent, ticks, _ = run("right", 1700., speed)
+                self.assertTrue(sent)
+                self.assertTrue(ticks)
+        # 20260929T211416: ID3 first appeared mid-frame-right and the drone kept
+        # drifting; any first sighting on a moving leg now brakes.
+        for direction, x in (("right", 960.), ("right", 150.), ("left", 1700.)):
+            with self.subTest(direction=direction, x=x):
+                sent, ticks, _ = run(direction, x, .4)
+                self.assertTrue(sent)
+                self.assertTrue(ticks)
+        # A tag already in view at leg start (not moving yet): no brake.
+        sent, ticks, _ = run("right", 1700., .4, moving=False)
+        self.assertFalse(sent)
+        self.assertFalse(ticks)
+
+    def image_stop(self, xs):
+        """Run confirm_image_stop over decodes whose tag x (px of 1920) follows xs."""
+        clock = [100.]
+        client = FakeClient()
+        client.phase = "lateral"
+        frames = iter(xs)
+        stream = SimpleNamespace(last_detection_snapshot=None)
+        def detect_latest(_detector, _age):
+            # One new decode every 0.6 s, as measured in the field.
+            previous = stream.last_detection_snapshot
+            if previous is not None and clock[0] - previous.received_s < .6:
+                return self.last_tags, 0.
+            x = next(frames, None)
+            sequence = 1 if previous is None else previous.key[1] + 1
+            stream.last_detection_snapshot = SimpleNamespace(
+                key=(1, sequence), received_s=clock[0], frame=SimpleNamespace(shape=(1080, 1920, 3)))
+            self.last_tags = [] if x is None else [shuttle.PixelTag(3, (x, 540.), None, 60., 0)]
+            return self.last_tags, 0.
+        stream.detect_latest = detect_latest
+        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .1))
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                patch.object(shuttle, "_require_flight", lambda client: None):
+            still = shuttle.confirm_image_stop(client, limiter, profile(), stream, object(), 3)
+        checks = [data for name, data in client.events if name == "standalone_image_stop_check"]
+        ticks = [c[1] for c in client.calls if c[0] == "attitude"]
+        return still, checks, ticks
+
+    def test_image_stop_accepts_a_tag_that_holds_its_pixel(self):
+        still, checks, ticks = self.image_stop([1700., 1702.])
+        self.assertTrue(still)
+        self.assertEqual([c["result"] for c in checks], ["still"])
+        self.assertFalse(ticks)
+
+    def test_image_stop_brakes_against_the_measured_drift_until_still(self):
+        # 20260929T211416: ID3 slid 1718 -> 1685 px (tag moves left = aircraft
+        # still moving right), so the correction must tilt left.
+        still, checks, ticks = self.image_stop([1718., 1685., 1680., 1680.])
+        self.assertTrue(still)
+        self.assertEqual([c["result"] for c in checks], ["moving_brake", "still"])
+        self.assertLess(checks[0]["right_tilt_deg"], 0.)
+        self.assertTrue(ticks)
+        self.assertTrue(all(axes[1] == -shuttle.EDGE_PREBRAKE_DEG for axes in ticks))
+
+    def test_image_stop_is_bounded_and_never_fatal(self):
+        drifting = [1800. - 40.*i for i in range(12)]
+        still, checks, _ = self.image_stop(drifting)
+        self.assertFalse(still)
+        self.assertEqual(checks[-1]["result"], "max_rounds_continue_framing")
+        self.assertEqual(len([c for c in checks if c["result"] == "moving_brake"]),
+                         shuttle.IMAGE_STILL_MAX_ROUNDS)
+        still, checks, _ = self.image_stop([1700.])
+        self.assertFalse(still)
+        self.assertEqual(checks[-1]["result"], "tag_not_measured_twice")
+
+    def test_floor_landing_ids_map_each_monitor_to_the_tag_below_it(self):
+        self.assertEqual(shuttle.FLOOR_LANDING_IDS, {1: 4, 2: 5, 3: 7})
+        self.assertFalse(set(shuttle.FLOOR_LANDING_IDS.values()) & set(shuttle.WALL_IDS))
+
+    def test_timed_tilt_refreshes_telemetry_before_the_flight_check(self):
+        # 20260929T205025: the first pulse tick after the ID3 photo checked
+        # >0.5 s old telemetry and ended the mission ("Fresh airborne state lost").
+        clock = [100.]
+        client = FakeClient()
+        client.phase = "lateral"
+        checks = []
+        def require(client):
+            last = client.calls[-1] if client.calls else None
+            checks.append(last == "zero" or (isinstance(last, tuple) and last[0] == "status"))
+        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .15))
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                patch.object(shuttle, "_require_flight", require):
+            shuttle._timed_tilt(client, limiter, profile(), None, None, .25, 0., .8)
+            shuttle._settle_and_measure(client, limiter, None, None, 1)
+        self.assertTrue(checks)
+        self.assertTrue(all(checks))
+
+    def test_edge_height_uses_vertical_sides_in_any_corner_order(self):
+        corners = ((923.8, 361.2), (702.6, 359.5), (701.5, 580.3), (922.3, 582.0))
+        height = shuttle.tag_edge_height_px(SimpleNamespace(corners_px=corners))
+        self.assertAlmostEqual(height, (220.8 + 220.8) / 2, delta=1.)
+        self.assertIsNone(shuttle.tag_edge_height_px(SimpleNamespace(corners_px=corners[:3])))
+
+    def test_lateral_guard_admits_only_forward_within_the_drift_pull_bound(self):
+        clock = [100.]
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]):
+            client = self.client(clock)
+            client.phase = "lateral"
+            payload = {"forward_tilt_deg": .2, "right_tilt_deg": -.6, "up_mps": 0., "yaw_rate_rps": 0.}
+            with self.assertRaises(PermissionError):
+                client._guard_dispatch("attitude", dict(payload))
+            client.hold_forward_bound = shuttle.DRIFT_PULL_MAX_DEG
+            client._guard_dispatch("attitude", dict(payload))
+            for forward in (-.05, shuttle.DRIFT_PULL_MAX_DEG + .01):
+                with self.subTest(forward=forward), self.assertRaises(PermissionError):
+                    client._guard_dispatch("attitude", {**payload, "forward_tilt_deg": forward})
+
     def test_video_generation_stays_pinned_across_phases(self):
         clock = [100.]
         with patch.object(shuttle.time, "monotonic", lambda: clock[0]):
@@ -960,21 +1405,31 @@ class HomeCentringDecodeGapTests(StandaloneTestCase):
 
     BOX = ((960., 540.), (240., 135.))
 
-    def drive(self, *, decode_gap_s, error_px, vanish_after_s=None, tick_s=.1):
+    def drive(self, *, decode_gap_s, error_px, vanish_after_s=None, tick_s=.1,
+              reappear_after_s=None, hint=None, brakes=None):
         clock = [1000.]
         state = {"decoded_at": None, "index": 0}
         client = FakeClient()
         client.raw.update(is_flying=True, are_motors_on=True, armed=True,
                           vs_enabled=True, vs_advanced_enabled=True, vs_authority="MSDK")
+        if hint is not None:
+            client.tag_last_seen = {6: (hint, clock[0])}
 
         def observe(_client, _stream, _detector, _logger, _phase, _expected, direction=None):
             now = clock[0]
             if state["decoded_at"] is None or now - state["decoded_at"] >= decode_gap_s:
                 state["decoded_at"], state["index"] = now, state["index"] + 1
             age = now - state["decoded_at"]
-            if vanish_after_s is not None and now - 1000. >= vanish_after_s:
+            gone = vanish_after_s is not None and now - 1000. >= vanish_after_s
+            back = reappear_after_s is not None and now - 1000. >= reappear_after_s
+            if gone and not back:
                 return [], age
             return [tag(6, x=960. + error_px, y=540.)], age
+
+        def timed_tilt(_client, _limiter, _profile, _stream, _detector, forward, right, duration_s):
+            (brakes if brakes is not None else []).append((forward, right, duration_s))
+            clock[0] += duration_s
+            return 1, 0
 
         with ExitStack() as stack:
             stack.enter_context(patch.object(shuttle.time, "monotonic", lambda: clock[0]))
@@ -984,6 +1439,9 @@ class HomeCentringDecodeGapTests(StandaloneTestCase):
                                              lambda _d, _f: self.BOX))
             stack.enter_context(patch.object(shuttle, "_snapshot_key",
                                              lambda _s: (1, state["index"])))
+            stack.enter_context(patch.object(shuttle, "_timed_tilt", timed_tilt))
+            stack.enter_context(patch.object(shuttle, "confirm_image_stop",
+                                             lambda *_a, **_k: True))
             stack.enter_context(redirect_stdout(io.StringIO()))
             limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + tick_s))
             centred = shuttle._center_home_tag(client, limiter, SimpleNamespace(),
@@ -1007,7 +1465,7 @@ class HomeCentringDecodeGapTests(StandaloneTestCase):
         # Wall-clock alone must not confirm: distinct decodes carry the verdict.
         self.assertGreaterEqual(confirmations[0]["confirm_frames"],
                                 shuttle.CENTER_CONFIRM_FRAMES)
-        self.assertEqual(confirmations[0]["recovery_pulses"], 0)
+        self.assertEqual(confirmations[0]["seeks"], 0)
 
     def test_a_tag_outside_the_box_still_cannot_confirm_across_a_decode_gap(self):
         # The grace must not turn into a blind pass: an off-centre tag decoded
@@ -1020,21 +1478,59 @@ class HomeCentringDecodeGapTests(StandaloneTestCase):
         self.assertTrue(tilts)
         self.assertTrue(all(tilt > 0. for tilt in tilts))
 
-    def test_losing_the_tag_reverses_the_travel_that_lost_it(self):
-        # ID6 ran from 484 px right of centre to 423 px left of it and then out
-        # of frame, and the old loop held station for the whole timeout because
-        # it had no way back. A lost tag now reverses the last travel, under a
-        # bounded pulse budget.
+    def test_losing_the_tag_seeks_toward_the_side_it_was_last_seen(self):
+        # ID6 was last decoded 600 px right of centre, so it left the frame on
+        # the right: the seek slides right, gently, and within its budget.
         _centred, client, _elapsed = self.drive(decode_gap_s=.625, error_px=600.,
                                                 vanish_after_s=3.)
-        pulses = [data for event, data in client.events
-                  if event == "standalone_home_recovery_pulse"]
-        self.assertTrue(pulses)
-        self.assertLessEqual(len(pulses), shuttle.MAX_CENTER_RECOVERIES)
-        approach = [entry[1][1] for entry in client.calls
-                    if isinstance(entry, tuple) and entry[0] == "attitude" and entry[1][1]][0]
-        self.assertLess(pulses[0]["right_tilt_deg"]*approach, 0.)
-        self.assertLessEqual(abs(pulses[0]["right_tilt_deg"]), .6)
+        seeks = [data for event, data in client.events if event == "standalone_home_seek"]
+        self.assertEqual(len(seeks), 1)
+        self.assertEqual(seeks[0]["right_tilt_deg"], shuttle.HOME_SEEK_DEG)
+        seek_ticks = [entry for entry in client.calls if isinstance(entry, tuple)
+                      and entry[0] == "attitude" and entry[1][1] == shuttle.HOME_SEEK_DEG]
+        self.assertTrue(seek_ticks)
+        self.assertLessEqual(len(seek_ticks)*.1, shuttle.HOME_SEEK_MAX_S + .2)
+        self.assertTrue([e for e, _d in client.events if e == "standalone_home_seek_exhausted"])
+
+    def test_tag_lost_before_centring_seeks_from_the_route_sighting(self):
+        # 2026-09-28 14:48: ID6 slid 1035 -> 356 px during the arrival brake and
+        # was gone before centring began (error_px null, 0 recovery pulses).
+        # The route's own last sighting (left side) now gives the direction,
+        # and the first sighting after the slide brakes against it.
+        brakes = []
+        _centred, client, _elapsed = self.drive(decode_gap_s=.625, error_px=-100.,
+                                                vanish_after_s=0., reappear_after_s=4.,
+                                                hint=356./1920., brakes=brakes)
+        seeks = [data for event, data in client.events if event == "standalone_home_seek"]
+        self.assertEqual(seeks[0]["right_tilt_deg"], -shuttle.HOME_SEEK_DEG)
+        reacquired = [data for event, data in client.events
+                      if event == "standalone_home_reacquire_brake"]
+        self.assertEqual(len(reacquired), 1)
+        self.assertTrue(reacquired[0]["sent"])
+        self.assertEqual(brakes[0][1], shuttle.EDGE_PREBRAKE_DEG)
+        self.assertLessEqual(brakes[0][2], shuttle.EDGE_PREBRAKE_S)
+        self.assertGreater(brakes[0][2], 0.)
+
+    def test_no_sighting_anywhere_holds_instead_of_guessing(self):
+        _centred, client, _elapsed = self.drive(decode_gap_s=.625, error_px=0.,
+                                                vanish_after_s=0.)
+        self.assertFalse([e for e, _d in client.events if e == "standalone_home_seek"])
+        self.assertFalse([entry for entry in client.calls if isinstance(entry, tuple)
+                          and entry[0] == "attitude" and entry[1][1]])
+
+    def test_centring_tilt_is_capped_below_the_landing_saturation(self):
+        _centred, client, _elapsed = self.drive(decode_gap_s=.625, error_px=600.)
+        tilts = [entry[1][1] for entry in client.calls
+                 if isinstance(entry, tuple) and entry[0] == "attitude" and entry[1][1]]
+        self.assertTrue(tilts)
+        self.assertLessEqual(max(abs(t) for t in tilts), shuttle.HOME_CENTER_MAX_DEG)
+
+    def test_sightings_are_recorded_as_frame_fractions(self):
+        client = SimpleNamespace()
+        snapshot = SimpleNamespace(frame=SimpleNamespace(shape=(1080, 1920, 3)))
+        with patch.object(shuttle.time, "monotonic", lambda: 50.):
+            shuttle._note_sightings(client, snapshot, [tag(3, x=480., y=540.)])
+        self.assertEqual(client.tag_last_seen[3], (.25, 50.))
 
     def test_blind_floor_search_covers_both_lateral_axes_not_only_forward(self):
         # Eight forward pulses cannot undo a sideways offset, which is why the

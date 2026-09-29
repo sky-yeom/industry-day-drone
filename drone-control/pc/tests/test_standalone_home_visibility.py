@@ -40,8 +40,11 @@ class HomeVisibilityTests(StandaloneTestCase):
         self.assertEqual(gate.update([tag(6, 765., 655.6)], 1.4, .01, (1, 4), SHAPE), (0., None))
 
     def test_stale_frame_or_changed_generation_is_rejected(self):
-        with self.assertRaises(RuntimeError):
-            self.gate().update([tag(6, 765., 655.6)], 0., .501, (1, 1), SHAPE)
+        # 9850989 (Wi-Fi spikes): a stale frame holds zero and waits for the
+        # next decode instead of ending the mission.
+        gate = self.gate()
+        self.assertEqual(gate.update([tag(6, 765., 655.6)], 0., .501, (1, 1), SHAPE), (0., None))
+        self.assertEqual(gate.framing_action, "stale_or_invalid_detection_frame")
         gate = self.gate()
         gate.update([tag(6, 765., 655.6)], 0., .01, (1, 1), SHAPE)
         with self.assertRaises(InterruptedError):

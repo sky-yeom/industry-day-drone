@@ -55,7 +55,7 @@ class ContractMockTests(unittest.IsolatedAsyncioTestCase):
             mid = admitted["mission"]["mission_id"]
             completed = await self.finish(mid)
             captures = await self.call("drone_get_captures", dict(mission_id=mid))
-        self.assertEqual(completed["visited_ids"], [6, 2, 3, 1, 6])
+        self.assertEqual(completed["visited_ids"], [6, 2, 3, 1])
         self.assertTrue(completed["route_completed"])
         self.assertTrue(completed["ground_verified"])
         self.assertFalse(completed["physical_stop_confirmed"])
@@ -134,7 +134,7 @@ class ContractMockTests(unittest.IsolatedAsyncioTestCase):
         for order in [("tag-1",), ("tag-2",), ("tag-3",), *itertools.permutations(("tag-1", "tag-2", "tag-3"))]:
             admitted = await self.call("drone_execute_route", dict(self.args, destination_ids=list(order)))
             completed = await self.finish(admitted["mission"]["mission_id"])
-            self.assertEqual(completed["visited_ids"], [6, *(int(dest[-1]) for dest in order), 6])
+            self.assertEqual(completed["visited_ids"], [6, *(int(dest[-1]) for dest in order)])
             self.assertTrue(all(len(visit["capture_ids"]) == 2 for visit in completed["visits"]))
 
     async def test_faults_and_explicit_nonphysical_recovery(self):

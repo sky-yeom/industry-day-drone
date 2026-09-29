@@ -194,6 +194,17 @@ class PairDispatchTests(StandaloneTestCase):
                     client.attitude(0., .3, 0., 0.)
                 self.assertEqual([item["type"] for item in wire.writes], ["status"])
 
+    def test_stale_motion_telemetry_defers_pair_dispatch_without_latching_transport(self):
+        clock = [100.]
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                patch.object(shuttle.time, "perf_counter", lambda: clock[0]):
+            client, wire = self.client(clock, airborne_raw(velocity_age_ms=600.))
+            with self.assertRaisesRegex(shuttle.FramingCorrectionDeferred,
+                                        "Fresh height, velocity and attitude"):
+                client.attitude(0., .3, 0., 0.)
+            self.assertFalse(client.failed)
+            self.assertEqual([item["type"] for item in wire.writes], ["status"])
+
     def test_legacy_mission_client_keeps_strict_flight_flag_threshold(self):
         self.assertEqual(shuttle.MissionClient.flight_state_max_ms, 500)
         self.assertEqual(shuttle.ShuttleClient.flight_state_max_ms, 1500)
@@ -359,6 +370,7 @@ class CapturePostAckTests(StandaloneTestCase):
         def status(state):
             original_status(state)
             client.last_telemetry.velocity_north_mps = 0.
+            client.last_telemetry.velocity_age_s = .01
         client.zero, client.status = zero, status
         def save(*args, **kwargs):
             self.assertGreaterEqual(zero_count[0], 2, "The pre-zero framing decision was invalidated")
@@ -381,16 +393,21 @@ class CapturePostAckTests(StandaloneTestCase):
         self.capture_with_zero_change(lambda clock, client, stream:
             setattr(client.last_telemetry, "velocity_north_mps", .2))
 
-    def test_photo_is_refused_when_exact_decision_frame_expires_during_zero_ack(self):
+    def test_expired_decision_frame_waits_for_a_newer_frame_instead_of_ending_the_mission(self):
+        # 20260929T175615: a 515 ms zero ACK aged the ID2 decision frame.
         self.capture_with_zero_change(
-            lambda clock, client, stream: clock.__setitem__(0, clock[0] + .501), expect_abort=True)
+            lambda clock, client, stream: clock.__setitem__(0, clock[0] + .501))
 
-    def test_photo_is_refused_when_exact_decision_frame_is_replaced_during_zero_ack(self):
+    def test_replaced_decision_frame_waits_for_a_newer_frame_instead_of_ending_the_mission(self):
         def replace_snapshot(clock, client, stream):
             original = stream.last_detection_snapshot
             stream.last_detection_snapshot = SimpleNamespace(
                 key=(original.key[0], original.key[1]+1), received_s=clock[0], frame=original.frame)
-        self.capture_with_zero_change(replace_snapshot, expect_abort=True)
+        self.capture_with_zero_change(replace_snapshot)
+
+    def test_stale_velocity_after_zero_waits_for_a_newer_ack_instead_of_aborting(self):
+        self.capture_with_zero_change(lambda clock, client, stream:
+            setattr(client.last_telemetry, "velocity_age_s", .6))
 
     def test_capture_hook_deferral_asks_for_a_new_frame_instead_of_ending_the_mission(self):
         # The HTTP capture hook proves freshness itself, so it raises the same

@@ -3,7 +3,7 @@
   "schema_version": 1,
   "sha256": {
     "tools.json": "5fe09c3db450697949edee9acfcd2603d5b37a50d8ca92d65f0fdd21c63cca8d",
-    "contract.schema.json": "ba3a85cd9d1745115dc7eb2c51f827d17de5e19c61ad0412e716a6732b47592b",
+    "contract.schema.json": "62ef74c03e5d0f7c069a5c62b40d0181e7b7a7c00bae1c7212f08b5c25683061",
     "types.d.ts": "5298711e1adf7274087fe48f4bb294f4099da1bf2f76cb8644d94ac006f7b463"
   }
 }

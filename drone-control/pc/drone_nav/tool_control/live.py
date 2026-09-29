@@ -29,6 +29,7 @@ BUILD_ID = "5.18-connectivity.20260913.3"
 # ~3.3s in the field). Treat a vs_authority/armed mismatch as fatal only once this
 # grace period has elapsed since arm(), instead of aborting on the very first read.
 AUTHORITY_HANDOFF_GRACE_S = 4.0
+MOTION_KEEPALIVE_S = .3
 
 
 def fresh(raw, key, max_ms=500):
@@ -168,6 +169,7 @@ class MissionClient(NDJSONClient):
         self.received = 0.0
         self.ever_connected = False
         self.write_started = False
+        self.last_motion_write = None
 
     def _scrub(self, value):
         if isinstance(value, dict):
@@ -208,6 +210,18 @@ class MissionClient(NDJSONClient):
             raise InterruptedError("Mission cancelled/deadline reached; no resume")
         if kind == "stick_mode" and payload.get("mode") != "advanced_angle":
             raise ValueError("This site uses Advanced BODY ANGLE only")
+        # The phone releases Virtual Stick after 1s without an attitude/zero, and
+        # a status read does not reset that timer. On the 0929 hotspot flights a
+        # single ACK took up to 765ms and a loop sends three status reads in a
+        # row, so stick commands were 1.1-1.3s apart and authority was lost
+        # mid-route. A zero ACK carries the same telemetry a status read would
+        # fetch, so past the keep-alive age the read is answered by a zero
+        # instead: one round trip, not two. The phone already zeroes the
+        # setpoint 300ms after the last command, so this changes no motion.
+        if (kind == "status" and self._armed and not self.cleaning
+                and self.last_motion_write is not None
+                and time.perf_counter() - self.last_motion_write > MOTION_KEEPALIVE_S):
+            return self.send("zero", {})
         if self._file.buffer:
             self.failed = True
             raise ConnectionError("Unsolicited ACK; new action refused")
@@ -224,8 +238,23 @@ class MissionClient(NDJSONClient):
         # 0.5s later; the run died at 1.4m mid-climb and needed an RC landing.
         # A slow answer cannot smuggle in stale telemetry - fresh() rejects any
         # age over 500ms on its own - so the wait only costs time, not safety.
-        budget = {"takeoff": 3., "arm": 3., "gimbal": 2., "stick_mode": 3., "disarm": 1.,
-                  "land": 3., "ground_ack": 6., "status": 2.}.get(kind, .4)
+        # ZERO has the same shape: it is the stop command, cleanup is allowed to
+        # send it, and it never counts as an attempted flight action. Its write
+        # has already left when the wait starts, so a longer wait cannot delay
+        # the stop - it only decides whether a late ACK ends the run. On 0928 a
+        # zero overran 0.4s during a visit pause (max 204ms over 6956 answered
+        # zeros); the transport then refused every cleanup command and the run
+        # needed an RC landing.
+        # ATTITUDE is the same case once more: its write has left before the wait,
+        # so waiting longer only decides whether a late ACK ends the run. On the
+        # 0929 hotspot flight RTT climbed 30 -> 218ms and one attitude ACK then
+        # overran 0.4s mid-route; the run died and needed an RC landing. The
+        # venue Wi-Fi is expected to spike near 0.8s, and the phone watchdog now
+        # holds Virtual Stick authority for 3s. A 2s ACK wait stays below that
+        # release while leaving room for one spike plus bridge scheduling.
+        budget = {"takeoff": 3., "arm": 3., "gimbal": 2., "stick_mode": 3., "disarm": 2.,
+                  "land": 3., "ground_ack": 6., "status": 2., "zero": 2.,
+                  "attitude": 2.}.get(kind, .4)
         self._socket.deadline = time.perf_counter() + budget
         prior_raw, prior_received = copy.deepcopy(self.raw), self.received
         self.last_telemetry = None
@@ -246,6 +275,8 @@ class MissionClient(NDJSONClient):
                 if elapsed_ms < 0 or not ground_verified(proof):
                     raise PermissionError("Fresh motors-off ground proof expired before takeoff write")
             self.write_started = True
+            if kind in {"attitude", "zero"}:
+                self.last_motion_write = time.perf_counter()
             # A ground acknowledgement mutates no aircraft state, so it must not
             # count as an attempted flight action in the post-run report.
             if kind not in {"status", "zero", "disarm", "ground_ack"}:

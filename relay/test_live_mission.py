@@ -110,7 +110,7 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0)
         self.runner = LiveMissionRunner(self.session, LiveCaptureCamera(), self.vision, publish,
             drone_client=self.client, sleep=sleep, stop_verify_seconds=0)
-
+        self.runner.return_landing_wait_seconds = 0.05
     async def asyncTearDown(self):
         await self.runner.close()
 
@@ -317,6 +317,39 @@ class LiveMissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.commands("drone_stop_mission"), [])
         self.assertEqual(self.session.phase, "complete")
         self.assertEqual(len([event for event in self.events if event["type"] == "mission.debrief"]), 1)
+
+    async def test_closing_after_scoring_lets_the_return_leg_land_before_any_stop(self):
+        # 2026-09-29 15:19 and 16:24: the results screen closed the session while
+        # the aircraft flew home, and close() stopped it between ID1 and ID6.
+        self.runner.return_landing_wait_seconds = 5.0
+        self.backend.arrived = True
+        await self.runner.launch()
+        await settle(lambda: self.session.phase == "complete")
+        closing = asyncio.create_task(self.runner.close())
+        for _ in range(50):
+            await asyncio.sleep(0)
+        self.assertFalse(closing.done())
+        self.assertEqual(self.commands("drone_stop_mission"), [])
+        self.backend.arrived = True
+        self.backend.mission.update(state="completed")
+        stops_before_landing = len(self.commands("drone_stop_mission"))
+        await asyncio.wait_for(closing, timeout=2)
+        self.assertEqual(stops_before_landing, 0)
+        self.assertTrue(self.runner._work.done())
+
+    async def test_closing_after_scoring_still_stops_if_the_landing_never_comes(self):
+        self.runner.return_landing_wait_seconds = 0.02
+        self.backend.arrived = True
+        await self.runner.launch()
+        await settle(lambda: self.session.phase == "complete")
+        await asyncio.wait_for(self.runner.close(), timeout=2)
+        self.assertEqual(len(self.commands("drone_stop_mission")), 1)
+
+    async def test_closing_before_scoring_still_stops_immediately(self):
+        self.runner.return_landing_wait_seconds = 5.0
+        await self.runner.launch()
+        await asyncio.wait_for(self.runner.close(), timeout=1)
+        self.assertEqual(len(self.commands("drone_stop_mission")), 1)
 
     async def test_unknown_stop_never_claims_physical_confirmation(self):
         await self.runner.launch()

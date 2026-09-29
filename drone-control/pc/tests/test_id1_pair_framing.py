@@ -7,9 +7,9 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "trials"))
-from id1_pair_framing import (BRAKE_MAX_DEG, BRAKE_MAX_S, BRAKE_MIN_DEG, MAX_RECOVERY_PULSES,
+from id1_pair_framing import (BRAKE_MAX_DEG, BRAKE_MAX_S, BRAKE_MIN_DEG, FRESH_S, MAX_RECOVERY_PULSES,
                               MISSING_RECOVERY_S, PairFramingError, PairFramingGate,
-                              RECOVERY_SEEK_DEG, SEEK_MAX_DEG, STILL_SPEED_MPS,
+                              RECOVERY_SEEK_DEG, SEEK_MAX_DEG, STILL_SPEED_MPS, VELOCITY_FATAL_S,
                               project_pair_footprint)
 
 
@@ -240,7 +240,7 @@ class GateTests(unittest.TestCase):
                 self.assertEqual(self.gate.diagnostic["requested_right_tilt_deg"], 0.)
 
     def test_stale_frame_velocity_bad_geometry_or_generation_change_stops(self):
-        cases = ({"velocity_age": .501}, {"speed": float("nan")}, {"speed": -.01},
+        cases = ({"velocity_age": VELOCITY_FATAL_S+.01}, {"speed": float("nan")}, {"speed": -.01},
                  {"shape": (0, 1920)}, {"key": (2, 2)})
         for change in cases:
             with self.subTest(change=change):
@@ -463,11 +463,22 @@ class GateTests(unittest.TestCase):
         self.assertFalse(self.gate.diagnostic["capture_ready"])
 
     def test_edge_band_keeps_fresh_velocity_frame_and_generation_guards(self):
-        for changed in ({"velocity_age": .501}, {"key": (2, 2)}):
+        for changed in ({"velocity_age": VELOCITY_FATAL_S+.01}, {"key": (2, 2)}):
             self.gate = PairFramingGate(REFERENCE, arrival_band=(.85, .95))
             self.update(0., tag(), key=(1, 1))
             with self.subTest(changed=changed), self.assertRaises(PairFramingError):
                 self.update(.1, tag(), **changed)
+
+    def test_a_wifi_stall_on_velocity_holds_zero_instead_of_ending_the_mission(self):
+        # 2026-09-29: venue Wi-Fi stalled up to 1.16 s; a velocity reading that
+        # late is a missed poll, not a broken aircraft.
+        for age in (FRESH_S+.001, 1.2):
+            with self.subTest(age=age):
+                self.gate = PairFramingGate(REFERENCE, arrival_band=(.85, .95))
+                self.update(0., tag(), key=(1, 1))
+                self.assertEqual(self.update(.1, tag(), velocity_age=age), (0., None))
+                self.assertEqual(self.gate.diagnostic["state"], "WAIT_FRESH_VELOCITY")
+                self.update(.2, tag(), key=(1, 3))
 
     def test_edge_band_waits_out_a_stale_frame_without_commanding_motion(self):
         self.gate = PairFramingGate(REFERENCE, arrival_band=(.85, .95))
@@ -534,6 +545,25 @@ class GateTests(unittest.TestCase):
         self.assertIn("still_ahead", self.gate.diagnostic["last_tag_observation"]["evidence"])
         self.assertEqual(commanded_right, 0)
         self.assertGreater(commanded_left, 60)
+
+    def test_rightward_approach_short_of_the_band_keeps_going_right(self):
+        """2026-09-29 mirrored booth [6, 1, 2, 3]: outbound travel is rightward."""
+        mirrored = dict(REFERENCE, roi_tag_bounds=dict(REFERENCE["roi_tag_bounds"],
+                        x_min=1.-REFERENCE["roi_tag_bounds"]["x_max"],
+                        x_max=1.-REFERENCE["roi_tag_bounds"]["x_min"]))
+        self.gate = PairFramingGate(mirrored, direction="right", arrival_band=(.10, .25),
+                                    layout=(6, 1, 2, 3))
+        self.update(0., tag(1920.-400.-130., 300., 130.))  # centre 76%: far short of .25 from the right.
+        commanded_right, commanded_left = 0, 0
+        for step in range(1, 121):
+            right, _ = self.update(step*.1, tags=[tag(tag_id=2)])
+            commanded_right += right > 0.
+            commanded_left += right < 0.
+        self.assertEqual(self.gate.diagnostic["layout_direction_sign"], -1.)
+        self.assertEqual(self.gate.diagnostic["last_tag_observation"]["recovery_sign"], 1.)
+        self.assertIn("still_ahead", self.gate.diagnostic["last_tag_observation"]["evidence"])
+        self.assertEqual(commanded_left, 0)
+        self.assertGreater(commanded_right, 60)
 
     def test_wall_order_stays_ambiguous_when_neighbours_sit_on_both_sides(self):
         gate = PairFramingGate(REFERENCE, arrival_band=(.85, .95), layout=(3, 2, 1, 6))

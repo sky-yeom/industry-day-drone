@@ -22,7 +22,17 @@ FRESH_S = .5
 # instead: half the tilt is roughly half the cruise, which the same 0.6 deg
 # brake stops in about 1.4 s, inside its window, and it doubles the number of
 # detections per metre travelled on the long direct legs.
-SEEK_MAX_DEG = .3
+# 20260929T210405: 0.3 deg still slid past ID2's edge undetected; 0.27 slows
+# the cruise a little. Not lower: the airframe rests at about -0.5 deg roll.
+SEEK_MAX_DEG = .27
+# Once the target has been seen the leg is within a tag-width of its goal, so
+# the approach that follows is slower than the blind seek (field request
+# 2026-09-29 21:14: ID3 was sighted and the aircraft kept sliding toward it).
+APPROACH_MAX_DEG = .2
+# A velocity reading older than this is a network or bridge stall, not a
+# failure: the gate holds zero and waits for a fresh one, exactly as it does for
+# a stale frame. Only one beyond the flight-state budget ends the leg.
+VELOCITY_FATAL_S = 1.5
 # Corrections are continuous, re-evaluated on every fresh frame, with the same
 # tilt authority as the seek. The 14:51 flight showed that 0.25 deg pulses of
 # 0.25 s barely move this aircraft (about 0.04 m/s^2 for a quarter second),
@@ -323,6 +333,17 @@ class PairFramingGate:
             brake_speed_mps=speed)
         return result
 
+    def note_external_stop(self):
+        """The caller braked and proved stillness from the image itself.
+
+        Without this the gate still remembers the pre-brake seek and, on a
+        speed reading quantized to 0.1 m/s, would brake against travel that
+        has already ended and push the aircraft backwards.
+        """
+        self._last_nonzero_motion = None
+        self._brake_sign = self._brake_since = None
+        self._brake_stopped = True
+
     def _cancel_pulse(self):
         """End any continuous correction/recovery; the next motion settles first."""
         self._correction_sign = self._recovery_sign = None
@@ -399,11 +420,15 @@ class PairFramingGate:
             # at once. When the target's own last sighting was still short of
             # the arrival band it is ahead in the route direction, so a layout
             # sign pointing back would abandon an approach that never finished.
+            last_fraction = None if observation is None else observation["center_fraction"]
+            # A tag short of the band sits on the side it enters from: the left
+            # edge on leftward legs, the right edge on rightward legs.
+            short_of_band = last_fraction is not None and (
+                last_fraction < (.5 if self.arrival_band is None else self.arrival_band[0])
+                if self.direction == "left" else
+                last_fraction > (.5 if self.arrival_band is None else self.arrival_band[1]))
             still_ahead = (layout_sign is not None and layout_sign*self._planned < 0.
-                           and observation is not None
-                           and observation["center_fraction"] is not None
-                           and observation["center_fraction"] < (
-                               .5 if self.arrival_band is None else self.arrival_band[0]))
+                           and short_of_band)
             if still_ahead:
                 sign = self._planned
             if sign is None or self._recovery_pulses >= MAX_RECOVERY_PULSES:
@@ -463,9 +488,13 @@ class PairFramingGate:
             self._cancel_pulse()
             self._stable_since, self._stable_frames = None, 0
             return self._zero(now_s, "WAIT_FRESH_FRAME", "stale_or_invalid_detection_frame")
-        if (not _finite(velocity_age_s) or not 0. <= velocity_age_s <= FRESH_S
+        if (not _finite(velocity_age_s) or not 0. <= velocity_age_s <= VELOCITY_FATAL_S
                 or not _finite(horizontal_speed_mps) or horizontal_speed_mps < 0.):
             self._stop("fresh_finite_horizontal_velocity_required")
+        if velocity_age_s > FRESH_S:
+            self._cancel_pulse()
+            self._stable_since, self._stable_frames = None, 0
+            return self._zero(now_s, "WAIT_FRESH_VELOCITY", "stale_horizontal_velocity_hold_zero")
         if (not isinstance(frame_key, (tuple, list)) or len(frame_key) != 2
                 or any(type(v) is not int or v < 0 for v in frame_key)):
             self._stop("identified_detection_frame_required")
@@ -622,7 +651,7 @@ class PairFramingGate:
             # The tag crossed the target region: stop and settle before reversing.
             self._cancel_pulse()
         if wanted_sign == self._planned and not self._ever_corrected and not self._needs_settle:
-            tilt = self._proportional(amount, width, SEEK_MAX_DEG, .12)
+            tilt = self._proportional(amount, width, APPROACH_MAX_DEG, .12)
             return self._motion(self._planned*tilt, now_s, "APPROACH_PAIR_IN_ROUTE_DIRECTION")
         if self._correction_sign is None:
             braking = self._brake(now_s, horizontal_speed_mps, "CORRECTION_BRAKE")

@@ -19,7 +19,8 @@ import cv2
 import numpy as np
 
 from drone_nav.tool_control.camera import VideoBroker
-from drone_nav.tool_control.field import FieldAdapter, FieldVideoStream, PairFramingGate, shuttle
+from drone_nav.tool_control.field import (CAPTURE_PUBLICATION_FRAME_AGE_S, FieldAdapter,
+                                          FieldVideoStream, PairFramingGate, shuttle)
 from drone_nav.tool_control.live import FreshVideoStream, LiveAdapter
 from drone_nav.tool_control.server import Handler, adapter_from_environment
 from drone_nav.tool_control.service import CaptureMockAdapter, MissionService, MockAdapter, ToolError
@@ -35,7 +36,7 @@ REAL_LOGGER = shuttle.ShuttleDetectionLogger
 REFERENCE = json.loads(shuttle.DEFAULT_PAIR_REFERENCE.read_text(encoding="utf-8"))
 SITE = {
     "schema_version": 2, "profile_id": "field-ordered-v1", "site_revision": "offline-20260910",
-    "wall_ids_left_to_right": [3, 2, 1, 6], "floor_tag_id": 0, "home_tag_id": 6,
+    "wall_ids_left_to_right": list(shuttle.WALL_IDS), "floor_tag_id": 0, "home_tag_id": 6,
     "expected_bridge_build_id": shuttle.BUILD_ID,
     "layout_confirmed": True, "field_setup_confirmed": True,
 }
@@ -94,7 +95,9 @@ class Frames:
                                  self.sequence, self.clock[0], image)
         self.frames[snapshot.key] = image
         self.last_detection_snapshot = snapshot
-        x = 320. if client.expected == 6 else 576.
+        # The pair sits at the far edge of the arrival band for the outbound travel.
+        band = REFERENCE["arrival_center_x_fraction"]
+        x = 320. if client.expected == 6 else 640.*(band[1] if shuttle.OUTBOUND_DIRECTION == "left" else band[0])
         tag = shuttle.PixelTag(client.expected, (x, 180.),
             ((x - 12, 168.), (x + 12, 168.), (x + 12, 192.), (x - 12, 192.)), 80., 0)
         return ([] if self.missing or client.leg_frame == 1 else [tag]), 0.
@@ -330,7 +333,9 @@ class FieldTests(unittest.TestCase):
                     _, current = self.http(service, "drone_get_mission", {"mission_id": mid})
                     mission = current["mission"]
                     self.assertEqual(mission["state"], "awaiting_rc_landing", mission)
-                    self.assertEqual(mission["visited_ids"], [6, *order, 6])
+                    # The last monitor's floor tag (4/5/7) is the landing pad, so
+                    # the drone no longer flies the return leg to ID6.
+                    self.assertEqual(mission["visited_ids"], [6, *order])
                     self.assertEqual([v["destination_id"] for v in mission["visits"]], args["destination_ids"])
                     self.assertTrue(all(v["arrival_confirmed"] and len(v["capture_ids"]) == 2 for v in mission["visits"]))
                     _, response = self.http(service, "drone_get_captures", {"mission_id": mid})
@@ -342,7 +347,7 @@ class FieldTests(unittest.TestCase):
                         self.assertEqual(capture["mission_id"], mid)
                         self.assertFalse(capture["tv_visibility_verified"])
                         self.assertFalse(capture["simulated"])
-                        self.assertEqual(capture["arrival_band_fraction"], [.85, .95])
+                        self.assertEqual(capture["arrival_band_fraction"], REFERENCE["arrival_center_x_fraction"])
                         self.assertEqual(capture["framing_diagnostic"]["motion_valid_until_s"], None)
                         raw = base64.b64decode(capture["image_base64"])
                         actual = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
@@ -351,7 +356,12 @@ class FieldTests(unittest.TestCase):
                         self.assertLessEqual(capture["capture_evidence"]["frame_age_s"], .5)
                     client = clients[0]
                     legs = [data for name, data in client.events if name == "standalone_leg"]
-                    expected_legs = list(zip([6, *order], [*order, 6]))
+                    expected_legs = list(zip([6, *order], order))
+                    landing = [data for name, data in client.events if name == "standalone_landing_search_nudge"]
+                    floor_id = shuttle.FLOOR_LANDING_IDS[order[-1]]
+                    # The fake harness cancels at a timing-dependent point, so
+                    # only a search that did start is checked for its target.
+                    self.assertTrue(all(item["reason"].startswith(f"ID{floor_id}_") for item in landing))
                     self.assertEqual([(leg["from"], leg["to"]) for leg in legs], expected_legs)
                     self.assertEqual([leg["direction"] for leg in legs],
                         [shuttle.external_direction([6, *order, 6], a, b) for a, b in expected_legs])
@@ -362,7 +372,11 @@ class FieldTests(unittest.TestCase):
                     for call in client.calls:
                         if isinstance(call, tuple) and call[0] == "attitude":
                             forward, right, up, yaw = call[1]
-                            self.assertEqual((forward, up, yaw), (0., 0., 0.))
+                            # ID0 is never in these frames, so the landing search
+                            # walks its bounded pattern; _guard_dispatch refuses a
+                            # forward axis in every other phase.
+                            self.assertIn(forward, (0., shuttle.SEARCH_NUDGE_DEG, -shuttle.SEARCH_NUDGE_DEG))
+                            self.assertEqual((up, yaw), (0., 0.))
                             self.assertLessEqual(abs(right), .6)
                     self.assertLess(steps.index("_wait_takeoff_settled"), steps.index("_climb"))
                     self.assertTrue(stream.closed)
@@ -378,7 +392,8 @@ class FieldTests(unittest.TestCase):
     def test_external_route_extension_does_not_relax_standalone_defaults(self):
         with self.assertRaises(ValueError):
             shuttle.planned_direction(6, 3)
-        self.assertEqual(shuttle.external_direction([6, 3, 1, 2, 6], 3, 1), "right")
+        back = "right" if shuttle.OUTBOUND_DIRECTION == "left" else "left"
+        self.assertEqual(shuttle.external_direction([6, 3, 1, 2, 6], 3, 1), back)
         for route in ([6, 1, 1, 3, 6], [6, 1, 2, 3], [0, 1, 2, 3, 6], [6, True, 2, 3, 6]):
             with self.assertRaises(ValueError):
                 shuttle.validate_external_route(route)
@@ -417,7 +432,11 @@ class FieldTests(unittest.TestCase):
                         client.raw["bridge_build_id"] = "old"
                     elif fault == "battery":
                         client.last_telemetry.battery_percent = 29.
-                _, clients, stream, _ = self.harness(stack, adapter, cancel, mutate=mutate)
+                clock, clients, stream, _ = self.harness(stack, adapter, cancel, mutate=mutate)
+                # _await_ground_proof sleeps between polls for up to 30 s; the
+                # fake clock must advance with it or the refusal never arrives.
+                stack.enter_context(patch.object(shuttle.time, "sleep",
+                                                 lambda s: clock.__setitem__(0, clock[0] + s)))
                 result = adapter.run(self.mission(), cancel, lambda **event: None)
                 self.assertFalse(result["route_completed"])
                 self.assertNotIn("takeoff", clients[0].calls)
@@ -456,7 +475,7 @@ class FieldTests(unittest.TestCase):
                     def stale_encoder(*args):
                         data = encode(*args)
                         if fault == "encoding_age":
-                            clock[0] += .501
+                            clock[0] += CAPTURE_PUBLICATION_FRAME_AGE_S + .01
                         elif fault == "encoding_size":
                             return True, np.zeros(4 * 1024 * 1024 + 1, np.uint8)
                         else:
@@ -468,6 +487,30 @@ class FieldTests(unittest.TestCase):
                 self.assertEqual(len([e for e in events if "capture" in e]), 1 if fault == "repeated_pixels" else 0)
                 self.assertEqual(clients[0].calls.count("takeoff"), 1)
                 self.assertEqual(clients[0].calls.count("arm"), 1)
+                self.assertTrue(stream.closed)
+
+    def test_full_frame_encoding_time_does_not_refuse_every_capture(self):
+        """2026-09-28 13:35: ~0.45 s of PNG encoding aged ID1's frame past 0.5 s three times.
+
+        15:10: a ~0.8 s encode at ID3 left the last status older than FRESH_S
+        and aborted a healthy flight as "Fresh airborne state lost".
+        """
+        for encode_s in (.45, .8, 1.8):
+            with self.subTest(encode_s=encode_s), ExitStack() as stack:
+                adapter, cancel, events = self.adapter(), threading.Event(), []
+                clock, clients, stream, _ = self.harness(stack, adapter, cancel)
+                encode = cv2.imencode
+                def field_encoder(*args):
+                    data = encode(*args)
+                    clock[0] += encode_s
+                    return data
+                stack.enter_context(patch("cv2.imencode", side_effect=field_encoder))
+                result = adapter.run(self.mission(), cancel, lambda **event: events.append(event))
+                self.assertTrue(result["route_completed"], result)
+                captures = [e["capture"] for e in events if "capture" in e]
+                self.assertEqual(len(captures), 6)
+                self.assertTrue(all(.4 < c["capture_evidence"]["frame_age_s"] <= CAPTURE_PUBLICATION_FRAME_AGE_S
+                                    for c in captures))
                 self.assertTrue(stream.closed)
 
     def test_shared_preview_survives_mission_and_preview_stop_cannot_close_owned_stream(self):

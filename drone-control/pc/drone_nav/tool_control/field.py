@@ -45,7 +45,20 @@ CAPTURE_PROOF_REFRESHES = 3
 # (1.5 s), so the 0.5 s applied to height was the outlier. 0.8 s clears the
 # worst observed pairing by 1.6x, stays stricter than the flight-state budget,
 # and still rejects genuinely frozen telemetry (two missed bridge polls).
-MAX_HEIGHT_AGE_S = .8
+# 2026-09-29: raised to 1.2 s so a venue Wi-Fi stall between the status read and
+# this check (up to 1.16 s measured) is not read as frozen telemetry; still
+# stricter than FLIGHT_STATE_FRESH_S.
+MAX_HEIGHT_AGE_S = 1.2
+# The first proof keeps the strict shuttle.FRESH_S frame age: that is the frame
+# the gate chose. Encoding that same full frame to PNG (0.12-0.32 s measured on
+# the field PC) plus the status round trips then ages it, and on 2026-09-28
+# 13:35 the post-encode proofs saw 0.61-0.69 s and refused ID1 three times in a
+# row; every retry re-encodes and ages the same way, so the leg could never
+# capture and drifted off the framed tag. The pixels do not change with age, and
+# stillness, identity, generation, height and RC are all re-proved every time.
+# 15:10 ID3 took ~0.8 s to encode, so the budget is 2.5 s: stillness, identity,
+# generation, height and RC are all re-proved after encoding regardless.
+CAPTURE_PUBLICATION_FRAME_AGE_S = 2.5
 SITE_FIELDS = {
     "schema_version", "profile_id", "site_revision", "wall_ids_left_to_right",
     "floor_tag_id", "home_tag_id", "expected_bridge_build_id",
@@ -98,13 +111,13 @@ class FieldAdapter(LiveAdapter):
                 or site["layout_confirmed"] is not True or site["field_setup_confirmed"] is not True):
             raise ValueError("Private field site requires explicit layout and this-PC setup confirmation")
         low, high = self.target_height_band_m
-        if (site["wall_ids_left_to_right"] != [3, 2, 1, 6]
+        if (site["wall_ids_left_to_right"] != shuttle.WALL_IDS
                 or any(type(tag) is not int for tag in site["wall_ids_left_to_right"])
                 or type(site["floor_tag_id"]) is not int or site["floor_tag_id"] != 0
                 or type(site["home_tag_id"]) is not int or site["home_tag_id"] != 6
                 or site["expected_bridge_build_id"] != BUILD_ID):
             raise ValueError(f"Field site requires {BUILD_ID}, floor0, Home6 "
-                             f"and left-to-right [3,2,1,6]")
+                             f"and left-to-right {shuttle.WALL_IDS}")
         self.profile_id = identifier(site["profile_id"])
         self.site_revision = identifier(site["site_revision"])
         self.profile = shuttle.load_profile(profile_path)
@@ -147,13 +160,25 @@ class FieldAdapter(LiveAdapter):
             return super().status()
 
     @staticmethod
-    def _capture_proof(client, stream, snapshot):
+    def _capture_proof(client, stream, snapshot, publication=False):
         if client.cancel.is_set():
             raise InterruptedError("Cancelled before capture publication; no resume")
         if client.deadline is not None and time.perf_counter() >= client.deadline:
             raise InterruptedError("Mission deadline expired before capture publication")
+        if publication:
+            # 15:10 ID3: the full-frame PNG encode took ~0.8 s, so the last
+            # status was older than FRESH_S and a healthy flight was aborted.
+            client.status("tool_capture_publication_proof")
         shuttle._require_flight(client)
-        client.observe_frame(snapshot)
+        if not publication:
+            client.observe_frame(snapshot)
+        else:
+            if not shuttle._number(time.monotonic() - snapshot.received_s, 0.,
+                                   CAPTURE_PUBLICATION_FRAME_AGE_S):
+                raise shuttle.FramingCorrectionDeferred(
+                    "Capture frame exceeded its publication age budget")
+            if snapshot.key[0] != client.video_generation:
+                raise InterruptedError("Video generation changed during capture; no automatic resume")
         if stream.last_detection_snapshot is not snapshot:
             raise InterruptedError("Framing snapshot changed before capture publication")
         def sample():
@@ -179,6 +204,10 @@ class FieldAdapter(LiveAdapter):
             client.status("tool_capture_stationary_proof")
             telemetry, elapsed, velocity, age, stationary = sample()
         if not stationary:
+            if not publication:
+                # Nothing has been published for this frame yet: a drift here
+                # asks the framing gate to re-settle, not for a new mission.
+                raise shuttle.FramingCorrectionDeferred("Fresh finite stationary velocity required for capture")
             raise InterruptedError("Fresh finite stationary velocity required for capture")
         if (not shuttle._number(telemetry.height_m, .5, 1.8)
                 or telemetry.height_age_s is None
@@ -222,7 +251,7 @@ class FieldAdapter(LiveAdapter):
             raw = data.tobytes()
             image = base64.b64encode(raw).decode("ascii")
             digest = hashlib.sha256(raw).hexdigest()
-            proof = self._capture_proof(client, stream, snapshot)
+            proof = self._capture_proof(client, stream, snapshot, publication=True)
             prior = captured[index]
             if len(prior) >= 2:
                 raise RuntimeError("Only two distinct captures per visit are allowed")
@@ -248,7 +277,7 @@ class FieldAdapter(LiveAdapter):
             if not prior:
                 emit(visit_index=index, visit_state="arrived", arrival_confirmed=True)
             # Emitting arrival may persist to disk; re-age before publishing bytes.
-            payload["capture_evidence"] = self._capture_proof(client, stream, snapshot)
+            payload["capture_evidence"] = self._capture_proof(client, stream, snapshot, publication=True)
             emit(visit_index=index, capture=payload, visit_state="captured")
             prior.append((snapshot.key, digest))
             return True

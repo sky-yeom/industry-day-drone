@@ -305,8 +305,9 @@ class FieldTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 self.adapter()
 
-    def test_all_six_http_orders_use_current_pair_gate_two_frames_then_home(self):
-        for order in itertools.permutations((1, 2, 3)):
+    def test_all_nine_http_orders_use_current_pair_gate_two_frames_then_land(self):
+        # Single-monitor rescue flies one leg; the three-stop orders still work.
+        for order in [(1,), (2,), (3,), *itertools.permutations((1, 2, 3))]:
             with self.subTest(order=order), ExitStack() as stack:
                 adapter, cancel = self.adapter(), threading.Event()
                 clock, clients, stream, steps = self.harness(stack, adapter, cancel)
@@ -317,7 +318,8 @@ class FieldTests(unittest.TestCase):
                     self.assertEqual(caps["adapter"], "field")
                     self.assertTrue(caps["expected_mode_guard"])
                     self.assertEqual(caps["target_height_m"], 1.5)
-                    self.assertEqual(len(caps["supported_ordered_sequences"]), 6)
+                    self.assertEqual(len(caps["supported_ordered_sequences"]), 9)
+                    self.assertIn([f"tag-{tag}" for tag in order], caps["supported_ordered_sequences"])
                     args = {key: self.mission(order)[key] for key in
                             ("profile_id", "site_revision", "destination_ids")}
                     code, response = self.http(service, "drone_execute_route", args, "same-admission")
@@ -342,7 +344,7 @@ class FieldTests(unittest.TestCase):
                     captures = response["captures"]
                     self.assertEqual([c["destination_id"] for c in captures],
                                      [f"tag-{tag}" for tag in order for _ in range(2)])
-                    self.assertEqual(len({c["sha256"] for c in captures}), 6)
+                    self.assertEqual(len({c["sha256"] for c in captures}), 2 * len(order))
                     for capture in captures:
                         self.assertEqual(capture["mission_id"], mid)
                         self.assertFalse(capture["tv_visibility_verified"])
@@ -394,9 +396,19 @@ class FieldTests(unittest.TestCase):
             shuttle.planned_direction(6, 3)
         back = "right" if shuttle.OUTBOUND_DIRECTION == "left" else "left"
         self.assertEqual(shuttle.external_direction([6, 3, 1, 2, 6], 3, 1), back)
-        for route in ([6, 1, 1, 3, 6], [6, 1, 2, 3], [0, 1, 2, 3, 6], [6, True, 2, 3, 6]):
-            with self.assertRaises(ValueError):
+        for route in ([6, 1, 1, 3, 6], [6, 1, 2, 3], [0, 1, 2, 3, 6], [6, True, 2, 3, 6],
+                      [6, 6], [6, 6, 6], [6, 4, 6], [6, 0, 6], [6, True, 6], [6, 1, 2, 6], [1, 6]):
+            with self.subTest(route=route), self.assertRaises(ValueError):
                 shuttle.validate_external_route(route)
+        for tag in (1, 2, 3):
+            self.assertEqual(shuttle.validate_external_route([6, tag, 6]), (6, tag, 6))
+            # ID1/2/3 all sit to the right of Home6, so the single leg is rightward.
+            self.assertEqual(shuttle.external_direction([6, tag, 6], 6, tag), "right")
+        adapter = self.adapter()
+        for order in ((1, 2), (1, 1, 2), (4,), (), (1, 2, 3, 1)):
+            with self.subTest(order=order), self.assertRaises(ValueError):
+                adapter.run(self.mission(order), threading.Event(), lambda **event: None)
+        self.assertFalse(adapter.busy)
         with self.assertRaises(ValueError):
             shuttle.external_direction([6, 1, 2, 3, 6], 3, 1)
         with self.assertRaises(ValueError):

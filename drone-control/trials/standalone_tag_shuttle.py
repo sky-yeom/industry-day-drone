@@ -583,11 +583,18 @@ def planned_direction(departure, expected):
 
 
 def validate_external_route(route):
-    """Separate HTTP extension; the standalone profile/CLI route stays fixed."""
-    if (not isinstance(route, (list, tuple)) or len(route) != 5
+    """Separate HTTP extension; the standalone profile/CLI route stays fixed.
+
+    Home6, then either one monitor tag (single-monitor rescue) or each of
+    ID1/2/3 once, then Home6. The final Home6 is only the route's bookend:
+    run() lands on the last monitor's floor tag instead of flying back.
+    """
+    if (not isinstance(route, (list, tuple)) or len(route) not in (3, 5)
             or any(type(tag) is not int for tag in route)
-            or route[0] != 6 or route[-1] != 6 or set(route[1:-1]) != {1, 2, 3}):
-        raise ValueError("External route must be Home6, each of ID1/2/3 once, Home6")
+            or route[0] != 6 or route[-1] != 6
+            or len(set(route[1:-1])) != len(route) - 2
+            or not set(route[1:-1]) <= {1, 2, 3}):
+        raise ValueError("External route must be Home6, one of ID1/2/3 or each of them once, Home6")
     return tuple(route)
 
 
@@ -2316,7 +2323,7 @@ def run(config, profile, cancel=None, pair_reference=None, continue_patrol=False
                 active_route_ids=active_route,
                 legs=[{"from": a, "to": b, "direction": external_direction(external_route, a, b)}
                       for a, b in zip(active_route, active_route[1:])],
-                finish="hover_at_ID6_release_to_RC_manual_landing", captures_per_visit=2)
+                finish=f"land_on_floor_ID{landing_tag}_below_ID{landing_wall}", captures_per_visit=2)
         execution_plan.pop("network_connections_opened")
         client.log_event("standalone_plan", {**execution_plan, "mode": "execute",
             "camera_calibrated": config.camera.calibrated,

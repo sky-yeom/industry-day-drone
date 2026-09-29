@@ -222,9 +222,12 @@ class FieldAdapter(LiveAdapter):
 
     def run(self, mission, cancel, emit):
         destinations = mission["destination_ids"]
-        if (not isinstance(destinations, list) or len(destinations) != 3
-                or set(destinations) != set(self.destination_ids)):
-            raise ValueError("Select each registered destination exactly once")
+        # One monitor (single-monitor rescue) or all three, each at most once.
+        if (not isinstance(destinations, list) or len(destinations) not in (1, 3)
+                or any(type(d) is not str for d in destinations)
+                or len(set(destinations)) != len(destinations)
+                or not set(destinations) <= set(self.destination_ids)):
+            raise ValueError("Select one registered destination, or each of them exactly once")
         route = shuttle.validate_external_route([6, *(int(d[-1]) for d in destinations), 6])
         if mission.get("profile_id") != self.profile_id or mission.get("site_revision") != self.site_revision:
             raise ValueError("Field profile/site revision mismatch")
@@ -234,7 +237,7 @@ class FieldAdapter(LiveAdapter):
             if self.busy:
                 raise RuntimeError("Field control owner already active")
             self.busy = True
-        captured = {i: [] for i in range(3)}
+        captured = {i: [] for i in range(len(destinations))}
 
         def capture(index, client, stream, snapshot, tag, diagnostic):
             if (tag.tag_id != route[index + 1]

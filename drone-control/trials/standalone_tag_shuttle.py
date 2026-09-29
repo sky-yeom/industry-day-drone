@@ -201,8 +201,12 @@ CEILING_DOWN_MPS = .05
 # mean side: moving sideways shrank ID6's width 241 -> 199 px near the frame
 # edge on 20260929T170717 and the older width-based hold pulled toward the wall.
 DRIFT_PULL_DEADBAND = .08
-DRIFT_PULL_GAIN_DEG = 1.5
 DRIFT_PULL_MAX_DEG = .25
+# Field request 2026-09-29 17:59: only a tiny forward nudge when the aircraft
+# looks farther than at home, not a pull until the size ratio matches.
+DRIFT_PULL_NUDGE_DEG = .1
+DRIFT_PULL_NUDGE_S = .3
+DRIFT_PULL_REST_S = 1.5
 DRIFT_PULL_STALE_S = .5
 DRIFT_PULL_CENTER_BAND = (.25, .75)
 DRIFT_PULL_REF_PX = (60., 600.)
@@ -309,7 +313,7 @@ def tag_edge_height_px(tag):
 
 
 def drift_pull_forward_deg(client, tags, ids, frame_shape, now=None):
-    """Small forward tilt when a measured tag looks farther than ID6 at home.
+    """Tiny fixed forward nudge when a measured tag looks farther than ID6 at home.
 
     ids is the tag ID (or IDs) allowed to measure. Never negative. Zero without
     a home reference, an enabled bound, a whole such tag near the image centre,
@@ -341,10 +345,16 @@ def drift_pull_forward_deg(client, tags, ids, frame_shape, now=None):
     sample = getattr(client, "drift_size_sample", None)
     if sample is None or not 0 <= now - sample[1] <= DRIFT_PULL_STALE_S:
         return 0.
-    error = reference / sample[0] - 1.
-    if error < DRIFT_PULL_DEADBAND:
+    if reference / sample[0] - 1. < DRIFT_PULL_DEADBAND:
         return 0.
-    return min(bound, error * DRIFT_PULL_GAIN_DEG)
+    # A fixed tiny nudge, then a rest; it does not chase the size ratio.
+    start = getattr(client, "drift_nudge_start", None)
+    if start is not None and 0 <= now - start < DRIFT_PULL_NUDGE_S:
+        return min(bound, DRIFT_PULL_NUDGE_DEG)
+    if start is not None and 0 <= now - start < DRIFT_PULL_NUDGE_S + DRIFT_PULL_REST_S:
+        return 0.
+    client.drift_nudge_start = now
+    return min(bound, DRIFT_PULL_NUDGE_DEG)
 
 
 def load_profile(path):
@@ -559,6 +569,7 @@ class ShuttleClient(MissionClient):
         self.hold_forward_bound = 0.
         self.drift_ref_px = None
         self.drift_size_sample = None
+        self.drift_nudge_start = None
         # Set at arm so a watchdog handback can be undone without the caller
         # having to thread the token back through every phase.
         self._confirmation_token = None
@@ -1743,6 +1754,9 @@ def capture_id1_pair(client, limiter, stream, detector, logger, config, profile,
         diagnostic = dict(gate.diagnostic)
         up = client.hold_up(height_hold_up_mps(client, profile))
         forward = drift_pull_forward_deg(client, tags, expected, shape)
+        if diagnostic.get("state") == "CAPTURE_READY":
+            # The photo frame must not wait behind an extra attitude ACK.
+            forward = 0.
         client.log_event("id1_pair_framing_sample", {**diagnostic, "tag_id": expected,
             "visible_ids": [tag.tag_id for tag in tags], "right_tilt_deg": right,
             "frame_key": _snapshot_key(stream), "frame_age_s": age,
@@ -1791,9 +1805,15 @@ def capture_id1_pair(client, limiter, stream, detector, logger, config, profile,
             _require_flight(client)
             # The zero ACK can update velocity or consume the detection lifetime.
             # Capture only the same identified frame used for the fit decision.
+            # 20260929T175615: one zero ACK took 515 ms on the hotspot and aged the
+            # decision frame past FRESH_S, which ended the flight at ID2. The photo
+            # is still refused for that frame; the hover continues for a newer one.
             if (snapshot is None or stream.last_detection_snapshot is not snapshot
                     or not _number(time.monotonic() - snapshot.received_s, 0., FRESH_S)):
-                raise InterruptedError(f"ID{expected} capture frame expired or changed after settling")
+                client.log_event("id1_pair_capture_deferred", {
+                    "reason": "decision_frame_expired_or_changed", "tag_id": expected,
+                    "frame_age_s": None if snapshot is None else time.monotonic() - snapshot.received_s})
+                continue
             speed, velocity_age = _horizontal_motion_evidence(client)
             if not _number(velocity_age, 0., FRESH_S) or speed is None:
                 raise InterruptedError(f"Fresh horizontal velocity required for ID{expected} capture")

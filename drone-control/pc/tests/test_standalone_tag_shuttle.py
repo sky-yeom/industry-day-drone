@@ -1030,33 +1030,44 @@ class DispatchBoundaryTests(StandaloneTestCase):
         client = SimpleNamespace(hold_forward_bound=shuttle.DRIFT_PULL_MAX_DEG, drift_ref_px=236.,
                                  drift_size_sample=None, phase="lateral")
         pull = shuttle.drift_pull_forward_deg
-        self.assertAlmostEqual(pull(client, [tag(1, 960, 156)], 1, frame, 10.), shuttle.DRIFT_PULL_MAX_DEG)
-        self.assertAlmostEqual(pull(client, [tag(1, 960, 212)], 1, frame, 10.),
-                               (236/212 - 1) * shuttle.DRIFT_PULL_GAIN_DEG)
+        nudge = shuttle.DRIFT_PULL_NUDGE_DEG
+        far = tag(1, 960, 156)
+        def fresh(**change):
+            return SimpleNamespace(**{**vars(client), "drift_size_sample": None,
+                                      "drift_nudge_start": None, **change})
+        # Far or slightly far: the same tiny nudge, not a ratio-sized pull.
+        self.assertEqual(pull(fresh(), [far], 1, frame, 10.), nudge)
+        self.assertEqual(pull(fresh(), [tag(1, 960, 212)], 1, frame, 10.), nudge)
         # Inside the deadband, or closer than home: nothing, never backward.
-        self.assertEqual(pull(client, [tag(1, 960, 225)], 1, frame, 10.), 0.)
-        self.assertEqual(pull(client, [tag(1, 960, 320)], 1, frame, 10.), 0.)
+        self.assertEqual(pull(fresh(), [tag(1, 960, 225)], 1, frame, 10.), 0.)
+        self.assertEqual(pull(fresh(), [tag(1, 960, 320)], 1, frame, 10.), 0.)
         # A narrow (obliquely seen) tag with a home-sized edge height is not "far".
-        self.assertEqual(pull(client, [tag(1, 960, 236, width=150)], 1, frame, 20.), 0.)
+        self.assertEqual(pull(fresh(), [tag(1, 960, 236, width=150)], 1, frame, 20.), 0.)
+        # One short pulse, then a rest even while it still looks far.
+        c = fresh()
+        self.assertEqual(pull(c, [far], 1, frame, 30.), nudge)
+        self.assertEqual(pull(c, [far], 1, frame, 30.2), nudge)
+        self.assertEqual(pull(c, [far], 1, frame, 30.35), 0.)
+        self.assertEqual(pull(c, [far], 1, frame, 31.7), 0.)
+        self.assertEqual(pull(c, [far], 1, frame, 31.85), nudge)
         # The last fresh sample holds for DRIFT_PULL_STALE_S, then nothing.
-        pull(client, [tag(1, 960, 156)], 1, frame, 30.)
-        self.assertGreater(pull(client, [], 1, frame, 30.4), 0.)
-        self.assertEqual(pull(client, [], 1, frame, 30.6), 0.)
+        c = fresh()
+        pull(c, [far], 1, frame, 35.)
+        self.assertEqual(pull(c, [], 1, frame, 35.2), nudge)
+        self.assertEqual(pull(c, [], 1, frame, 35.6), 0.)
         # Off-centre, other-ID, floor and cropped tags are not measured.
         for other in (tag(1, 400, 156), tag(1, 1520, 156), tag(2, 960, 156), tag(0, 960, 156),
                       tag(1, 960, 156, y=40.)):
             with self.subTest(tag=other.tag_id, x=other.center_px[0]):
-                self.assertEqual(pull(SimpleNamespace(**{**vars(client), "drift_size_sample": None}),
-                                      [other], 1, frame, 40.), 0.)
+                self.assertEqual(pull(fresh(), [other], 1, frame, 40.), 0.)
         for change in ({"drift_ref_px": None}, {"hold_forward_bound": 0.}, {"phase": "hover"}):
-            other = SimpleNamespace(**{**vars(client), "drift_size_sample": None, **change})
             with self.subTest(change=change):
-                self.assertEqual(pull(other, [tag(1, 960, 156)], 1, frame, 50.), 0.)
+                self.assertEqual(pull(fresh(**change), [far], 1, frame, 50.), 0.)
         # Return legs measure any centred wall tag; the closest-looking one decides.
-        ret = SimpleNamespace(**{**vars(client), "drift_size_sample": None})
+        ret = fresh()
         self.assertEqual(pull(ret, [tag(2, 900, 156), tag(1, 1100, 230)], shuttle.WALL_IDS, frame, 60.), 0.)
         self.assertEqual(pull(ret, [tag(2, 900, 156), tag(0, 1000, 60)], shuttle.WALL_IDS, frame, 61.),
-                         shuttle.DRIFT_PULL_MAX_DEG)
+                         nudge)
 
     def test_edge_height_uses_vertical_sides_in_any_corner_order(self):
         corners = ((923.8, 361.2), (702.6, 359.5), (701.5, 580.3), (922.3, 582.0))

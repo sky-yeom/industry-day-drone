@@ -381,16 +381,17 @@ class CapturePostAckTests(StandaloneTestCase):
         self.capture_with_zero_change(lambda clock, client, stream:
             setattr(client.last_telemetry, "velocity_north_mps", .2))
 
-    def test_photo_is_refused_when_exact_decision_frame_expires_during_zero_ack(self):
+    def test_expired_decision_frame_waits_for_a_newer_frame_instead_of_ending_the_mission(self):
+        # 20260929T175615: a 515 ms zero ACK aged the ID2 decision frame.
         self.capture_with_zero_change(
-            lambda clock, client, stream: clock.__setitem__(0, clock[0] + .501), expect_abort=True)
+            lambda clock, client, stream: clock.__setitem__(0, clock[0] + .501))
 
-    def test_photo_is_refused_when_exact_decision_frame_is_replaced_during_zero_ack(self):
+    def test_replaced_decision_frame_waits_for_a_newer_frame_instead_of_ending_the_mission(self):
         def replace_snapshot(clock, client, stream):
             original = stream.last_detection_snapshot
             stream.last_detection_snapshot = SimpleNamespace(
                 key=(original.key[0], original.key[1]+1), received_s=clock[0], frame=original.frame)
-        self.capture_with_zero_change(replace_snapshot, expect_abort=True)
+        self.capture_with_zero_change(replace_snapshot)
 
     def test_capture_hook_deferral_asks_for_a_new_frame_instead_of_ending_the_mission(self):
         # The HTTP capture hook proves freshness itself, so it raises the same

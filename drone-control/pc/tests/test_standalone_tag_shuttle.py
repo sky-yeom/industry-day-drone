@@ -1186,7 +1186,7 @@ class DispatchBoundaryTests(StandaloneTestCase):
         self.assertEqual(done["stale_ticks"], 1)
         self.assertGreaterEqual(done["sent_ticks"], 1)
         self.assertEqual(stale.calls[-1], "zero")
-        # Still far after every pulse: exactly three rounds, then the route continues.
+        # Still far after every pulse: exactly CAPTURE_PULL_MAX_ROUNDS rounds, then the route continues.
         detections = []
         def stream_of(heights):
             sizes = iter(heights)
@@ -1200,7 +1200,7 @@ class DispatchBoundaryTests(StandaloneTestCase):
         stuck = stream_of([160.])
         client = run(160., stream=stuck)
         rounds = named(client, "standalone_capture_forward_pulse")
-        self.assertEqual([r["round"] for r in rounds], [1, 2, 3])
+        self.assertEqual([r["round"] for r in rounds], list(range(1, shuttle.CAPTURE_PULL_MAX_ROUNDS + 1)))
         self.assertTrue(all(r["sent"] for r in rounds))
         end = named(client, "standalone_capture_forward_pulse_end")[-1]
         self.assertEqual(end["reason"], "max_rounds_continue_route")

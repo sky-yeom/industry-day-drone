@@ -209,7 +209,9 @@ CEILING_DOWN_MPS = .05
 # mean side: moving sideways shrank ID6's width 241 -> 199 px near the frame
 # edge on 20260929T170717 and the older width-based hold pulled toward the wall.
 DRIFT_PULL_DEADBAND = .08
-DRIFT_PULL_MAX_DEG = .25
+# Field request 2026-09-30 07:35: raised with CAPTURE_PULL_DEG so the capture
+# pulse is not clipped by this forward bound.
+DRIFT_PULL_MAX_DEG = .3
 # Field request 2026-09-29 17:59: only a tiny forward nudge when the aircraft
 # looks farther than at home, not a pull until the size ratio matches.
 DRIFT_PULL_NUDGE_DEG = .1
@@ -220,11 +222,13 @@ DRIFT_PULL_REST_S = 1.5
 # 0.1 deg nudges fired only five times, and the aircraft nearly hit the wall
 # behind it. After each photo, one fixed pulse when the photographed tag looks
 # farther than ID6 did at home.
-CAPTURE_PULL_DEG = .25
+# Field request 2026-09-30 07:35: 0.25 deg x 3 recovered only 5-30% of the gap
+# (20260930T072423 ID1 151 -> 158 px against 244 px); now 0.3 deg x 4.
+CAPTURE_PULL_DEG = .3
 CAPTURE_PULL_S = .8
-# Field request 2026-09-29 20:41: up to three small pulses, re-measuring the tag
+# Field request 2026-09-29 20:41: up to a few small pulses, re-measuring the tag
 # between them; if the reference is still not reached the route continues.
-CAPTURE_PULL_MAX_ROUNDS = 3
+CAPTURE_PULL_MAX_ROUNDS = 4
 CAPTURE_PULL_SETTLE_S = .6
 # Field request 2026-09-29 20:41: when the next tag first appears at the travel-
 # side edge, brake once so the leg does not slide past it (20260929T203613 ID1

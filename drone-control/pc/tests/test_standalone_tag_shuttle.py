@@ -1143,7 +1143,7 @@ class DispatchBoundaryTests(StandaloneTestCase):
             h = height / 2
             return shuttle.PixelTag(1, (1200., 560.), ((1200+h, 560-h), (1200-h, 560-h),
                                     (1200-h, 560+h), (1200+h, 560+h)), 60., 0)
-        def run(height, **changes):
+        def run(height, stream=None, **changes):
             clock = [100.]
             client = FakeClient()
             client.phase = "lateral"
@@ -1154,18 +1154,21 @@ class DispatchBoundaryTests(StandaloneTestCase):
             limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .15))
             with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
                     patch.object(shuttle, "_require_flight", lambda client: None):
-                shuttle.capture_forward_pulse(client, limiter, tag(height), profile())
+                shuttle.capture_forward_pulse(client, limiter, tag(height), profile(),
+                                              stream, None if stream is None else object())
             return client
+        def named(client, name):
+            return [e[1] for e in client.events if e[0] == name]
+        # No way to re-measure: one pulse, then the route continues.
         far = run(160.)
         pushes = [call[1] for call in far.calls if call[0] == "attitude"]
         self.assertTrue(pushes)
         self.assertTrue(all(axes == (shuttle.CAPTURE_PULL_DEG, 0., 0., 0.) for axes in pushes))
         self.assertLessEqual(len(pushes), int(shuttle.CAPTURE_PULL_S / .15) + 1)
         self.assertEqual(far.calls[-1], "zero")
-        started = [e for e in far.events if e[0] == "standalone_capture_forward_pulse"]
-        self.assertIs(started[-1][1]["sent"], True)
-        self.assertEqual(far.events[-1][0], "standalone_capture_forward_pulse_done")
-        self.assertEqual(far.events[-1][1]["sent_ticks"], len(pushes))
+        self.assertIs(named(far, "standalone_capture_forward_pulse")[0]["sent"], True)
+        self.assertEqual(named(far, "standalone_capture_forward_pulse_done")[0]["sent_ticks"], len(pushes))
+        self.assertEqual(named(far, "standalone_capture_forward_pulse_end")[-1]["reason"], "tag_not_remeasured")
         # 20260929T200917: a stale frame after the photo ended the mission; now it only skips a tick.
         stale_ticks = [0]
         real_attitude = FakeClient.attitude
@@ -1176,10 +1179,38 @@ class DispatchBoundaryTests(StandaloneTestCase):
             return real_attitude(self, *axes)
         with patch.object(FakeClient, "attitude", flaky):
             stale = run(160.)
-        self.assertEqual(stale.events[-1][0], "standalone_capture_forward_pulse_done")
-        self.assertEqual(stale.events[-1][1]["stale_ticks"], 1)
-        self.assertGreaterEqual(stale.events[-1][1]["sent_ticks"], 1)
+        done = named(stale, "standalone_capture_forward_pulse_done")[0]
+        self.assertEqual(done["stale_ticks"], 1)
+        self.assertGreaterEqual(done["sent_ticks"], 1)
         self.assertEqual(stale.calls[-1], "zero")
+        # Still far after every pulse: exactly three rounds, then the route continues.
+        detections = []
+        def stream_of(heights):
+            sizes = iter(heights)
+            state = {"h": next(sizes)}
+            def detect_latest(detector, age):
+                detections.append(age)
+                return [tag(state["h"])], 0.
+            def advance():
+                state["h"] = next(sizes, state["h"])
+            return SimpleNamespace(detect_latest=detect_latest, advance=advance)
+        stuck = stream_of([160.])
+        client = run(160., stream=stuck)
+        rounds = named(client, "standalone_capture_forward_pulse")
+        self.assertEqual([r["round"] for r in rounds], [1, 2, 3])
+        self.assertTrue(all(r["sent"] for r in rounds))
+        end = named(client, "standalone_capture_forward_pulse_end")[-1]
+        self.assertEqual(end["reason"], "max_rounds_continue_route")
+        self.assertEqual(end["rounds"], shuttle.CAPTURE_PULL_MAX_ROUNDS)
+        self.assertTrue(all(c[1][0] >= 0. for c in client.calls if c[0] == "attitude"))
+        # 20260929T203613: every attitude tick is preceded by a fresh decode.
+        self.assertGreaterEqual(len(detections), len([c for c in client.calls if c[0] == "attitude"]))
+        self.assertTrue(all(age == shuttle.FRESH_S for age in detections))
+        # Reference reached after the first pulse: the second round sends nothing.
+        closer = SimpleNamespace(detect_latest=lambda detector, age: ([tag(280.)], 0.))
+        client = run(160., stream=closer)
+        rounds = named(client, "standalone_capture_forward_pulse")
+        self.assertEqual([(r["round"], r["sent"]) for r in rounds], [(1, True), (2, False)])
         # At home distance, closer, without a reference or with the bound off: nothing.
         for height, changes in ((280., {}), (320., {}), (160., {"drift_ref_px": None}),
                                 (160., {"hold_forward_bound": 0.})):
@@ -1187,6 +1218,35 @@ class DispatchBoundaryTests(StandaloneTestCase):
                 client = run(height, **changes)
                 self.assertFalse([c for c in client.calls if c[0] == "attitude"])
                 self.assertIs(client.events[-1][1]["sent"], False)
+
+    def test_edge_prebrake_brakes_once_against_travel_only_at_the_edge_while_moving(self):
+        def tag(x):
+            return shuttle.PixelTag(1, (x, 540.), ((x+50, 490), (x-50, 490), (x-50, 590), (x+50, 590)), 60., 0)
+        def run(direction, x, speed):
+            clock = [100.]
+            client = FakeClient()
+            client.phase = "lateral"
+            limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .1))
+            with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                    patch.object(shuttle, "_require_flight", lambda client: None), \
+                    patch.object(shuttle, "_horizontal_motion_evidence", lambda client: (speed, 0.)):
+                sent = shuttle.edge_prebrake(client, limiter, profile(), direction, tag(x), 1920)
+            return sent, [c[1] for c in client.calls if c[0] == "attitude"], client
+        sent, ticks, client = run("right", 1700., .4)
+        self.assertTrue(sent)
+        self.assertTrue(ticks)
+        self.assertTrue(all(axes == (0., -shuttle.EDGE_PREBRAKE_DEG, 0., 0.) for axes in ticks))
+        self.assertLessEqual(len(ticks), int(shuttle.EDGE_PREBRAKE_S / .1) + 1)
+        self.assertEqual(client.calls[-1], "zero")
+        sent, ticks, _ = run("left", 150., .4)
+        self.assertTrue(sent)
+        self.assertTrue(all(axes == (0., shuttle.EDGE_PREBRAKE_DEG, 0., 0.) for axes in ticks))
+        # Not at the travel-side edge, or already still: no brake.
+        for direction, x, speed in (("right", 960., .4), ("right", 150., .4), ("right", 1700., .05)):
+            with self.subTest(direction=direction, x=x, speed=speed):
+                sent, ticks, _ = run(direction, x, speed)
+                self.assertFalse(sent)
+                self.assertFalse(ticks)
 
     def test_edge_height_uses_vertical_sides_in_any_corner_order(self):
         corners = ((923.8, 361.2), (702.6, 359.5), (701.5, 580.3), (922.3, 582.0))

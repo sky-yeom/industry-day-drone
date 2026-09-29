@@ -215,6 +215,16 @@ DRIFT_PULL_REST_S = 1.5
 # farther than ID6 did at home.
 CAPTURE_PULL_DEG = .25
 CAPTURE_PULL_S = .8
+# Field request 2026-09-29 20:41: up to three small pulses, re-measuring the tag
+# between them; if the reference is still not reached the route continues.
+CAPTURE_PULL_MAX_ROUNDS = 3
+CAPTURE_PULL_SETTLE_S = .6
+# Field request 2026-09-29 20:41: when the next tag first appears at the travel-
+# side edge, brake once so the leg does not slide past it (20260929T203613 ID1
+# moved 1234 -> 1104 px between two photos).
+EDGE_PREBRAKE_BAND = .25
+EDGE_PREBRAKE_DEG = RETURN_BRAKE_DEG
+EDGE_PREBRAKE_S = .4
 DRIFT_PULL_STALE_S = .5
 DRIFT_PULL_CENTER_BAND = (.25, .75)
 DRIFT_PULL_REF_PX = (60., 600.)
@@ -365,31 +375,22 @@ def drift_pull_forward_deg(client, tags, ids, frame_shape, now=None):
     return min(bound, DRIFT_PULL_NUDGE_DEG)
 
 
-def capture_forward_pulse(client, limiter, tag, profile):
-    """After a photo, push forward once if the photographed tag looks farther than ID6 at home.
-
-    Fixed tilt and duration, never backward. Nothing without a home reference,
-    an enabled forward bound or a measurable tag.
-    """
-    reference = getattr(client, "drift_ref_px", None)
-    bound = getattr(client, "hold_forward_bound", 0.)
-    size = tag_edge_height_px(tag)
-    far = bool(bound and reference and size and reference / size - 1. >= DRIFT_PULL_DEADBAND)
-    forward = min(bound, CAPTURE_PULL_DEG) if far else 0.
-    client.log_event("standalone_capture_forward_pulse", {
-        "tag_id": getattr(tag, "tag_id", None), "edge_height_px": size, "reference_px": reference,
-        "sent": far, "forward_tilt_deg": forward, "duration_s": CAPTURE_PULL_S if far else 0.})
-    if not far:
-        return
+def _timed_tilt(client, limiter, profile, stream, detector, forward, right, duration_s):
+    """Hold one fixed tilt for duration_s, then zero. A stale tick is skipped, never fatal."""
     client.motion_valid_until_s = None
-    end = time.monotonic() + CAPTURE_PULL_S
+    end = time.monotonic() + duration_s
     sent = stale = 0
     try:
         while time.monotonic() < end:
             limiter.wait()
             _require_flight(client)
+            if stream is not None and detector is not None:
+                # The dispatch guard checks the last *detected* frame. Nothing
+                # else decodes during the pulse, so without this every tick of
+                # the 20:36 flight was refused (sent 0, stale 8/9).
+                stream.detect_latest(detector, FRESH_S)
             try:
-                client.attitude(forward, 0., client.hold_up(height_hold_up_mps(client, profile)), 0.)
+                client.attitude(forward, right, client.hold_up(height_hold_up_mps(client, profile)), 0.)
                 sent += 1
             except FramingCorrectionDeferred:
                 # The 20:09 flight ended here on one stale frame after the photo;
@@ -398,8 +399,80 @@ def capture_forward_pulse(client, limiter, tag, profile):
                 client.zero()
     finally:
         client.zero()
+    return sent, stale
+
+
+def _settle_and_measure(client, limiter, stream, detector, tag_id):
+    """Hover CAPTURE_PULL_SETTLE_S and return the latest fresh edge height of tag_id, or None."""
+    size = None
+    end = time.monotonic() + CAPTURE_PULL_SETTLE_S
+    while time.monotonic() < end:
+        limiter.wait()
+        _require_flight(client)
+        client.zero()
+        if stream is None or detector is None:
+            continue
+        tags, age = stream.detect_latest(detector, FRESH_S)
+        if not _number(age, 0., FRESH_S):
+            continue
+        match = [t for t in tags if getattr(t, "tag_id", None) == tag_id]
+        if match:
+            size = tag_edge_height_px(match[0]) or size
+    return size
+
+
+def capture_forward_pulse(client, limiter, tag, profile, stream=None, detector=None):
+    """After a photo, push forward in up to CAPTURE_PULL_MAX_ROUNDS small pulses.
+
+    Each round re-measures the tag against ID6's home size. Fixed tilt and
+    duration, never backward. Reaching the reference is not required: after
+    the last round, or when the tag cannot be re-measured, the route continues.
+    """
+    reference = getattr(client, "drift_ref_px", None)
+    bound = getattr(client, "hold_forward_bound", 0.)
+    tag_id = getattr(tag, "tag_id", None)
+    size = tag_edge_height_px(tag)
+    for round_no in range(1, CAPTURE_PULL_MAX_ROUNDS + 1):
+        far = bool(bound and reference and size and reference / size - 1. >= DRIFT_PULL_DEADBAND)
+        forward = min(bound, CAPTURE_PULL_DEG) if far else 0.
+        client.log_event("standalone_capture_forward_pulse", {
+            "tag_id": tag_id, "round": round_no, "edge_height_px": size, "reference_px": reference,
+            "sent": far, "forward_tilt_deg": forward, "duration_s": CAPTURE_PULL_S if far else 0.})
+        if not far:
+            return
+        sent, stale = _timed_tilt(client, limiter, profile, stream, detector, forward, 0., CAPTURE_PULL_S)
         client.log_event("standalone_capture_forward_pulse_done",
-                         {"tag_id": getattr(tag, "tag_id", None), "sent_ticks": sent, "stale_ticks": stale})
+                         {"tag_id": tag_id, "round": round_no, "sent_ticks": sent, "stale_ticks": stale})
+        size = _settle_and_measure(client, limiter, stream, detector, tag_id)
+        if size is None:
+            client.log_event("standalone_capture_forward_pulse_end",
+                             {"tag_id": tag_id, "rounds": round_no, "reason": "tag_not_remeasured"})
+            return
+    reached = reference / size - 1. < DRIFT_PULL_DEADBAND
+    client.log_event("standalone_capture_forward_pulse_end", {
+        "tag_id": tag_id, "rounds": CAPTURE_PULL_MAX_ROUNDS, "edge_height_px": size,
+        "reference_px": reference, "reason": "reached" if reached else "max_rounds_continue_route"})
+
+
+def edge_prebrake(client, limiter, profile, direction, tag, frame_width, stream=None, detector=None):
+    """Brake once when the expected tag first appears at the travel-side edge while moving."""
+    travel = 1. if direction == "right" else -1.
+    x = tag.center_px[0] / frame_width if _number(frame_width, 1., 100000.) else None
+    at_edge = x is not None and (x >= 1. - EDGE_PREBRAKE_BAND if travel > 0 else x <= EDGE_PREBRAKE_BAND)
+    speed, velocity_age = _horizontal_motion_evidence(client)
+    moving = (speed is not None and _number(velocity_age, 0., FLIGHT_STATE_FRESH_S)
+              and speed > RETURN_STILL_MPS)
+    right = -travel * EDGE_PREBRAKE_DEG
+    client.log_event("standalone_edge_prebrake", {
+        "tag_id": getattr(tag, "tag_id", None), "center_x_fraction": x, "at_edge": at_edge,
+        "horizontal_speed_mps": speed, "sent": bool(at_edge and moving),
+        "right_tilt_deg": right if at_edge and moving else 0., "duration_s": EDGE_PREBRAKE_S})
+    if not (at_edge and moving):
+        return False
+    sent, stale = _timed_tilt(client, limiter, profile, stream, detector, 0., right, EDGE_PREBRAKE_S)
+    client.log_event("standalone_edge_prebrake_done", {"tag_id": getattr(tag, "tag_id", None),
+                                                       "sent_ticks": sent, "stale_ticks": stale})
+    return True
 
 
 def load_profile(path):
@@ -1780,6 +1853,7 @@ def capture_id1_pair(client, limiter, stream, detector, logger, config, profile,
         "phase_scope": f"first_ID{expected}_pair_framing"})
     print(f"ID{departure} -> ID{expected}: frame ID{expected} and the entire mock beside it", flush=True)
     blind_images, blind_last_s = 0, 0.
+    prebrake_checked = False
     while time.monotonic() < deadline:
         limiter.wait()
         client.status("id1_pair_framing")
@@ -1812,6 +1886,11 @@ def capture_id1_pair(client, limiter, stream, detector, logger, config, profile,
                     "capture_passed": False})
             except Exception as exc:
                 client.log_event("id1_diagnostic_image_error", {"error_type": type(exc).__name__})
+        seen = [tag for tag in tags if tag.tag_id == expected]
+        if not prebrake_checked and seen and len(shape) >= 2:
+            prebrake_checked = True
+            if edge_prebrake(client, limiter, profile, direction, seen[0], shape[1], stream, detector):
+                continue
         client.status("id1_pair_after_detection")
         _require_flight(client)
         age = float("inf") if snapshot is None else time.monotonic() - snapshot.received_s
@@ -1940,7 +2019,7 @@ def capture_id1_pair(client, limiter, stream, detector, logger, config, profile,
             print(f"ID{expected} pair photo saved: {photo}", flush=True)
             captured_key, captured_count = snapshot.key, captured_count + 1
             if captured_count == capture_count:
-                capture_forward_pulse(client, limiter, confirmed, profile)
+                capture_forward_pulse(client, limiter, confirmed, profile, stream, detector)
                 return
     raise TimeoutError(f"ID{expected} framing not confirmed within {profile['leg_timeout_s']:g}s "
                        f"after correction attempts; last state={gate.diagnostic.get('state')}")

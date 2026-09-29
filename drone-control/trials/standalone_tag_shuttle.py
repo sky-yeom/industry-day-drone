@@ -46,10 +46,10 @@ DEFAULT_PAIR_REFERENCE = Path(__file__).with_name("profiles") / "id1_tv_pair_ref
 WALL_IDS = [6, 1, 2, 3]
 ROUTE_IDS = [6, 1, 2, 3, 2, 1, 6]
 OUTBOUND_DIRECTION = "left" if WALL_IDS.index(1) < WALL_IDS.index(6) else "right"
-# 2026-09-29 14:29: the climb zeroed at a 1.5 m display, coasted, and the next
-# 0.1 m display step read 1.6 m, which aborted the mission. One display step
-# above the target is arrival, not a reason to stop; beyond it still aborts.
-CLIMB_OVERSHOOT_M = .151
+# 2026-09-29 14:29 and 14:37: the climb zeroed at a 1.5 m display and the
+# aircraft coasted to 1.6 and then 1.7 m, aborting both missions. Any display
+# from the target up to this ceiling counts as arrived; above it still aborts.
+CLIMB_ACCEPT_MAX_M = 1.7
 CONFIRM_S = .3
 CENTER_TOLERANCE_PX = 80.
 FRESH_S = .5
@@ -1045,7 +1045,7 @@ def _climb(client, limiter, stream, detector, logger, config, target, profile=No
         elapsed = time.perf_counter() - client.received
         age = None if telemetry.height_age_s is None else telemetry.height_age_s + elapsed
         return telemetry, elapsed, climb_command(telemetry.height_m, age, target,
-                                                 overshoot_m=CLIMB_OVERSHOOT_M)
+                                                 overshoot_m=max(.051, CLIMB_ACCEPT_MAX_M - target + .051))
     while time.monotonic() < deadline:
         limiter.wait()
         client.status("standalone_bounded_sonar_climb")

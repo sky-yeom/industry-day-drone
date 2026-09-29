@@ -18,7 +18,7 @@
                       1,
                       6
                   ],
-    "target_height_m":  1.5,
+    "target_height_m":  1.4,
     "height_hold":  {
                         "deadband_m":  0.08,
                         "gain_mps_per_m":  0.4,

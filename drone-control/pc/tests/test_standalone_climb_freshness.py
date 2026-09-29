@@ -59,11 +59,23 @@ class ClimbFreshnessTests(StandaloneTestCase):
         self.assertEqual(self.confirmation[0][1]["height_m"], 1.6)
         self.assertFalse(any(isinstance(call, tuple) and call[0] == "attitude" for call in self.client.calls))
 
-    def test_two_display_steps_past_the_target_still_aborts_without_descent(self):
-        with self.assertRaisesRegex(RuntimeError, "already above ascent target"):
-            self.exercise(target=1.5, height=1.7)
-        self.assertEqual(self.confirmation, [])
-        self.assertFalse(any(isinstance(call, tuple) and call[0] == "attitude" for call in self.client.calls))
+    def test_target_1_4_accepts_every_display_up_to_1_7(self):
+        """14:37 coasted 0.2 m past a zeroed 1.5 m target and read 1.7 m."""
+        for height in (1.4, 1.5, 1.6, 1.7):
+            with self.subTest(height=height):
+                self.exercise(target=1.4, height=height)
+                self.assertTrue(self.confirmation)
+                self.assertFalse(any(isinstance(call, tuple) and call[0] == "attitude"
+                                     for call in self.client.calls))
+
+    def test_above_the_1_7_acceptance_ceiling_still_aborts_without_descent(self):
+        for target in (1.4, 1.5):
+            with self.subTest(target=target):
+                with self.assertRaisesRegex(RuntimeError, "already above ascent target"):
+                    self.exercise(target=target, height=1.8)
+                self.assertEqual(self.confirmation, [])
+                self.assertFalse(any(isinstance(call, tuple) and call[0] == "attitude"
+                                     for call in self.client.calls))
 
     def test_detection_delay_refreshes_height_and_confirms_target_1_6(self):
         self.exercise()

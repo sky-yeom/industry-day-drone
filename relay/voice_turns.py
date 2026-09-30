@@ -283,22 +283,18 @@ class VoiceTurns:
 
     async def authorize(self, name, args, turn, session):
         self.last_rejection_code = None
-        if name in {"get_state", "confirm_route"}:
+        # confirm_prompt and launch_mission are now server-driven auto-chains
+        # (right after prepare_prompt / the second select_stop succeed) with no
+        # separate consent step - they're only ever invoked with from_voice=False,
+        # so authorize() is never even called for them (see server.py::run_tool).
+        # They're listed here alongside get_state/confirm_route for the rare case
+        # the model tries to call them directly anyway; treat that the same way.
+        if name in {"get_state", "confirm_route", "confirm_prompt", "launch_mission"}:
             return None
         if turn is None or turn is not self.latest or turn.consumed:
             return self.reject("stale_or_missing_turn", "새로운 참가자 답변이 없습니다. 질문 뒤에는 참가자의 답을 기다리세요.")
         try:
-            # Speech remains native/realtime; only mutations wait for input evidence.
-            preceding = []
-            if name == "confirm_prompt" and turn.prompt_revision is not None:
-                for earlier in self.turns.values():
-                    if earlier is turn:
-                        break
-                    if (earlier.prompt_revision == turn.prompt_revision
-                            and (not earlier.ready.is_set() or earlier.prompt_generation == turn.prompt_generation)):
-                        preceding.append(earlier)
-            await asyncio.wait_for(asyncio.gather(
-                turn.ready.wait(), *(earlier.ready.wait() for earlier in preceding)), timeout=5)
+            await asyncio.wait_for(turn.ready.wait(), timeout=5)
         except TimeoutError:
             return self.reject("transcript_timeout", "참가자의 말을 확인하지 못했습니다. 진행하지 말고 다시 물어보세요.")
         if turn is not self.latest or turn.consumed:
@@ -310,29 +306,10 @@ class VoiceTurns:
         if name == "prepare_prompt":
             if is_affirmative(turn.text) or is_retry_input(turn.text):
                 return self.reject("description_missing", "탐색 설명이 아직 없습니다. 어떤 사람을 찾을지 물어보세요.")
-        elif name == "confirm_prompt":
-            if not is_affirmative(turn.text):
-                # turn.prompt_revision is already cleared to None by transcribe()
-                # for any non-affirmative reply (see transcribe() above), so it
-                # can't identify *which* question this was answering here -
-                # session.pending_prompt_revision is the stable identifier: it
-                # only changes when the participant's description is actually
-                # restated (prepare_prompt), not on every failed confirm attempt.
-                return self.reject("not_consent", "참가자가 동의하지 않았습니다. 수정 사항을 반영하거나 다시 물어보세요.",
-                                    name=name, session=session, question_id=session.pending_prompt_revision)
-            if (session.pending_prompt is None or turn.prompt_revision is None
-                    or turn.prompt_revision != session.pending_prompt_revision
-                    or self.rejected_prompt_revision == turn.prompt_revision
-                    or any(not earlier.text or not is_affirmative(earlier.text) for earlier in preceding)):
-                return self.reject("no_pending_readback", "확인할 설명을 prepare_prompt로 저장한 뒤 되말하고 새 동의를 기다리세요.")
         elif name == "select_stop":
             resolved_monitor = session.resolve_monitor(args.get("monitor")) if isinstance(args, dict) else None
             if resolved_monitor is None or not names_stop(turn.text, resolved_monitor):
                 return self.reject("stop_mismatch", "참가자의 이번 답변에서 그 목적지를 확인하지 못했습니다. 목적지를 대신 고르지 말고 다시 물어보세요.")
-        elif name == "launch_mission":
-            if not is_affirmative(turn.text) or not turn.route_readback_done:
-                return self.reject("departure_not_confirmed", "경로 안내 뒤 새로운 출발 동의를 받아야 합니다. 출발하지 말고 답을 기다리세요.",
-                                    name=name, session=session, question_id=tuple(session.state.confirmedRoute))
         return None
 
     # Consecutive same yes/no-style rejections, keyed by (tool, question

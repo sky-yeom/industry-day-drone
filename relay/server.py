@@ -681,6 +681,18 @@ class Bridge:
         await self.invalidate_input()
         await self.flush_response()
 
+    def _request_response_after_pause(self, delay_ms):
+        # Fire-and-forget: request a fresh response only after a short pause,
+        # so a forced narration doesn't immediately chain into the next one
+        # with no audible/visual gap between them.
+        async def _fire():
+            await asyncio.sleep(delay_ms / 1000)
+            self._response_requested = True
+            await self.flush_response()
+        task = asyncio.create_task(_fire())
+        self._tool_tasks.add(task)
+        task.add_done_callback(self._tool_tasks.discard)
+
     async def flush_response(self):
         async with self._response_lock:
             if (self.upstream is None or self._closing or self._voice_stopped or self._response_active
@@ -1080,10 +1092,13 @@ class Bridge:
                 if (self._confidence_narration_response_id
                         and response.get("id") == self._confidence_narration_response_id):
                     self._confidence_narration_response_id = None
-                    self._response_requested = True
                     await self.send_browser({
                         "type": "confidence_narration.done", "runId": self.session.run_id,
                         "responseId": response.get("id")})
+                    # Give the confidence narration a brief, audible beat before the
+                    # route/site briefing starts, so participants (and the captions)
+                    # experience them as two distinct turns, not one run-on response.
+                    self._request_response_after_pause(config.CONFIDENCE_TO_ROUTE_INTRO_PAUSE_MS)
                 if (self._route_intro_id and self._route_intro_response_id
                         and response.get("id") == self._route_intro_response_id):
                     if response.get("status") != "completed":

@@ -209,6 +209,10 @@ export default function Home() {
       onConfidenceNarrationDone: () => {
         if (!current() || confidenceNarrationDoneRef.current) return;
         confidenceNarrationDoneRef.current = true;
+        // Close out the confidence caption bubble now, so the upcoming
+        // route/site-briefing narration always starts a fresh bubble
+        // instead of possibly appending onto this one.
+        streamingRef.current.agent = null;
         tryAdvanceToMapIntro();
       },
       onSpeechText: (text) => { if (current()) setSpeechText(text); },

@@ -108,6 +108,10 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.session = SurveySession()
         self.camera, self.vision = FakeCamera(), FakeVision()
         self.bridge = server.Bridge(self.browser, self.session, (self.camera, self.vision))
+        # Don't slow every test down by the real confidence->route-intro pause.
+        self._pause_patch = patch.object(server.config, "CONFIDENCE_TO_ROUTE_INTRO_PAUSE_MS", 0)
+        self._pause_patch.start()
+        self.addAsyncCleanup(self._pause_patch.stop)
 
     async def asyncTearDown(self):
         await self.bridge.close()
@@ -826,6 +830,9 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
                     "runId": self.session.run_id, "confidenceNarration": confidence_id}}},
             {"type": "response.done", "response": {"id": "confidence-1", "status": "completed"}}]
         await self.bridge.pump_upstream()
+        pending = [task for task in self.bridge._tool_tasks if not task.done()]
+        if pending:
+            await asyncio.gather(*pending)
         self.assertFalse(self.bridge._route_intro_pending)
         self.assertEqual(sum(e["type"] == "response.create" for e in upstream.sent), 2)
         pending = next(e for e in self.browser.events if e["type"] == "route_intro.pending")
@@ -866,6 +873,11 @@ class StrictVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.bridge = server.Bridge(
             self.browser, self.session, (FakeCamera(), FakeVision()), strict_turn_taking=True)
         self.upstream = self.bridge.upstream = Upstream()
+        # Don't slow every test down by the real confidence->route-intro pause;
+        # the `finish()` helper still awaits the scheduling task either way.
+        self._pause_patch = patch.object(server.config, "CONFIDENCE_TO_ROUTE_INTRO_PAUSE_MS", 0)
+        self._pause_patch.start()
+        self.addAsyncCleanup(self._pause_patch.stop)
 
     async def asyncTearDown(self):
         await self.bridge.close()
@@ -907,6 +919,13 @@ class StrictVoiceTests(unittest.IsolatedAsyncioTestCase):
         await self.provider_events(
             {"type": "response.created", "response": {"id": response_id, "metadata": metadata}},
             {"type": "response.done", "response": {"id": response_id, "status": "completed"}})
+        # Confidence narration finishing schedules the route-intro request after a
+        # short pause (see CONFIDENCE_TO_ROUTE_INTRO_PAUSE_MS) instead of firing it
+        # synchronously; wait for that background task so callers see the next
+        # request immediately, just like before the pause was added.
+        pending = [task for task in self.bridge._tool_tasks if not task.done()]
+        if pending:
+            await asyncio.gather(*pending)
 
     async def intro(self):
         # confirm_prompt now confirms all sites in a single call, so this
@@ -934,6 +953,9 @@ class StrictVoiceTests(unittest.IsolatedAsyncioTestCase):
             "type": "response.created", "response": {"id": "confidence-first", "metadata": confidence_metadata}})
         await self.provider_events({
             "type": "response.done", "response": {"id": "confidence-first", "status": "completed"}})
+        pending_tasks = [task for task in self.bridge._tool_tasks if not task.done()]
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks)
         self.assertEqual(len(self.requests()), 2)
         metadata = self.requests()[-1]["metadata"]
         self.assertEqual(metadata, {"runId": self.session.run_id, "routeIntro": pending["introId"]})

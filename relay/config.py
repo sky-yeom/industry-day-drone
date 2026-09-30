@@ -133,6 +133,13 @@ VISION_MAX_IMAGE_BYTES = 4 * 1024 * 1024
 # 있었다. 450ms로 조정해 지연을 줄이면서 참가자 말을 끊지 않도록 한다.
 SILENCE_DURATION_MS = int(os.getenv("VOICE_LIVE_SILENCE_MS", "450"))
 
+# Since appearance/route confirmation waits were removed, confidence
+# narration and the route/site briefing that follows it now fire as two
+# forced responses back-to-back with no natural pause between them (no
+# more consent turn in between). This adds a short explicit gap so the
+# two are clearly two distinct turns instead of one run-on utterance.
+CONFIDENCE_TO_ROUTE_INTRO_PAUSE_MS = int(os.getenv("VOICE_LIVE_CONFIDENCE_ROUTE_PAUSE_MS", "450"))
+
 # 실제 공급자 비교에서 semantic VAD가 누락한 짧은 응답을 acoustic VAD가 감지했습니다.
 # 의미 기반 종료 감지가 필요하면 azure_semantic_vad_multilingual로 선택할 수 있습니다.
 VAD_TYPE = os.getenv("VOICE_LIVE_VAD_TYPE", "server_vad")

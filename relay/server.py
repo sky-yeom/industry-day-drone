@@ -651,6 +651,12 @@ class Bridge:
     async def start_result_audio(self, run_id):
         if run_id == self.session.run_id and self._results_task is not None:
             return
+        if (run_id == self.session.run_id and self._result_text and self.departure_started
+                and self.session.phase in {"complete", "aborted"} and not self._voice_stopped):
+            # The browser only asks once the aircraft has landed; a departure line
+            # that never reported done must not block the results voice.
+            log.warning("Departure voice never finished; closing it for the results voice")
+            await self.stop_departure_voice()
         if (run_id != self.session.run_id or not self._result_text
                 or self.session.phase not in {"complete", "aborted"} or not self._voice_stopped):
             log.warning("Rejected premature or stale result-audio request")

@@ -660,12 +660,31 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(upstream.closed)
         self.assertFalse(upstream.sent)
         self.assertFalse(self.bridge._debrief_pending)
-        await self.bridge.start_result_audio(self.session.run_id)
+        await self.bridge.start_result_audio("stale-run")
         self.assertIsNone(self.bridge._results_task)
+        self.assertFalse(upstream.closed)
         text = self.bridge._result_text
         await self.bridge.publish_mission({"type": "mission.debrief", "runId": "stale", "text": "old result"})
         self.assertEqual(self.bridge._result_text, text)
         self.assertFalse(any(e["type"] == "mission.debrief.done" for e in self.browser.events))
+
+    async def test_landed_results_request_retires_unfinished_departure_voice(self):
+        upstream = Upstream()
+        self.bridge.upstream = upstream
+        self.bridge._launch_response_id = "departure"
+        self.session.abort_mission()
+        await self.bridge.runner._notify()
+        self.assertFalse(self.bridge._voice_stopped)
+        token = SimpleNamespace(get_token=AsyncMock(side_effect=OSError("unavailable")))
+        with patch.object(server, "credential", return_value=token), \
+                self.assertLogs("relay", level="WARNING") as logs:
+            await self.bridge.start_result_audio(self.session.run_id)
+            self.assertIsNotNone(self.bridge._results_task)
+            await self.bridge._results_task
+        self.assertTrue(upstream.closed)
+        self.assertTrue(self.bridge._voice_stopped)
+        self.assertFalse(any("Rejected premature" in line for line in logs.output))
+        token.get_token.assert_awaited_once()
 
     async def test_result_reconnect_waits_for_original_pump_retirement(self):
         self.session.abort_mission()

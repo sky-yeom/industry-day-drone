@@ -474,6 +474,13 @@ export class VoiceSession {
       this.fallbackResults();
       void this.closeSession(true, true);
     }, RESULTS_START_TIMEOUT_MS);
+    if (this.debriefRunId === runId && !this.voiceStopped) {
+      // Landed with the debrief in hand: the departure line ended minutes ago,
+      // so a missing drain acknowledgement must not hold the results voice.
+      this.playbackNode?.port.postMessage({ type: "flush" });
+      void this.finishDeparture(false);
+      return;
+    }
     this.requestResults();
   }
 

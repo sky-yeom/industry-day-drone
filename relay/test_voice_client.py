@@ -326,17 +326,25 @@ async function exerciseResultsFallbacks() {
       await session.stop();
       continue;
     }
-    if(mode==="pending-debrief" || mode==="pending-drain") {
-      if(mode==="pending-drain") {
-        socket.emit({type:"mission.launch",runId:"run"});
-        socket.emit({type:"mission.launch.response",runId:"run",responseId:"departure"});
-        socket.emit({type:"mission.launch.done",runId:"run",responseId:"departure"});
-        socket.emit({type:"mission.debrief",runId:"run",text:"early completion"});
-      }
+    if(mode==="pending-drain") {
+      socket.emit({type:"mission.launch",runId:"run"});
+      socket.emit({type:"mission.launch.response",runId:"run",responseId:"departure"});
+      socket.emit({type:"mission.launch.done",runId:"run",responseId:"departure"});
+      socket.emit({type:"mission.debrief",runId:"run",text:"early completion"});
+      session.markResultsReady("run");
+      await new Promise(setImmediate);
+      assert.equal(socket.sent.filter(m=>m.type==="results.ready").length,1,
+        "a landed debrief must not wait on a departure drain that never came");
+      assert.equal(reveals,0);
+      assert.equal(errors.length,0);
+      await session.stop();
+      continue;
+    }
+    if(mode==="pending-debrief") {
       session.markResultsReady("run");
       assert.equal(socket.sent.filter(m=>m.type==="results.ready").length,0);
       [...timers.values()][0]();
-      assert.equal(reveals,1,"missing debrief or stalled departure drain must report a bounded fallback");
+      assert.equal(reveals,1,"missing debrief must report a bounded fallback");
       assert.equal(errors.length,1);
       await session.stop();
       continue;

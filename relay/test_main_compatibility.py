@@ -39,7 +39,7 @@ class MainCompatibilityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_existing_tools_snapshot_and_full_frame_capture_contract_is_additive(self):
         self.assertEqual({tool["name"] for tool in tools.TOOLS}, {
-            "confirm_prompt", "select_stop", "confirm_route", "clear_route",
+            "prepare_prompt", "confirm_prompt", "select_stop", "set_route", "confirm_route", "clear_route",
             "launch_mission", "retry_mission", "abort_mission", "get_state"})
         session = SurveySession()
         baseline = {"phase", "draftRoute", "confirmedRoute", "runId", "revision", "missionPhase",
@@ -47,7 +47,7 @@ class MainCompatibilityTests(unittest.IsolatedAsyncioTestCase):
                     "score", "error", "promptPhase", "userPromptText",
                     "appearanceConstraints", "unsupportedAppearance"}
         self.assertTrue(baseline <= session.snapshot().keys())
-        self.assertTrue(session.confirm_prompt("green shirt")["ok"])
+        self.assertTrue(session.confirm_prompt("green shirt 사람")["ok"])
         for destination in ("monitor-3", "monitor-1"):
             self.assertTrue(session.select_stop(destination)["ok"])
         self.assertTrue(session.confirm_route()["ok"])

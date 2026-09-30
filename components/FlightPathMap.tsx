@@ -231,6 +231,6 @@ export default function FlightPathMap({ state, boarded = false, elapsedMs, conne
       </div>}
     </div>
 
-    {state.promptPhase === "confirmed" && state.missionPhase === "briefing" && <p className="mission-workspace-heading shrink-0 text-[0.6875rem] leading-4 text-[#091f2c] [text-shadow:1px_1px_0_#fff]">첫 두 방문지를 음성으로 선택하세요. 출발에 동의하면 자동 비행을 시작합니다.</p>}
+    {state.promptPhase === "confirmed" && state.missionPhase === "briefing" && <p className="mission-workspace-heading shrink-0 text-[0.6875rem] leading-4 text-[#091f2c] [text-shadow:1px_1px_0_#fff]">세 방문지의 전체 순서를 한 번에 말해 주세요. 확인되지 않으면 기비의 추천 경로로 바로 출발합니다.</p>}
   </section>;
 }

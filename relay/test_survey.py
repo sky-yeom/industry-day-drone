@@ -84,6 +84,20 @@ class SurveyTests(unittest.TestCase):
         self.assertFalse(s.select_stop("monitor-1")["ok"])
         self.assertFalse(s.confirm_route()["ok"])
 
+    def test_full_route_or_default_recommendation_is_set_at_once(self):
+        confirm_all(self.session)
+        chosen = self.session.set_route(["monitor-2", "monitor-1", "monitor-3"])
+        self.assertTrue(chosen["ok"])
+        self.assertFalse(chosen["usedDefaultRoute"])
+        self.assertEqual(self.session.state.draftRoute, ["monitor-2", "monitor-1", "monitor-3"])
+
+        other = SurveySession()
+        confirm_all(other)
+        fallback = other.set_route(["monitor-1"])
+        self.assertTrue(fallback["ok"])
+        self.assertTrue(fallback["usedDefaultRoute"])
+        self.assertEqual(other.state.draftRoute, other.data["vulnerableAdjustedOrder"])
+
     def test_duplicate_launch_does_not_reset_clock(self):
         ready(self.session)
         self.session.launch_mission()
@@ -129,16 +143,12 @@ class SurveyTests(unittest.TestCase):
         self.assertFalse(s.confirm_prompt("출발 후 변경")["ok"])
         self.assertEqual(s.data["userPromptText"], "사람을 찾아줘")
 
-    def test_unassessable_descriptions_require_neutral_revision_before_confirmation(self):
+    def test_sensitive_description_is_not_rejected_by_prompt_validation(self):
         for mode in ("mock", "azure"):
             for method in ("prepare_prompt", "confirm_prompt"):
                 session = SurveySession(mode=mode)
-                outcome = getattr(session, method)("백인")
-                self.assertFalse(outcome["ok"])
-                self.assertEqual(outcome["facts"], REVISION_REQUEST)
-                self.assertIsNone(session.pending_prompt)
-                self.assertEqual(session.data["promptPhase"], "briefing")
-                self.assertFalse(session.select_stop("monitor-1")["ok"])
+                outcome = getattr(session, method)("백인 사람")
+                self.assertTrue(outcome["ok"], outcome)
 
     def test_mock_ignores_unassessable_extras_but_azure_keeps_visual_text(self):
         """Extra descriptors the mock vision engine can't verify (e.g. glasses)

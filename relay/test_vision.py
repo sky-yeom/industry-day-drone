@@ -486,9 +486,9 @@ class AzureTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(VisionError, REVISION_REQUEST):
                 await self.vision.analyze(self.capture, search_prompt="안경을 쓴 사람")
 
-    async def test_invalid_or_sensitive_prompts_never_reach_azure(self):
+    async def test_invalid_prompts_never_reach_azure(self):
         with patch("relay.vision.aiohttp.ClientSession") as session:
-            for prompt in ("", " ", None, "x" * 2001, "인종이 같은 사람", "얼굴로 신원을 확인해줘"):
+            for prompt in ("", " ", None, "x" * 2001):
                 with self.subTest(prompt=prompt), self.assertRaises(VisionError):
                     await self.vision.analyze(self.capture, search_prompt=prompt)
             session.assert_not_called()

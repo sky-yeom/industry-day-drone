@@ -373,6 +373,34 @@ class SurveySession:
         self.touch()
         return result(True, f"선택 경로: {names(self.state.draftRoute, self.labels)}", ask)
 
+    def set_route(self, route):
+        if self.data["promptPhase"] != "confirmed":
+            return self._prompt_required()
+        if not self._editable():
+            return result(False, "출발한 임무의 경로는 바꿀 수 없습니다.")
+        resolved = [self.resolve_monitor(value) for value in route] if isinstance(route, list) else []
+        complete = (
+            len(resolved) == len(self.monitor_ids)
+            and None not in resolved
+            and len(set(resolved)) == len(self.monitor_ids)
+            and set(resolved) == set(self.monitor_ids)
+        )
+        selected = resolved if complete else list(self.data["vulnerableAdjustedOrder"])
+        if len(selected) != len(self.monitor_ids) or set(selected) != set(self.monitor_ids):
+            return result(False, "기본 추천 경로가 올바르지 않습니다.")
+        self.state.draftRoute = selected
+        self.state.confirmedRoute = []
+        self.state.phase = "awaiting-confirmation"
+        self.data["missionPhase"] = "briefing"
+        self.touch()
+        outcome = result(
+            True,
+            f"{'참가자가 선택한' if complete else '기비의 기본'} 경로: {names(selected, self.labels)}",
+            "곧 자동으로 경로가 확정되고 출발합니다. 추가 동의를 묻지 말 것",
+        )
+        outcome["usedDefaultRoute"] = not complete
+        return outcome
+
     def clear_route(self):
         if not self._editable():
             return result(False, "출발 후에는 경로를 지울 수 없습니다. 임무 중단을 이용하세요.")
@@ -385,7 +413,7 @@ class SurveySession:
         if self.data["promptPhase"] != "confirmed":
             return self._prompt_required()
         if not self._editable() or len(self.state.draftRoute) != len(self.monitor_ids):
-            return result(False, "출발 전에 첫 번째와 두 번째 목적지를 정해야 합니다.")
+            return result(False, "출발 전에 세 목적지의 전체 순서를 정해야 합니다.")
         self.state.confirmedRoute = self.state.draftRoute[:]
         self.state.phase = "confirmed"
         self.data["missionPhase"] = "ready"

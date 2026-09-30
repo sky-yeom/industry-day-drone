@@ -291,6 +291,7 @@ class Bridge:
         self._greet_requested = False
         self._greeting_pending = False
         self._launch_pending = False
+        self._departure_announcement = tools.DEPARTURE_ANNOUNCEMENT_BY_KIND[session.kind]
         self._launch_response_id = None
         self._launch_attempts = 0
         self._voice_stopped = False
@@ -781,8 +782,8 @@ class Bridge:
             if self._launch_pending:
                 response["response"] = {
                     "instructions": tools.SYSTEM_PROMPT_BY_KIND[self.session.kind]
-                    + "\n이번 응답에서는 다음 두 문장만 그대로 말하고 끝내세요: "
-                    + tools.DEPARTURE_ANNOUNCEMENT_BY_KIND[self.session.kind] + " 추가 설명, 질문, 도구 호출은 하지 마세요.",
+                    + "\n이번 응답에서는 다음 문장만 그대로 말하고 끝내세요: "
+                    + self._departure_announcement + " 추가 설명, 질문, 도구 호출은 하지 마세요.",
                     "tool_choice": "none",
                     "metadata": {"missionLaunch": "true", "runId": self.session.run_id},
                 }
@@ -1133,6 +1134,19 @@ class Bridge:
                 await self.flush_response()
             await self.offer_input()
 
+    def mapped_voice_route(self, args, turn):
+        """The voice model maps the spoken answer onto registered sites. Only an
+        explicit complete=true result is used; SurveySession.set_route rejects
+        anything that is not all three sites exactly once and falls back to the
+        recommended route."""
+        mapped = args if isinstance(args, dict) else {}
+        route = mapped.get("route")
+        complete = mapped.get("complete") is True and isinstance(route, list)
+        resolved = [self.session.resolve_monitor(value) for value in route] if complete else []
+        self.trace_voice("route_mapped", complete=complete, route=resolved,
+                         heard=mapped.get("heard"), text=turn.text if turn else None)
+        return resolved
+
     async def run_tool(self, name, args, activity_id=None, *, from_voice=False, turn=None, response_id=None):
         activity_id = activity_id if isinstance(activity_id, str) and activity_id else str(uuid4())
         async with self._command_lock:
@@ -1163,6 +1177,8 @@ class Bridge:
                         effective_args = args
                         if from_voice and name == "confirm_prompt":
                             effective_args = self.session.pending_prompt if args == {} else None
+                        elif from_voice and name == "set_route":
+                            effective_args = {"route": self.mapped_voice_route(args, turn)}
                         outcome = await tools.dispatch(self.session, self.runner, name, effective_args)
                         if from_voice and outcome["ok"]:
                             self.voice_turns.commit(turn, name)
@@ -1207,7 +1223,7 @@ class Bridge:
                 self.voice_turns.prepare_route()
                 self._route_readback_facts = outcome["facts"]
                 self._route_readback_pending = True
-            if name in {"clear_route", "select_stop", "confirm_prompt"} and outcome["ok"]:
+            if name in {"clear_route", "select_stop", "set_route", "confirm_prompt"} and outcome["ok"]:
                 self._route_readback_facts = ""
                 self._route_readback_pending = False
                 self.voice_turns.prepare_route()
@@ -1267,7 +1283,15 @@ class Bridge:
                 outcome = await self.run_tool(
                     "confirm_prompt", self.session.pending_prompt, f"{call_id}:confirm-prompt",
                     turn=turn, response_id=event.get("response_id"))
-            if outcome["ok"] and name == "select_stop" and len(self.session.state.draftRoute) == 3:
+            if outcome["ok"] and name == "set_route":
+                if outcome.get("usedDefaultRoute"):
+                    self._departure_announcement = (
+                        "세 곳의 순서를 모두 확인하지 못했어. 급하니까 내가 추천한 기본 경로로 바로 갈게! "
+                        + tools.DEPARTURE_ANNOUNCEMENT_BY_KIND[self.session.kind]
+                    )
+                else:
+                    self._departure_announcement = tools.DEPARTURE_ANNOUNCEMENT_BY_KIND[self.session.kind]
+            if outcome["ok"] and name in {"select_stop", "set_route"} and len(self.session.state.draftRoute) == 3:
                 # Preparing the completed route and departing are both automatic now - no
                 # "shall we depart?" question, no waiting for another reply.
                 outcome = await self.run_tool("confirm_route", {}, f"{call_id}:confirm-route",

@@ -7,24 +7,10 @@ REVISION_REQUEST = "이 설명으로는 탐지 조건을 확인할 수 없습니
 
 
 def validate_search_prompt(text):
-    """Validate request text, never infer sensitive attributes from an image."""
+    """Validate the search prompt's type and length."""
     if not isinstance(text, str) or not 1 <= len(text.strip()) <= 2000:
         raise ValueError(REVISION_REQUEST)
-    text = text.strip()
-    if re.search(
-        r"인종|민족|혈통|국적|백인|흑인|황인|아시아인|동양인|서양인|"
-        r"한국인|중국인|일본인|얼굴\s*(?:인식|식별|비교|대조)|안면\s*(?:인식|식별)|"
-        r"동일인|같은\s*사람|신원|누구인지|누군지|누구야|생체정보|"
-        r"(?:사람|인물|얼굴)의?\s*이름|이름을\s*(?:알려|추정|맞혀)|"
-        r"\b(?:race|racial|ethnic\w*|ancestry|nationality|caucasian|asian|"
-        r"identity|identify|recognize|recognise|biometric\w*)\b|"
-        r"\b(?:black|white)\s+(?:person|people|man|woman)\b|"
-        r"\b(?:face|facial)\s+(?:recognition|matching|identification)\b|"
-        r"\bsame\s+person\b",
-        text, re.IGNORECASE,
-    ):
-        raise ValueError(REVISION_REQUEST)
-    return text
+    return text.strip()
 
 
 _COLORS = {

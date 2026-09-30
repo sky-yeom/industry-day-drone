@@ -19,7 +19,7 @@ import VoiceTurnIndicator from "@/components/VoiceTurnIndicator";
  * orders (raw "sounds urgent" order vs. the order adjusted for which
  * clue is actually more likely real) so the "AI proposes, human
  * decides" choice has a visual home, not just a spoken one — the
- * participant still picks their own order by voice (select_stop), this
+ * participant still picks their own order by voice (set_route), this
  * is read-only reference. Gibby himself and his speech bubble are
  * rendered by the parent (GibbyIntroSequence.tsx).
  */

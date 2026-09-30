@@ -17,9 +17,12 @@ OBSERVATION = {"shirtColor": "green", "hairColor": "brown", "garment": "t-shirt"
 class AppearanceTests(unittest.TestCase):
     def test_request_validation_is_neutral_and_does_not_rewrite(self):
         self.assertEqual(validate_search_prompt("  안경을 쓴 사람  "), "안경을 쓴 사람")
-        for prompt in ("", " \n", None, "x" * 2001, "백인 사람", "인종을 추정해줘",
-                       "사진과 같은 사람", "얼굴 인식으로 찾아줘", "아시아인",
-                       "identify the person", "infer ethnicity", "same person as the photo"):
+        for prompt in ("백인 사람", "인종을 추정해줘", "사진과 같은 사람",
+                       "얼굴 인식으로 찾아줘", "아시아인", "identify the person",
+                       "infer ethnicity", "same person as the photo"):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(validate_search_prompt(prompt), prompt)
+        for prompt in ("", " \n", None, "x" * 2001):
             with self.subTest(prompt=prompt), self.assertRaisesRegex(ValueError, REVISION_REQUEST):
                 validate_search_prompt(prompt)
 

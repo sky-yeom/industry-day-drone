@@ -39,7 +39,7 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
         context = next(event["session"] for event in reversed(self.bridge.upstream.sent)
                        if event["type"] == "session.update" and "tools" in event["session"])
         self.assertEqual({tool["name"] for tool in context["tools"]},
-                         {"get_state", "select_stop", "clear_route"})
+                         {"get_state", "set_route", "clear_route"})
 
     async def test_prepare_prompt_rejects_affirmative_or_retry_only_turn(self):
         for text in ("응", "음", "뭐라고"):
@@ -74,6 +74,87 @@ class VoiceTurnTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.state.confirmedRoute, ["monitor-1", "monitor-2", "monitor-3"])
         self.assertEqual(self.session.phase, "flying")
         self.assertTrue(self.session.data["clockRunning"])
+
+    def _non_default_route(self, session):
+        default = list(session.data["vulnerableAdjustedOrder"])
+        return next(list(route) for route in (
+            ("monitor-3", "monitor-1", "monitor-2"), ("monitor-2", "monitor-3", "monitor-1"),
+        ) if list(route) != default)
+
+    async def test_model_mapped_paraphrased_route_is_used_and_launches(self):
+        self.session.confirm_prompt(**PROMPT_ARGS)
+        chosen = self._non_default_route(self.session)
+        heard = [{"monitor": monitor, "phrase": phrase} for monitor, phrase in zip(
+            chosen, ("불난 곳", "물에 빠진 데", "무너진 건물 쪽"))]
+
+        async def fake_launch():
+            return self.session.launch_mission()
+
+        with patch.object(self.bridge.runner, "launch", new=AsyncMock(side_effect=fake_launch)) as launch:
+            # No registered alias appears verbatim: the model's semantic mapping is the source of truth.
+            turn = participant_turn(self.bridge, "불난 곳 먼저 가고, 그다음 물에 빠진 데, 마지막은 무너진 건물 쪽")
+            outcome = await self.call(
+                "set_route", {"route": chosen, "complete": True, "heard": heard}, turn)
+            self.assertTrue(outcome["ok"], outcome)
+            launch.assert_awaited_once()
+
+        self.assertEqual(self.session.state.confirmedRoute, chosen)
+        self.assertEqual(self.session.phase, "flying")
+        self.assertEqual(
+            self.bridge._departure_announcement,
+            server.tools.DEPARTURE_ANNOUNCEMENT_BY_KIND[self.session.kind],
+        )
+
+    async def test_unconfirmed_or_invalid_mapping_uses_recommendation(self):
+        probe = SurveySession()
+        probe.confirm_prompt(**PROMPT_ARGS)
+        chosen = self._non_default_route(probe)
+        for args in (
+            {"route": chosen, "complete": False, "heard": []},
+            {"route": chosen, "heard": []},
+            {"route": chosen, "complete": "true", "heard": []},
+            {"route": [chosen[0], chosen[0], chosen[1]], "complete": True, "heard": []},
+            {"route": chosen[:2], "complete": True, "heard": []},
+            {"route": ["monitor-9", chosen[1], chosen[2]], "complete": True, "heard": []},
+            {"route": chosen[0], "complete": True, "heard": []},
+            {},
+        ):
+            with self.subTest(args=args):
+                session = SurveySession()
+                bridge = server.Bridge(Browser(), session, (FakeCamera(), FakeVision()))
+                bridge.upstream = Upstream()
+                session.confirm_prompt(**PROMPT_ARGS)
+                expected = list(session.data["vulnerableAdjustedOrder"])
+
+                async def fake_launch(session=session):
+                    return session.launch_mission()
+
+                try:
+                    with patch.object(bridge.runner, "launch", new=AsyncMock(side_effect=fake_launch)):
+                        turn = participant_turn(bridge, "음 잘 모르겠어")
+                        await bridge.handle_tool_call({
+                            "name": "set_route", "arguments": json.dumps(args), "call_id": "route",
+                        }, turn=turn)
+                    self.assertEqual(session.state.confirmedRoute, expected)
+                    self.assertEqual(session.phase, "flying")
+                    self.assertIn("세 곳의 순서를 모두 확인하지 못했어", bridge._departure_announcement)
+                    self.assertIn("급하니까 내가 추천한 기본 경로로 바로 갈게", bridge._departure_announcement)
+                finally:
+                    await bridge.close()
+
+    def test_route_stage_context_lists_registered_sites_for_every_scenario(self):
+        for kind in ("triage", "security", "construction"):
+            with self.subTest(kind=kind):
+                session = SurveySession(kind=kind)
+                session.confirm_prompt(**PROMPT_ARGS)
+                context = server.tools.voice_context(session)
+                for person in session.scenario["people"]:
+                    self.assertIn(person["monitorId"], context["instructions"])
+                    self.assertIn(person["siteName"], context["instructions"])
+                    self.assertIn(person["clue"], context["instructions"])
+                tool = next(t for t in context["tools"] if t["name"] == "set_route")
+                self.assertEqual(set(tool["parameters"]["required"]), {"route", "complete", "heard"})
+                self.assertNotIn("select_stop에 전달", context["instructions"])
 
     async def test_auto_launch_keeps_stale_route_readback_inert(self):
         self.session.confirm_prompt(**PROMPT_ARGS)

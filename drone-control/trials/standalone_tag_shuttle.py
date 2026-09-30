@@ -476,7 +476,7 @@ def capture_forward_pulse(client, limiter, tag, profile, stream=None, detector=N
             "tag_id": tag_id, "round": round_no, "edge_height_px": size, "reference_px": reference,
             "sent": far, "forward_tilt_deg": forward, "duration_s": CAPTURE_PULL_S if far else 0.})
         if not far:
-            return
+            return round_no - 1
         sent, stale = _timed_tilt(client, limiter, profile, stream, detector, forward, 0., CAPTURE_PULL_S)
         client.log_event("standalone_capture_forward_pulse_done",
                          {"tag_id": tag_id, "round": round_no, "sent_ticks": sent, "stale_ticks": stale})
@@ -484,11 +484,46 @@ def capture_forward_pulse(client, limiter, tag, profile, stream=None, detector=N
         if size is None:
             client.log_event("standalone_capture_forward_pulse_end",
                              {"tag_id": tag_id, "rounds": round_no, "reason": "tag_not_remeasured"})
-            return
+            return round_no
     reached = reference / size - 1. < DRIFT_PULL_DEADBAND
     client.log_event("standalone_capture_forward_pulse_end", {
         "tag_id": tag_id, "rounds": CAPTURE_PULL_MAX_ROUNDS, "edge_height_px": size,
         "reference_px": reference, "reason": "reached" if reached else "max_rounds_continue_route"})
+    return CAPTURE_PULL_MAX_ROUNDS
+
+
+FIRST_SIGHT_PULL_IDS = (1, 2, 3)
+
+
+def first_sight_forward_pulse(client, limiter, profile, tags, frame_shape, stream=None, detector=None):
+    """Run capture_forward_pulse once per flight on the first whole sighting of ID1-3.
+
+    Field request 2026-09-30 09:12: a 3-2-1 route drifted back from the wall
+    while passing ID1 and ID2 on the way to ID3, and the only forward pull ran
+    after a photo. Any of these tags, on the route or not, now pulls the
+    aircraft forward the first time it is fully in frame. Returns the number of
+    pulse rounds sent (0 when nothing was sent).
+    """
+    done = getattr(client, "first_sight_pull_ids", None)
+    if done is None:
+        done = client.first_sight_pull_ids = set()
+    if len(frame_shape) < 2:
+        return 0
+    height, width = frame_shape[0], frame_shape[1]
+    for tag in tags:
+        tag_id = getattr(tag, "tag_id", None)
+        if tag_id not in FIRST_SIGHT_PULL_IDS or tag_id in done:
+            continue
+        if tag_edge_height_px(tag) is None:
+            continue
+        if not all(0 <= x <= width and 0 <= y <= height for x, y in tag.corners_px):
+            continue
+        done.add(tag_id)
+        client.log_event("standalone_first_sight_pull", {
+            "tag_id": tag_id, "edge_height_px": tag_edge_height_px(tag),
+            "reference_px": getattr(client, "drift_ref_px", None)})
+        return capture_forward_pulse(client, limiter, tag, profile, stream, detector)
+    return 0
 
 
 def edge_prebrake(client, limiter, profile, direction, tag, frame_width, stream=None, detector=None,
@@ -2087,6 +2122,9 @@ def capture_id1_pair(client, limiter, stream, detector, logger, config, profile,
                              moving=moving):
                 gate.note_external_stop()
                 continue
+        if first_sight_forward_pulse(client, limiter, profile, tags, shape, stream, detector):
+            gate.note_external_stop()
+            continue
         client.status("id1_pair_after_detection")
         _require_flight(client)
         age = float("inf") if snapshot is None else time.monotonic() - snapshot.received_s

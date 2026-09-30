@@ -1140,6 +1140,39 @@ class DispatchBoundaryTests(StandaloneTestCase):
         self.assertEqual(pull(ret, [tag(2, 900, 156), tag(0, 1000, 60)], shuttle.WALL_IDS, frame, 61.),
                          nudge)
 
+    def test_first_sight_pull_runs_once_per_wall_tag_even_off_route(self):
+        # Field request 2026-09-30 09:12: a 3-2-1 route passes ID1/ID2 first.
+        def tag(tag_id, x, height, y=560.):
+            h = height / 2
+            return shuttle.PixelTag(tag_id, (x, y), ((x+h, y-h), (x-h, y-h), (x-h, y+h), (x+h, y+h)), 60., 0)
+        clock = [100.]
+        client = FakeClient()
+        client.phase = "lateral"
+        client.hold_forward_bound = shuttle.DRIFT_PULL_MAX_DEG
+        client.drift_ref_px = 286.
+        limiter = SimpleNamespace(wait=lambda: clock.__setitem__(0, clock[0] + .15))
+        frame = (1080, 1920, 3)
+        pull = partial(shuttle.first_sight_forward_pulse, client, limiter, profile(), frame_shape=frame)
+        def pulled():
+            return [e[1]["tag_id"] for e in client.events if e[0] == "standalone_first_sight_pull"]
+        with patch.object(shuttle.time, "monotonic", lambda: clock[0]), \
+                patch.object(shuttle, "_require_flight", lambda client: None):
+            # Home and floor tags never trigger; a tag cut by the frame edge waits.
+            self.assertEqual(pull([tag(6, 900, 160), tag(0, 900, 160)]), 0)
+            self.assertEqual(pull([tag(1, 1900, 160)]), 0)
+            self.assertEqual(pulled(), [])
+            self.assertGreaterEqual(pull([tag(1, 1500, 160)]), 1)
+            self.assertEqual(pulled(), [1])
+            self.assertEqual(pull([tag(1, 900, 160)]), 0)
+            # Already at wall distance: logged once, nothing sent, never repeated.
+            self.assertEqual(pull([tag(2, 900, 290)]), 0)
+            self.assertEqual(pull([tag(2, 900, 160)]), 0)
+            self.assertGreaterEqual(pull([tag(3, 900, 160)]), 1)
+        self.assertEqual(pulled(), [1, 2, 3])
+        pushes = [c[1] for c in client.calls if c[0] == "attitude"]
+        self.assertTrue(pushes)
+        self.assertTrue(all(axes[0] == shuttle.CAPTURE_PULL_DEG and axes[1] == 0. for axes in pushes))
+
     def test_capture_forward_pulse_pushes_forward_once_after_a_far_photo(self):
         # 20260929T193929: ID1/ID2 photographed at 158-165 px against ID6 at 286 px.
         def tag(height):

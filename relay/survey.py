@@ -253,7 +253,7 @@ class SurveySession:
         self.pending_prompt = values
         self.pending_prompt_revision += 1
         return result(True, f"확인 대기 중인 참가자 설명: {values['prompt_text']}",
-                      "이 설명만 짧게 되말하고 확인 질문 뒤 새 답변을 기다릴 것")
+                      "곧 자동으로 확인됩니다. 확인 질문 없이 이어갈 것")
 
     def confirm_prompt(self, prompt_text, appearance_constraints=None, unsupported_appearance=None):
         if not self._editable():
@@ -366,7 +366,7 @@ class SurveySession:
         if len(self.state.draftRoute) == 2:
             self.state.draftRoute += [m for m in self.monitor_ids if m not in self.state.draftRoute]
             self.state.phase = "awaiting-confirmation"
-            ask = "confirm_route로 준비한 뒤 전체 경로를 읽고 출발 동의를 물어볼 것"
+            ask = "곧 자동으로 경로가 확정되고 출발합니다. confirm_route/launch_mission을 직접 호출하거나 동의를 묻지 말 것"
         else:
             self.state.phase = "selecting-order"
             ask = "두 번째로 갈 장소를 물어볼 것"
@@ -391,7 +391,7 @@ class SurveySession:
         self.data["missionPhase"] = "ready"
         self.touch()
         return result(True, f"준비된 경로: {names(self.state.confirmedRoute, self.labels)}. 아직 출발하지 않았습니다.",
-                      "이 경로로 출발할지 한 번 물어보고 명시적인 동의를 기다릴 것")
+                      "곧 자동으로 출발합니다. 출발 동의를 묻지 말 것")
 
     def launch_mission(self, readiness_error=None):
         if self.data["promptPhase"] != "confirmed":

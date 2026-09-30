@@ -26,7 +26,7 @@ try:
     from .live_mission import LiveMissionRunner
     from .drone_client import DroneClient, DroneError
     from .vision import create_providers
-    from .voice_turns import VoiceTurns, is_affirmative
+    from .voice_turns import VoiceTurns
     from .voice_trace import VoiceTrace, validate_directory
     from .browser_access import BrowserAccessMiddleware
     from .camera_preview import serve_camera
@@ -42,7 +42,7 @@ except ImportError:
     from live_mission import LiveMissionRunner
     from drone_client import DroneClient, DroneError
     from vision import create_providers
-    from voice_turns import VoiceTurns, is_affirmative
+    from voice_turns import VoiceTurns
     from voice_trace import VoiceTrace, validate_directory
     from browser_access import BrowserAccessMiddleware
     from camera_preview import serve_camera
@@ -288,8 +288,6 @@ class Bridge:
         # alone did not catch (e.g. a long-running noise/echo segment).
         self._native_response_item_map = {}
         self._sent_voice_context = None
-        self._prompt_confirmation = None
-        self._input_confirmation_attempt = None
         self._greet_requested = False
         self._greeting_pending = False
         self._launch_pending = False
@@ -580,35 +578,6 @@ class Bridge:
             if context != self._sent_voice_context:
                 await self.upstream.send(json.dumps({"type": "session.update", "session": context}))
                 self._sent_voice_context = context
-
-    def schedule_input_confirmation(self):
-        turn = self.voice_turns.latest
-        if (not self.session.pending_prompt or self._pending_tools or self._response_active
-                or self._native_response_pending or self._user_speaking or turn is None
-                or turn.consumed or not turn.replied or not turn.ready.is_set()
-                or not is_affirmative(turn.text)):
-            return
-        attempt = (turn.item_id, self.session.pending_prompt_revision)
-        if attempt == self._input_confirmation_attempt:
-            return
-        self._input_confirmation_attempt = attempt
-        self._pending_tools += 1
-        task = asyncio.create_task(self.confirm_from_input(turn))
-        self._tool_tasks.add(task)
-        task.add_done_callback(self._tool_tasks.discard)
-
-    async def confirm_from_input(self, turn):
-        try:
-            # A native spoken reply need not contain a tool call to honor valid consent.
-            outcome = await self.run_tool(
-                "confirm_prompt", {}, f"input-confirm:{turn.item_id}", from_voice=True, turn=turn)
-            if outcome["ok"]:
-                self._response_requested = True
-        finally:
-            self._pending_tools = max(0, self._pending_tools - 1)
-        if turn is self.voice_turns.latest:
-            await self.request_response()
-        await self.offer_input()
 
     @property
     def departure_started(self):
@@ -1063,8 +1032,6 @@ class Bridge:
                 if self.strict_turn_taking and item_id == self._accepted_item_id:
                     await self.report_input_failure(item_id)
             self.sync_prompt_correction()
-            if etype in {"response.done", "conversation.item.input_audio_transcription.completed"}:
-                self.schedule_input_confirmation()
             if etype in {"conversation.item.input_audio_transcription.completed",
                          "conversation.item.input_audio_transcription.failed"}:
                 await self.sync_voice_context()
@@ -1194,8 +1161,6 @@ class Bridge:
                 if len(self._completed_commands) > 256:
                     del self._completed_commands[next(iter(self._completed_commands))]
             if name == "confirm_prompt" and outcome["ok"] and prior is None:
-                if from_voice:
-                    self._prompt_confirmation = (turn, outcome)
                 self._confidence_narration_pending = True
                 self._confidence_narration_id = uuid4().hex
                 self._confidence_narration_response_id = None
@@ -1278,16 +1243,23 @@ class Bridge:
             args = None
         try:
             name = event.get("name", "")
-            if (name == "confirm_prompt" and args == {} and self._prompt_confirmation
-                    and self._prompt_confirmation[0] is turn):
-                outcome = self._prompt_confirmation[1]
-            else:
-                outcome = await self.run_tool(name, args, call_id, from_voice=True, turn=turn,
-                                              response_id=event.get("response_id"))
+            outcome = await self.run_tool(name, args, call_id, from_voice=True, turn=turn,
+                                          response_id=event.get("response_id"))
+            if outcome["ok"] and name == "prepare_prompt":
+                # Confirmation is automatic and immediate - no readback question, no waiting
+                # for another reply. The participant's description is taken as final as soon
+                # as it's heard.
+                outcome = await self.run_tool(
+                    "confirm_prompt", self.session.pending_prompt, f"{call_id}:confirm-prompt",
+                    turn=turn, response_id=event.get("response_id"))
             if outcome["ok"] and name == "select_stop" and len(self.session.state.draftRoute) == 3:
-                # Preparing the completed route is automatic; departure still needs a new reply.
+                # Preparing the completed route and departing are both automatic now - no
+                # "shall we depart?" question, no waiting for another reply.
                 outcome = await self.run_tool("confirm_route", {}, f"{call_id}:confirm-route",
                                               turn=turn, response_id=event.get("response_id"))
+                if outcome["ok"]:
+                    outcome = await self.run_tool("launch_mission", {}, f"{call_id}:launch-mission",
+                                                  turn=turn, response_id=event.get("response_id"))
             if self.upstream and not self._voice_stopped:
                 async with self._tool_lock:
                     await self.upstream.send(json.dumps({
@@ -1296,7 +1268,6 @@ class Bridge:
                             "output": json.dumps(outcome, ensure_ascii=False)}}))
         finally:
             self._pending_tools = max(0, self._pending_tools - 1)
-        self.schedule_input_confirmation()
         if turn is None or turn is self.voice_turns.latest:
             await self.request_response()
         await self.offer_input()

@@ -1079,7 +1079,7 @@ class StrictVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.events("voice.input.closed")), 1)
         self.assertIs(self.bridge.voice_turns.responses["reply"], self.bridge.voice_turns.turns["item"])
 
-    async def test_tool_and_readback_continuations_share_one_closed_turn(self):
+    async def test_tool_and_auto_confirm_continuations_share_one_closed_turn(self):
         await self.admit()
         await self.provider_events(
             {"type": "conversation.item.input_audio_transcription.completed",
@@ -1090,36 +1090,18 @@ class StrictVoiceTests(unittest.IsolatedAsyncioTestCase):
             {"type": "response.done", "response": {"id": "tool-only", "status": "completed"}})
         self.assertEqual(len(self.events("voice.input.ready")), 1)
         await asyncio.gather(*self.bridge._tool_tasks)
-        self.assertEqual(len(self.events("voice.input.ready")), 1)
-        request = self.requests()[-1]
-        self.assertEqual(request["metadata"]["promptReadback"], str(self.session.pending_prompt_revision))
-        await self.finish("readback", **request["metadata"])
-        self.assertEqual(self.events("voice.input.ready")[-1]["responseIds"], ["tool-only", "readback"])
-        self.assertEqual(len(self.events("voice.input.ready")), 2)
-
-    async def test_late_admitted_consent_prefetches_once_without_opening_between_turns(self):
-        self.session.prepare_prompt(**PROMPT_ARGS)
-        spoken_reply(self.bridge)
-        await self.admit("consent")
-        await self.finish("native-consent")
-        self.assertEqual(len(self.events("voice.input.ready")), 1)
-        await self.provider_events(
-            {"type": "input_audio_buffer.speech_started", "item_id": "late-noise"},
-            {"type": "conversation.item.input_audio_transcription.completed",
-             "item_id": "consent", "transcript": "응"})
-        await asyncio.gather(*self.bridge._tool_tasks)
         self.assertEqual(self.session.data["userPromptText"], SEARCH_PROMPT)
-        self.assertEqual(len(self.events("route_intro.pending")), 1)
+        self.assertEqual(len(self.events("voice.input.ready")), 1)
         self.assertEqual(len(self.requests()), 1)
         self.assertEqual(self.requests()[0]["metadata"]["confidenceNarration"],
                          self.bridge._confidence_narration_id)
-        self.assertEqual(len(self.events("voice.input.ready")), 1)
         await self.finish("confidence", **self.requests()[0]["metadata"])
         self.assertEqual(len(self.requests()), 2)
         self.assertEqual(self.requests()[1]["metadata"]["routeIntro"], self.bridge._route_intro_id)
         await self.finish("intro", **self.requests()[1]["metadata"])
         self.assertEqual(self.events("voice.input.ready")[-1]["responseIds"],
-                         ["native-consent", "confidence", "intro"])
+                         ["tool-only", "confidence", "intro"])
+        self.assertEqual(len(self.events("voice.input.ready")), 2)
 
     async def test_missing_or_failed_asr_recovers_without_discarding_input(self):
         self.bridge.INPUT_TIMEOUT_SECONDS = 0.01
